@@ -1,0 +1,16 @@
+# Build output
+build/
+DerivedData/
+
+# Xcode
+*.xcuserstate
+*.xcscmblueprint
+xcuserdata/
+
+# macOS
+.DS_Store
+
+# Certificates (never commit these)
+*.p12
+*.cer
+*.mobileprovision

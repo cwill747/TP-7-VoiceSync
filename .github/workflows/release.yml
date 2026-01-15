@@ -1,0 +1,186 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Import signing certificate
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_P12_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_PASSWORD }}
+        run: |
+          # Create temporary keychain
+          KEYCHAIN_PATH=$RUNNER_TEMP/signing.keychain-db
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # Import certificate
+          CERTIFICATE_PATH=$RUNNER_TEMP/certificate.p12
+          echo -n "$CERTIFICATE_BASE64" | base64 --decode -o "$CERTIFICATE_PATH"
+
+          security import "$CERTIFICATE_PATH" \
+            -P "$CERTIFICATE_PASSWORD" \
+            -A \
+            -t cert \
+            -f pkcs12 \
+            -k "$KEYCHAIN_PATH"
+
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+
+          # Allow codesign to access keychain
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+      - name: Build, sign, package, and notarize
+        env:
+          PROJECT_NAME: TeenageEngVoiceSync
+          APP_BUNDLE_NAME: "TP-7 VoiceSync"
+          DMG_BASENAME: TP-7-VoiceSync
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          BUILD_DIR="build"
+          mkdir -p "$BUILD_DIR"
+
+          # Resolve signing identity from the imported Developer ID certificate
+          SIGNING_IDENTITY="$(
+            security find-identity -v -p codesigning "$RUNNER_TEMP/signing.keychain-db" | \
+            grep 'Developer ID Application:' | \
+            head -1 | \
+            sed -E 's/.*"(Developer ID Application:[^"]+)".*/\1/'
+          )"
+          
+          if [[ -z "$SIGNING_IDENTITY" ]]; then
+            echo "ERROR: Could not find Developer ID Application certificate in keychain"
+            security find-identity -v -p codesigning "$RUNNER_TEMP/signing.keychain-db"
+            exit 1
+          fi
+          echo "Using signing identity: $SIGNING_IDENTITY"
+
+          echo "Building archive..."
+          xcodebuild -project "$PROJECT_NAME.xcodeproj" \
+            -scheme "$PROJECT_NAME" \
+            -configuration Release \
+            -derivedDataPath "$BUILD_DIR/DerivedData" \
+            -archivePath "$BUILD_DIR/$PROJECT_NAME.xcarchive" \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="$SIGNING_IDENTITY" \
+            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            archive
+
+          echo "Exporting archive..."
+          printf '%s\n' \
+            '<?xml version="1.0" encoding="UTF-8"?>' \
+            '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
+            '<plist version="1.0">' \
+            '<dict>' \
+            '    <key>method</key>' \
+            '    <string>developer-id</string>' \
+            '    <key>teamID</key>' \
+            "    <string>$APPLE_TEAM_ID</string>" \
+            '    <key>signingStyle</key>' \
+            '    <string>manual</string>' \
+            '    <key>signingCertificate</key>' \
+            '    <string>Developer ID Application</string>' \
+            '</dict>' \
+            '</plist>' > "$BUILD_DIR/ExportOptions.plist"
+
+          xcodebuild -exportArchive \
+            -archivePath "$BUILD_DIR/$PROJECT_NAME.xcarchive" \
+            -exportPath "$BUILD_DIR/Export" \
+            -exportOptionsPlist "$BUILD_DIR/ExportOptions.plist"
+
+          APP_PATH="$BUILD_DIR/Export/$APP_BUNDLE_NAME.app"
+
+          echo "Verifying code signature..."
+          codesign -vvv --deep --strict "$APP_PATH"
+          spctl -a -vvv "$APP_PATH" || true
+
+          VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP_PATH/Contents/Info.plist")
+          DMG_NAME="${DMG_BASENAME}-${VERSION}.dmg"
+          DMG_PATH="$BUILD_DIR/$DMG_NAME"
+
+          echo "Creating DMG..."
+          TEMP_DIR="$(mktemp -d)"
+          DMG_TEMP="$TEMP_DIR/dmg"
+          mkdir -p "$DMG_TEMP"
+          cp -R "$APP_PATH" "$DMG_TEMP/"
+          ln -s /Applications "$DMG_TEMP/Applications"
+          rm -f "$DMG_PATH"
+          hdiutil create -volname "$APP_BUNDLE_NAME" -srcfolder "$DMG_TEMP" -ov -format UDZO "$DMG_PATH"
+          rm -rf "$TEMP_DIR"
+
+          echo "Signing DMG..."
+          codesign --force --sign "$SIGNING_IDENTITY" "$DMG_PATH"
+
+          if [[ -z "${APPLE_ID:-}" ]] || [[ -z "${APPLE_ID_PASSWORD:-}" ]]; then
+            echo "APPLE_ID/APPLE_ID_PASSWORD not set; skipping notarization."
+            exit 0
+          fi
+
+          echo "Submitting for notarization (Apple ID)..."
+          xcrun notarytool submit "$DMG_PATH" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_ID_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+
+          echo "Stapling notarization ticket..."
+          xcrun stapler staple "$DMG_PATH"
+
+          echo "Verifying notarization..."
+          spctl -a -vvv --type install "$DMG_PATH"
+
+      - name: Get version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: TP-7 VoiceSync v${{ steps.version.outputs.VERSION }}
+          draft: false
+          prerelease: false
+          files: |
+            build/TP-7-VoiceSync-*.dmg
+          body: |
+            ## Installation
+
+            1. Download the DMG file below
+            2. Open the DMG and drag TP-7 VoiceSync to your Applications folder
+            3. Launch TP-7 VoiceSync from Applications
+
+            **Note:** On first launch, you may need to right-click and select "Open" to bypass Gatekeeper.
+
+            ## Requirements
+            - macOS 14.0 (Sonoma) or later
+            - [Teenage Engineering FieldKit](https://teenage.engineering/apps/fieldkit) installed
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Cleanup keychain
+        if: always()
+        run: |
+          security delete-keychain $RUNNER_TEMP/signing.keychain-db || true
