@@ -1,24 +1,16 @@
 # TP-7 VoiceSync
 
-A macOS menu bar app that automatically syncs, transcribes, and organizes your Teenage Engineering TP-7 voice recordings.
+A macOS menu bar app that automatically syncs, transcribes, and organizes your Teenage Engineering TP-7 voice recordings. Supports **fully local transcription** via [WhisperKit](https://github.com/argmaxinc/WhisperKit) — no cloud API required.
 
-|                        Main Interface                         |            Menu Bar Popover             |
-| :-----------------------------------------------------------: | :-------------------------------------: |
-|           ![Main Interface](Images/Recordings.png)            | ![Menu Bar Popover](Images/MenuBar.png) |
-| _Recordings are automatically transcribed and uploaded to S3_ |           _Menu Bar Popover_            |
-
-|             Recording Workflow              |               Rewind Button Demo               |
-| :-----------------------------------------: | :--------------------------------------------: |
-| ![Recording workflow](Images/Recording.gif) | ![Rewind button demo](Images/RewindButton.gif) |
-|            _Recording workflow_             |              _Rewind button demo_              |
-
-![Apple Notes Integration](Images/AppleNote.png)
-
-_Transcribed notes are automatically synced to Apple Notes with a summary, a title added, and a download link._
+| Main Interface | Menu Bar Popover | Apple Notes Integration |
+| :-----------------------------------------------------------: | :-------------------------------------: | :-------------------------------------: |
+| ![Main Interface](Images/Recordings.png) | ![Menu Bar Popover](Images/MenuBar.png) | ![Apple Notes](Images/AppleNote.png) |
+| _Recordings are automatically transcribed_ | _Menu Bar Popover_ | _Transcriptions synced to Apple Notes_ |
 
 ## Table of Contents
 
 - [Features](#features)
+- [WhisperKit Integration](#whisperkit-integration)
 - [Why I Built This](#why-i-built-this)
 - [About the TP-7 and FieldKit](#about-the-tp-7-and-fieldkit)
 - [Requirements](#requirements)
@@ -33,13 +25,62 @@ _Transcribed notes are automatically synced to Apple Notes with a summary, a tit
 ## Features
 
 - **Automatic Device Detection** — Detects when your TP-7 connects via FieldKit
+- **Local Transcription via WhisperKit** — Transcribe entirely on-device with no API key or internet required (after model download)
+- **Cloud Transcription via ElevenLabs** — Alternative cloud-based transcription if you prefer
 - **Cloud Backup to S3 (Optional)** — Upload recordings to AWS S3 with SHA256 deduplication
 - **Local Storage (Optional)** — Copy recordings to a folder on your Mac when skipping S3
-- **Transcription (Cloud or Local)** — Transcribe using ElevenLabs (cloud) or WhisperKit (local / offline after model download)
 - **Smart Titles & Summaries** — Generates meaningful titles using LLM via OpenRouter (optional)
 - **Apple Notes Integration** — Creates notes with transcriptions, metadata, and playable audio links
 - **Menu Bar Interface** — Quick access to recent recordings and sync status
 - **Soft Delete** — Prevents re-syncing of recordings you've deleted
+
+## WhisperKit Integration
+
+TP-7 VoiceSync includes [WhisperKit](https://github.com/argmaxinc/WhisperKit) by [Argmax](https://www.argmaxinc.com/) for fully local, on-device transcription. This means you can transcribe your recordings **without sending audio to any cloud service** and **without an API key**.
+
+### How It Works
+
+1. **Choose WhisperKit** as your transcription provider in the Setup Wizard or Settings > Transcription
+2. **Select a model** from the available options (see table below)
+3. **Download the model** — click "Download Model" and the app will automatically fetch the model from Hugging Face
+4. **Transcribe offline** — once downloaded, transcription runs entirely on your Mac using Apple's CoreML
+
+The model is downloaded once and cached locally. Future transcriptions use the cached model with no network required.
+
+### Available Models
+
+| Model | Size | Speed | Quality | Best For |
+|-------|------|-------|---------|----------|
+| Tiny | 75 MB | Fastest | Basic | Quick tests, low-end hardware |
+| Base | 150 MB | Fast | Good | Everyday use, good balance |
+| Small | 500 MB | Medium | Better | Higher accuracy needs |
+| Medium | 1.5 GB | Slow | Great | When quality matters more than speed |
+| Distil Large v3 | 1.5 GB | Fast | Excellent | Best speed/quality ratio |
+| Large v3 | 3 GB | Slow | Best | Maximum accuracy |
+
+### Automatic Model Download
+
+When you select WhisperKit and click "Download Model" in the Setup Wizard or Settings, the app:
+
+1. Downloads the selected model variant from [argmaxinc/whisperkit-coreml](https://huggingface.co/argmaxinc/whisperkit-coreml) on Hugging Face
+2. Shows download progress in the UI
+3. Caches the model locally for future use
+4. Marks the model as ready once complete
+
+If you switch models later, you can download the new model the same way. Each model is cached independently.
+
+### Why WhisperKit?
+
+- **Privacy** — Your audio never leaves your Mac
+- **No API costs** — Transcribe unlimited recordings for free
+- **Offline capable** — Works without internet after model download
+- **Apple Silicon optimized** — Runs efficiently on M1/M2/M3 Macs via CoreML
+
+### Future: Local LLM for Titles & Summaries
+
+Currently, AI-generated titles and summaries require OpenRouter (a cloud LLM API). I'm planning to add support for **local LLM inference** as well, so the entire pipeline — transcription, title generation, and summarization — can run completely offline on your Mac.
+
+This would likely use a small, efficient model optimized for Apple Silicon (similar to how WhisperKit uses CoreML). If you're interested in contributing to this or have suggestions for local LLM frameworks, feel free to open an issue.
 
 ## Why I Built This
 
@@ -47,9 +88,10 @@ I own a [TP-7](https://teenage.engineering/products/tp-7) and I love recording m
 
 The TP-7 is the Ferrari of audio recorders. It has a beautiful feel and a physical rotating recording wheel that makes me feel like I'm Don Draper leaving drunken recordings for my secretary to transcribe.
 
-![TP-7 Device](Images/TP-7.png)
-
-_The Teenage Engineering TP-7 Field Recorder_
+| Recording Workflow | Rewind Button Demo |
+| :-----------------------------------------: | :--------------------------------------------: |
+| ![Recording workflow](Images/Recording.gif) | ![Rewind button demo](Images/RewindButton.gif) |
+| _Recording a memo on the TP-7_ | _The motorized tape reel in action_ |
 
 I love taking memos with this thing, but I didn't know what to do with these recordings. Teenage Engineering has an iPhone app and Mac app that allows you to interface with the device that is primarily designed for recording music or used with the mixer and field mic that they sell, but I really only use it for voice memos.
 
@@ -90,8 +132,8 @@ When you connect your TP-7 via USB and enable MTP mode, FieldKit mounts the devi
 - **macOS 14.0 (Sonoma)** or later
 - **FieldKit** app from Mac App Store
 - **Transcription** (pick one):
-  - **ElevenLabs API key** (cloud transcription)
-  - **WhisperKit model download** (local transcription; models can be hundreds of MB to multiple GB)
+  - **WhisperKit** (local, free) — download a model once, then transcribe offline
+  - **ElevenLabs API key** (cloud) — pay-per-use cloud transcription
 - **Storage** (pick one):
   - **AWS S3 bucket** with access credentials (optional, enables playback links in notes)
   - **Local folder** on your Mac (required if you skip S3)
@@ -110,13 +152,14 @@ When you connect your TP-7 via USB and enable MTP mode, FieldKit mounts the devi
 
 On first launch, TP-7 VoiceSync opens a Setup Wizard to walk you through configuration. You can also re-run it anytime via **Settings > General > Run Setup Wizard Again**.
 
-![Setup Wizard](Images/Wizzard.png)
-
-_The Setup Wizard guides you through transcription, storage, and optional integrations._
+| Setup Wizard |
+| :----------: |
+| ![Setup Wizard](Images/Wizzard.png) |
+| _The Setup Wizard guides you through transcription, storage, and optional integrations._ |
 
 The wizard guides you through:
 
-- **Transcription (required)**: ElevenLabs (cloud) or WhisperKit (local)
+- **Transcription (required)**: WhisperKit (local) or ElevenLabs (cloud)
 - **Storage (choose one)**: S3 (optional) or a local folder on your Mac
 - **AI Titles (optional)**: OpenRouter
 - **Notes (optional)**: Apple Notes, or local Markdown files if you skip Notes
@@ -130,9 +173,25 @@ After setup, **watching/syncing TP-7 recordings is enabled by default** (you can
 3. On the TP-7, enter MTP mode (shift + com, then T4)
 4. Verify FieldKit shows your device is connected
 
-### Step 2: Configure AWS S3
+### Step 2: Configure Transcription
 
-You'll need an S3 bucket to store your recordings in the cloud (optional, but recommended if you want playback links in notes).
+**Option A: WhisperKit (Local — Recommended)**
+
+1. In the Setup Wizard or **Settings > Transcription**, select "WhisperKit (Local)"
+2. Choose a model (Base or Distil Large v3 recommended)
+3. Click "Download Model" and wait for the download to complete
+4. Enable "Enable automatic transcription"
+
+**Option B: ElevenLabs (Cloud)**
+
+1. Sign up at [elevenlabs.io](https://elevenlabs.io)
+2. Go to your profile and copy your API key
+3. In TP-7 VoiceSync, go to **Settings > API Keys**
+4. Enter your ElevenLabs API key and click "Validate"
+
+### Step 3: Configure Storage (Optional)
+
+You can skip this step — recordings will be stored in a local folder. If you want cloud backup with playback links in notes:
 
 1. Create an S3 bucket in the [AWS Console](https://console.aws.amazon.com/s3)
 2. Create an IAM user with S3 access (recommended policy: `AmazonS3FullAccess` or a custom policy for your bucket)
@@ -140,16 +199,6 @@ You'll need an S3 bucket to store your recordings in the cloud (optional, but re
 4. In TP-7 VoiceSync, go to **Settings > Storage** and enter your bucket name, region, and prefix
 5. Go to **Settings > API Keys** and enter your AWS Access Key ID and Secret Access Key
 6. Back in **Settings > Storage**, click "Test Connection" to verify
-
-### Step 3: Set Up ElevenLabs
-
-ElevenLabs provides the cloud transcription service (optional if you choose WhisperKit for local transcription).
-
-1. Sign up at [elevenlabs.io](https://elevenlabs.io)
-2. Go to your profile and copy your API key
-3. In TP-7 VoiceSync, go to **Settings > API Keys**
-4. Enter your ElevenLabs API key
-5. Click "Validate" to verify
 
 ### Step 4: Set Up OpenRouter (Optional)
 
@@ -161,7 +210,7 @@ OpenRouter provides LLM access for generating intelligent titles and summaries.
 4. Enter your OpenRouter API key
 5. Go to **Settings > Transcription** and select your preferred model
 
-### Step 5: Configure Apple Notes
+### Step 5: Configure Apple Notes (Optional)
 
 1. In TP-7 VoiceSync, go to **Settings > Transcription**
 2. Enable "Send to Apple Notes"
@@ -184,7 +233,7 @@ API keys and cloud credentials are stored securely in the macOS Keychain (not in
 
 ### Local vs Cloud Processing
 
-- **WhisperKit (Local)**: transcription runs on-device after you download a model.
+- **WhisperKit (Local)**: transcription runs on-device after you download a model. No audio is sent anywhere.
 - **ElevenLabs / OpenRouter / S3**: audio and/or text is sent to those services when enabled.
 
 ### Apple Notes Automation
@@ -197,14 +246,16 @@ The app can notify you when your TP-7 connects and when recordings are synced. Y
 
 ### Network Access
 
-The app needs network access to upload to S3 and communicate with the ElevenLabs and OpenRouter APIs. This is handled automatically by macOS.
+The app needs network access to upload to S3 and communicate with the ElevenLabs and OpenRouter APIs. This is handled automatically by macOS. If you use WhisperKit with local storage, no network access is required after the initial model download.
 
 ## Usage
 
 1. **Connect your TP-7** via USB with FieldKit running
 2. **Turn on the connection** in the FieldKit menu bar app.
 
-   ![FieldKit App Connection](Images/FieldKitApp.png)
+| FieldKit Connection |
+| :-----------------: |
+| ![FieldKit App Connection](Images/FieldKitApp.png) |
 
 3. **New recordings automatically sync** — the app detects new WAV files and processes them (watching is enabled by default)
 4. **View recent recordings** in the menu bar popover
@@ -238,9 +289,16 @@ Each note includes:
 
 ### Transcription Fails
 
-- Verify your ElevenLabs API key in **Settings > API Keys**
-- Check your ElevenLabs account balance
-- Ensure the recording uploaded successfully to S3 first
+- **WhisperKit**: Make sure the model is downloaded (check Settings > Transcription for status)
+- **ElevenLabs**: Verify your API key in **Settings > API Keys** and check your account balance
+- Ensure the recording uploaded successfully to S3 first (if using ElevenLabs)
+
+### WhisperKit Model Won't Download
+
+- Check your internet connection
+- Ensure you have enough disk space (models range from 75 MB to 3 GB)
+- Try a smaller model first (Tiny or Base)
+- Check Console.app for detailed error messages
 
 ### Notes Not Appearing
 
