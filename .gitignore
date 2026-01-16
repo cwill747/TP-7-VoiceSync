@@ -15,3 +15,5 @@ xcuserdata/
 *.cer
 *.mobileprovision
 .env
+AGENTS.md
+scripts/reset-app-data.sh

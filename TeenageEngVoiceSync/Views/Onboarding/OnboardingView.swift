@@ -9,7 +9,7 @@ import SwiftUI
 
 enum OnboardingStep: Int, CaseIterable {
     case welcome = 0
-    case elevenLabs
+    case transcription
     case s3Setup
     case localAudioFolder  // Only shown if S3 is skipped
     case openRouter
@@ -20,7 +20,7 @@ enum OnboardingStep: Int, CaseIterable {
     var title: String {
         switch self {
         case .welcome: return "Welcome"
-        case .elevenLabs: return "ElevenLabs"
+        case .transcription: return "Transcription"
         case .s3Setup: return "S3 Storage"
         case .localAudioFolder: return "Audio Folder"
         case .openRouter: return "OpenRouter"
@@ -32,7 +32,7 @@ enum OnboardingStep: Int, CaseIterable {
 
     var isOptional: Bool {
         switch self {
-        case .welcome, .elevenLabs, .complete: return false
+        case .welcome, .transcription, .complete: return false
         case .localAudioFolder, .localMarkdownFolder: return false  // Required fallback steps
         case .s3Setup, .openRouter, .appleNotes: return true
         }
@@ -46,7 +46,7 @@ struct OnboardingView: View {
     @State private var currentStep: OnboardingStep = .welcome
 
     // Configuration state passed between steps
-    @State private var elevenLabsConfigured = false
+    @State private var transcriptionConfigured = false
     @State private var s3Configured = false
     @State private var s3Skipped = false
     @State private var localAudioFolderConfigured = false
@@ -81,7 +81,7 @@ struct OnboardingView: View {
     // MARK: - Active Steps (excluding conditional steps that don't apply)
 
     private var activeSteps: [OnboardingStep] {
-        var steps: [OnboardingStep] = [.welcome, .elevenLabs, .s3Setup]
+        var steps: [OnboardingStep] = [.welcome, .transcription, .s3Setup]
 
         // Add local audio folder step if S3 was skipped
         if s3Skipped && !s3Configured {
@@ -157,8 +157,8 @@ struct OnboardingView: View {
         switch currentStep {
         case .welcome:
             OnboardingWelcomeView()
-        case .elevenLabs:
-            OnboardingElevenLabsView(isConfigured: $elevenLabsConfigured)
+        case .transcription:
+            OnboardingTranscriptionView(isConfigured: $transcriptionConfigured)
         case .s3Setup:
             OnboardingS3View(isConfigured: $s3Configured)
         case .localAudioFolder:
@@ -171,7 +171,7 @@ struct OnboardingView: View {
             OnboardingLocalMarkdownFolderView(isConfigured: $localMarkdownFolderConfigured)
         case .complete:
             OnboardingCompleteView(
-                elevenLabsConfigured: elevenLabsConfigured,
+                transcriptionConfigured: transcriptionConfigured,
                 s3Configured: s3Configured,
                 localAudioFolderConfigured: localAudioFolderConfigured,
                 openRouterConfigured: openRouterConfigured,

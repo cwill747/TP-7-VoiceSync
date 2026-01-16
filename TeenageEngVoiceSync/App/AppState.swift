@@ -44,8 +44,8 @@ final class AppState {
         UserDefaults.standard.string(forKey: "s3.bucket")?.isEmpty == false
     }
 
-    var isElevenLabsConfigured: Bool {
-        UserDefaults.standard.bool(forKey: "elevenlabs.enabled")
+    var isTranscriptionEnabled: Bool {
+        UserDefaults.standard.bool(forKey: "transcription.enabled")
     }
 
     var isAppleNotesEnabled: Bool {

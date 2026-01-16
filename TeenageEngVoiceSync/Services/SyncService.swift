@@ -24,7 +24,8 @@ final class SyncService {
     private let deviceWatchEnabledKey = "devicewatch.enabled"
 
     private var s3Service: S3Service?
-    private var transcriptionService: TranscriptionService?
+    private var transcriptionProvider: (any TranscriptionProvider)?
+    private var transcriptionProviderKind: TranscriptionProviderKind?
     private let openRouterService = OpenRouterService()
     private let localAudioService = LocalAudioService()
 
@@ -67,7 +68,7 @@ final class SyncService {
 
         // Load credentials and create services
         await loadServices()
-        AppLogger.sync.info("Services loaded (s3=\(self.s3Service != nil), transcription=\(self.transcriptionService != nil))")
+        AppLogger.sync.info("Services loaded (s3=\(self.s3Service != nil), transcription=\(self.transcriptionProvider != nil), provider=\(self.transcriptionProviderKind?.shortName ?? "none"))")
 
         let shouldWatch = UserDefaults.standard.bool(forKey: deviceWatchEnabledKey)
         await updateDeviceWatch(enabled: shouldWatch)
@@ -86,12 +87,13 @@ final class SyncService {
 
         // Clear existing services
         s3Service = nil
-        transcriptionService = nil
+        transcriptionProvider = nil
+        transcriptionProviderKind = nil
 
         // Reload from current settings
         await loadServices()
 
-        AppLogger.sync.info("Services reloaded (s3=\(self.s3Service != nil), transcription=\(self.transcriptionService != nil))")
+        AppLogger.sync.info("Services reloaded (s3=\(self.s3Service != nil), transcription=\(self.transcriptionProvider != nil), provider=\(self.transcriptionProviderKind?.shortName ?? "none"))")
     }
 
     /// Enable or disable device watching and debounce processing.
@@ -106,17 +108,29 @@ final class SyncService {
 
     /// Retranscribe a recording
     func retranscribe(_ recording: Recording) async {
-        guard let s3Key = recording.s3Key,
-              let transcriber = transcriptionService,
-              let s3 = s3Service else {
+        guard let transcriber = transcriptionProvider else {
             return
         }
 
+        let provider = transcriptionProviderKind ?? .elevenLabs
         recording.transcriptionStatus = .processing
 
         do {
-            let presignedURL = try s3.generatePresignedURL(s3Key: s3Key, expiry: 3600)
-            let result = try await transcriber.transcribe(cloudStorageURL: presignedURL.absoluteString)
+            let result: TranscriptionResult
+            switch provider {
+            case .elevenLabs:
+                if let s3Key = recording.s3Key, let s3 = s3Service {
+                    let presignedURL = try s3.generatePresignedURL(s3Key: s3Key, expiry: 3600)
+                    result = try await transcriber.transcribe(cloudStorageURL: presignedURL.absoluteString)
+                } else if let localCopyPath = recording.localCopyPath {
+                    result = try await transcriber.transcribe(localPath: localCopyPath)
+                } else {
+                    result = try await transcriber.transcribe(localPath: recording.localPath)
+                }
+            case .whisperKit:
+                let sourcePath = recording.localCopyPath ?? recording.localPath
+                result = try await transcriber.transcribe(localPath: sourcePath)
+            }
 
             recording.transcriptionText = result.text
             recording.transcriptionLanguage = result.languageCode
@@ -188,6 +202,8 @@ final class SyncService {
 
     private func loadServices() async {
         do {
+            registerTranscriptionDefaults()
+
             // Load S3 credentials only if S3 is enabled
             let s3Enabled = UserDefaults.standard.bool(forKey: "s3.enabled")
             let bucket = UserDefaults.standard.string(forKey: "s3.bucket") ?? ""
@@ -209,12 +225,22 @@ final class SyncService {
                 }
             }
 
-            // Load ElevenLabs credentials
-            if UserDefaults.standard.bool(forKey: "elevenlabs.enabled") {
-                let apiKey = try await KeychainService.shared.retrieve(for: .elevenLabsAPIKey) ?? ""
-                let modelID = UserDefaults.standard.string(forKey: "elevenlabs.model") ?? "scribe_v1"
-                if !apiKey.isEmpty {
-                    transcriptionService = TranscriptionService(apiKey: apiKey, modelID: modelID)
+            let transcriptionEnabled = resolveTranscriptionEnabled()
+            let providerRaw = UserDefaults.standard.string(forKey: "transcription.provider") ?? TranscriptionProviderKind.elevenLabs.rawValue
+            let provider = TranscriptionProviderKind(rawValue: providerRaw) ?? .elevenLabs
+            transcriptionProviderKind = provider
+
+            if transcriptionEnabled {
+                switch provider {
+                case .elevenLabs:
+                    let apiKey = try await KeychainService.shared.retrieve(for: .elevenLabsAPIKey) ?? ""
+                    let modelID = UserDefaults.standard.string(forKey: "elevenlabs.model") ?? "scribe_v1"
+                    if !apiKey.isEmpty {
+                        transcriptionProvider = ElevenLabsTranscriptionService(apiKey: apiKey, modelID: modelID)
+                    }
+                case .whisperKit:
+                    let modelID = UserDefaults.standard.string(forKey: "whisperkit.model") ?? "base"
+                    transcriptionProvider = WhisperKitService(modelID: modelID)
                 }
             }
         } catch {
@@ -374,8 +400,10 @@ final class SyncService {
     }
 
     private func processRecording(_ recording: Recording) async {
-        // Skip if already processed (has S3 key or local copy)
-        guard recording.s3Key == nil && recording.localCopyPath == nil else { return }
+        // Skip if already processed
+        guard recording.s3Key == nil,
+              recording.localCopyPath == nil,
+              recording.transcriptionStatus == .none else { return }
 
         // Check for duplicate by hash
         if let hash = recording.fileHash {
@@ -398,6 +426,36 @@ final class SyncService {
             }
         }
 
+        let provider = transcriptionProviderKind ?? .elevenLabs
+        let backupToS3 = UserDefaults.standard.bool(forKey: "s3.backupAfterTranscription")
+        let shouldTranscribeFirst = provider == .whisperKit && transcriptionProvider != nil
+
+        if shouldTranscribeFirst {
+            let transcriptionResult = await transcribeRecording(recording, provider: provider)
+            _ = await storeRecording(recording, allowS3Upload: backupToS3)
+
+            if let transcriptionResult {
+                await createAppleNote(for: recording, transcription: transcriptionResult)
+                if UserDefaults.standard.bool(forKey: "notify.onSync") {
+                    await notificationService.transcriptionComplete(preview: transcriptionResult.text)
+                }
+            }
+        } else {
+            let allowS3Upload = provider != .whisperKit || backupToS3
+            let storageOk = await storeRecording(recording, allowS3Upload: allowS3Upload)
+            guard storageOk else { return }
+
+            let transcriptionResult = await transcribeRecording(recording, provider: provider)
+            if let transcriptionResult {
+                await createAppleNote(for: recording, transcription: transcriptionResult)
+                if UserDefaults.standard.bool(forKey: "notify.onSync") {
+                    await notificationService.transcriptionComplete(preview: transcriptionResult.text)
+                }
+            }
+        }
+    }
+
+    private func storeRecording(_ recording: Recording, allowS3Upload: Bool) async -> Bool {
         let sourceURL = URL(fileURLWithPath: recording.localPath)
 
         // Check if user explicitly chose local storage (takes priority over S3)
@@ -406,21 +464,20 @@ final class SyncService {
         AppLogger.sync.debug("Storage check: useLocalStorage=\(useLocalStorage), localFolderPath=\(localFolderPath, privacy: .private), s3Service=\(self.s3Service != nil)")
 
         if useLocalStorage && LocalAudioService.isConfigured {
-            // User chose local storage - copy to configured folder
             do {
                 let destinationURL = try await localAudioService.copyToLocalFolder(sourceURL: sourceURL)
                 recording.localCopyPath = destinationURL.path
                 recording.updatedAt = Date()
                 try? modelContext.save()
                 AppLogger.sync.info("Copied to local folder: \(recording.filename, privacy: .private)")
+                return true
             } catch {
                 lastError = error.localizedDescription
                 AppLogger.sync.error("Failed to copy to local folder: \(error.localizedDescription, privacy: .public)")
                 await notificationService.storageError("Failed to copy to local folder: \(error.localizedDescription)")
-                return
+                return false
             }
-        } else if let s3 = s3Service {
-            // S3 path: upload to cloud
+        } else if allowS3Upload, let s3 = s3Service {
             do {
                 let result = try await s3.upload(fileURL: sourceURL)
                 recording.s3Key = result.s3Key
@@ -428,55 +485,52 @@ final class SyncService {
                 recording.updatedAt = Date()
                 try? modelContext.save()
                 AppLogger.sync.info("Uploaded to S3: \(recording.filename, privacy: .private)")
+                return true
             } catch {
                 lastError = error.localizedDescription
                 await notificationService.storageError("S3 upload failed: \(error.localizedDescription)")
-                return
+                return false
             }
-        } else {
+        } else if allowS3Upload {
             lastError = "No storage configured (S3 or local folder)"
             AppLogger.sync.error("No storage configured")
             await notificationService.storageError("No storage configured. Please configure S3 or local folder in Settings.")
-            return
+            return false
+        } else {
+            AppLogger.sync.debug("Skipping S3 upload (backup disabled)")
+            return true
         }
-
-        // Transcribe
-        await transcribeRecording(recording)
     }
 
-    private func transcribeRecording(_ recording: Recording) async {
-        guard let transcriber = transcriptionService else {
-            AppLogger.sync.debug("Skipping transcription (transcription service not configured)")
-            return
-        }
-
-        // Need either S3 key or local copy path
-        guard recording.s3Key != nil || recording.localCopyPath != nil else {
-            AppLogger.sync.debug("Skipping transcription (no S3 key or local copy)")
-            return
+    private func transcribeRecording(_ recording: Recording, provider: TranscriptionProviderKind) async -> TranscriptionResult? {
+        guard let transcriber = transcriptionProvider else {
+            AppLogger.sync.debug("Skipping transcription (transcription provider not configured)")
+            return nil
         }
 
         recording.transcriptionStatus = .processing
-        AppLogger.sync.info("Starting transcription for \(recording.filename, privacy: .private)")
+        AppLogger.sync.info("Starting transcription for \(recording.filename, privacy: .private) (provider=\(provider.shortName))")
 
         do {
             let result: TranscriptionResult
 
-            if let s3Key = recording.s3Key, let s3 = s3Service {
-                // Use cloud URL method (existing behavior)
-                let presignedURL = try s3.generatePresignedURL(s3Key: s3Key, expiry: 3600)
-                result = try await transcriber.transcribe(cloudStorageURL: presignedURL.absoluteString)
-                AppLogger.sync.debug("Transcribed via cloud URL")
-            } else if let localCopyPath = recording.localCopyPath {
-                // Use direct file upload method
-                let fileURL = URL(fileURLWithPath: localCopyPath)
-                result = try await transcriber.transcribe(fileURL: fileURL)
-                AppLogger.sync.debug("Transcribed via direct upload")
-            } else {
-                // Fallback: try to use original file on device
-                let fileURL = URL(fileURLWithPath: recording.localPath)
-                result = try await transcriber.transcribe(fileURL: fileURL)
-                AppLogger.sync.debug("Transcribed via device file")
+            switch provider {
+            case .elevenLabs:
+                if let s3Key = recording.s3Key, let s3 = s3Service {
+                    let presignedURL = try s3.generatePresignedURL(s3Key: s3Key, expiry: 3600)
+                    result = try await transcriber.transcribe(cloudStorageURL: presignedURL.absoluteString)
+                    AppLogger.sync.debug("Transcribed via cloud URL")
+                } else if let localCopyPath = recording.localCopyPath {
+                    result = try await transcriber.transcribe(localPath: localCopyPath)
+                    AppLogger.sync.debug("Transcribed via local copy")
+                } else {
+                    result = try await transcriber.transcribe(localPath: recording.localPath)
+                    AppLogger.sync.debug("Transcribed via device file")
+                }
+            case .whisperKit:
+                let sourcePath = recording.localCopyPath ?? recording.localPath
+                result = try await transcriber.transcribe(localPath: sourcePath)
+                AppLogger.sync.debug("Transcribed locally with WhisperKit")
             }
 
             AppLogger.sync.info("Transcription complete for \(recording.filename, privacy: .private) (language=\(result.languageCode, privacy: .public), chars=\(result.text.count, privacy: .public))")
@@ -487,14 +541,7 @@ final class SyncService {
             recording.transcribedAt = Date()
             recording.updatedAt = Date()
             try? modelContext.save()
-
-            // Create Apple Note or markdown
-            await createAppleNote(for: recording, transcription: result)
-
-            // Notify
-            if UserDefaults.standard.bool(forKey: "notify.onSync") {
-                await notificationService.transcriptionComplete(preview: result.text)
-            }
+            return result
         } catch {
             AppLogger.sync.error("Transcription failed for \(recording.filename, privacy: .private): \(String(describing: error), privacy: .public)")
             recording.transcriptionStatus = .failed
@@ -502,8 +549,8 @@ final class SyncService {
             try? modelContext.save()
             lastError = error.localizedDescription
 
-            // Send notification for transcription error
             await notificationService.transcriptionError(error.localizedDescription, filename: recording.filename)
+            return nil
         }
     }
 
@@ -731,6 +778,25 @@ final class SyncService {
         try? modelContext.save()
 
         AppLogger.notes.info("Successfully created note for \(recording.filename, privacy: .private)")
+    }
+
+    private func registerTranscriptionDefaults() {
+        UserDefaults.standard.register(defaults: [
+            "transcription.provider": TranscriptionProviderKind.elevenLabs.rawValue,
+            "whisperkit.model": "base",
+            "s3.backupAfterTranscription": true
+        ])
+    }
+
+    private func resolveTranscriptionEnabled() -> Bool {
+        let defaults = UserDefaults.standard
+        if let stored = defaults.object(forKey: "transcription.enabled") as? Bool {
+            return stored
+        }
+
+        let legacyEnabled = defaults.bool(forKey: "elevenlabs.enabled")
+        defaults.set(legacyEnabled, forKey: "transcription.enabled")
+        return legacyEnabled
     }
 
     private func parseLinkExpiry(_ string: String) -> TimeInterval {

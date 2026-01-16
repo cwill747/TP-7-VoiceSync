@@ -32,7 +32,7 @@ struct OnboardingWelcomeView: View {
                 featureRow(
                     icon: "waveform",
                     title: "Transcription",
-                    description: "Convert voice recordings to text using ElevenLabs",
+                    description: "Convert voice recordings to text using ElevenLabs or WhisperKit",
                     required: true
                 )
 

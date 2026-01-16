@@ -8,12 +8,18 @@
 import SwiftUI
 
 struct OnboardingCompleteView: View {
-    let elevenLabsConfigured: Bool
+    let transcriptionConfigured: Bool
     let s3Configured: Bool
     let localAudioFolderConfigured: Bool
     let openRouterConfigured: Bool
     let appleNotesConfigured: Bool
     let localMarkdownFolderConfigured: Bool
+
+    @AppStorage("transcription.provider") private var transcriptionProviderRaw = TranscriptionProviderKind.elevenLabs.rawValue
+
+    private var transcriptionProvider: TranscriptionProviderKind {
+        TranscriptionProviderKind(rawValue: transcriptionProviderRaw) ?? .elevenLabs
+    }
 
     var body: some View {
         VStack(spacing: 20) {
@@ -41,8 +47,8 @@ struct OnboardingCompleteView: View {
 
                 VStack(alignment: .leading, spacing: 6) {
                     configRow(
-                        title: "ElevenLabs Transcription",
-                        configured: elevenLabsConfigured,
+                        title: "Transcription (\(transcriptionProvider.shortName))",
+                        configured: transcriptionConfigured,
                         required: true
                     )
 
@@ -127,7 +133,7 @@ struct OnboardingCompleteView: View {
 
 #Preview {
     OnboardingCompleteView(
-        elevenLabsConfigured: true,
+        transcriptionConfigured: true,
         s3Configured: true,
         localAudioFolderConfigured: false,
         openRouterConfigured: false,

@@ -12,8 +12,12 @@ struct TranscriptionSettingsView: View {
     @Environment(AppState.self) private var appState
 
     // Transcription settings
-    @AppStorage("elevenlabs.enabled") private var transcriptionEnabled = false
-    @AppStorage("elevenlabs.model") private var transcriptionModel = "scribe_v1"
+    @AppStorage("transcription.enabled") private var transcriptionEnabled = false
+    @AppStorage("transcription.provider") private var transcriptionProviderRaw = TranscriptionProviderKind.elevenLabs.rawValue
+    @AppStorage("elevenlabs.model") private var elevenLabsModel = "scribe_v1"
+    @AppStorage("whisperkit.model") private var whisperKitModel = "base"
+    @AppStorage("s3.backupAfterTranscription") private var whisperKitBackupToS3 = true
+    @AppStorage("s3.enabled") private var s3Enabled = false
 
     // Apple Notes settings
     @AppStorage("applenotes.enabled") private var notesEnabled = false
@@ -31,6 +35,9 @@ struct TranscriptionSettingsView: View {
     // State
     @State private var hasElevenLabsKey = false
     @State private var hasOpenRouterKey = false
+    @State private var whisperKitDownloadState: WhisperKitDownloadState = .notDownloaded
+    @State private var whisperKitDownloadProgress = 0.0
+    @State private var whisperKitDownloadError: String?
     @State private var availableLLMModels: [OpenRouterModel] = []
     @State private var isLoadingModels = false
     @State private var isTestingNote = false
@@ -43,6 +50,12 @@ struct TranscriptionSettingsView: View {
         case error(String)
     }
 
+    enum WhisperKitDownloadState {
+        case notDownloaded
+        case downloading
+        case ready
+    }
+
     private let openRouterService = OpenRouterService()
 
     enum TestStatus {
@@ -50,12 +63,47 @@ struct TranscriptionSettingsView: View {
         case error(String)
     }
 
+    private var transcriptionProvider: TranscriptionProviderKind {
+        TranscriptionProviderKind(rawValue: transcriptionProviderRaw) ?? .elevenLabs
+    }
+
+    private var transcriptionProviderBinding: Binding<TranscriptionProviderKind> {
+        Binding(
+            get: { transcriptionProvider },
+            set: { newValue in
+                transcriptionProviderRaw = newValue.rawValue
+                refreshWhisperKitStatus()
+                appState.reloadServices()
+            }
+        )
+    }
+
+    private var canTranscribe: Bool {
+        switch transcriptionProvider {
+        case .elevenLabs:
+            return hasElevenLabsKey
+        case .whisperKit:
+            return true
+        }
+    }
+
+    private var transcriptionActive: Bool {
+        transcriptionEnabled && canTranscribe
+    }
+
     var body: some View {
         Form {
             // MARK: - Transcription Settings
             Section("Transcription") {
+                Picker("Provider", selection: transcriptionProviderBinding) {
+                    ForEach(TranscriptionProviderKind.allCases) { provider in
+                        Text(provider.displayName).tag(provider)
+                    }
+                }
+                .pickerStyle(.segmented)
+
                 Toggle("Enable automatic transcription", isOn: $transcriptionEnabled)
-                    .disabled(!hasElevenLabsKey)
+                    .disabled(transcriptionProvider == .elevenLabs && !hasElevenLabsKey)
                     .onChange(of: transcriptionEnabled) { _, newValue in
                         if !newValue {
                             // Disable dependent features when transcription is disabled
@@ -64,32 +112,104 @@ struct TranscriptionSettingsView: View {
                         appState.reloadServices()
                     }
 
-                if !hasElevenLabsKey {
-                    Label("Configure ElevenLabs API key in API Keys tab", systemImage: "exclamationmark.triangle")
-                        .foregroundStyle(.orange)
-                        .font(.caption)
-                } else {
-                    Label("ElevenLabs API key configured", systemImage: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
-                        .font(.caption)
-                }
-
-                Picker("Model", selection: $transcriptionModel) {
-                    ForEach(TranscriptionService.availableModels, id: \.id) { model in
-                        Text(model.name).tag(model.id)
+                if transcriptionProvider == .elevenLabs {
+                    if !hasElevenLabsKey {
+                        Label("Configure ElevenLabs API key in API Keys tab", systemImage: "exclamationmark.triangle")
+                            .foregroundStyle(.orange)
+                            .font(.caption)
+                    } else {
+                        Label("ElevenLabs API key configured", systemImage: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                            .font(.caption)
                     }
-                }
-                .disabled(!transcriptionEnabled)
 
-                Text("Uses ElevenLabs speech-to-text to transcribe your voice recordings")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    Picker("Model", selection: $elevenLabsModel) {
+                        ForEach(ElevenLabsTranscriptionService.availableModels, id: \.id) { model in
+                            Text(model.name).tag(model.id)
+                        }
+                    }
+                    .disabled(!transcriptionEnabled || !hasElevenLabsKey)
+                    .onChange(of: elevenLabsModel) { _, _ in
+                        appState.reloadServices()
+                    }
+
+                    Text("Uses ElevenLabs speech-to-text to transcribe your voice recordings")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                if transcriptionProvider == .whisperKit {
+                    Picker("Model", selection: $whisperKitModel) {
+                        ForEach(WhisperKitService.availableModels) { model in
+                            Text(model.name).tag(model.id)
+                        }
+                    }
+                    .disabled(whisperKitDownloadState == .downloading)
+                    .onChange(of: whisperKitModel) { _, _ in
+                        refreshWhisperKitStatus()
+                        appState.reloadServices()
+                    }
+
+                    if let model = WhisperKitService.availableModels.first(where: { $0.id == whisperKitModel }) {
+                        Text(model.detailLabel)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    HStack {
+                        Button("Download Model") {
+                            downloadWhisperKitModel()
+                        }
+                        .disabled(whisperKitDownloadState == .downloading)
+
+                        if whisperKitDownloadState == .downloading {
+                            ProgressView(value: whisperKitDownloadProgress)
+                                .frame(width: 120)
+                        }
+                    }
+
+                    if let errorMessage = whisperKitDownloadError {
+                        Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.red)
+                            .font(.caption)
+                    } else {
+                        switch whisperKitDownloadState {
+                        case .notDownloaded:
+                            Label("Model not downloaded yet", systemImage: "icloud.and.arrow.down")
+                                .foregroundStyle(.secondary)
+                                .font(.caption)
+                        case .downloading:
+                            Label("Downloading model...", systemImage: "arrow.down.circle")
+                                .foregroundStyle(.secondary)
+                                .font(.caption)
+                        case .ready:
+                            Label("Model downloaded", systemImage: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                                .font(.caption)
+                        }
+                    }
+
+                    if s3Enabled {
+                        Toggle("Backup audio to S3", isOn: $whisperKitBackupToS3)
+                            .onChange(of: whisperKitBackupToS3) { _, _ in
+                                appState.reloadServices()
+                            }
+                    } else {
+                        Label("Enable S3 storage to back up audio", systemImage: "cloud")
+                            .foregroundStyle(.secondary)
+                            .font(.caption)
+                    }
+
+                    Text("Runs locally using WhisperKit. Download a model for offline use.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             // MARK: - Apple Notes Integration
             Section("Apple Notes Integration") {
                 Toggle("Save transcriptions to Apple Notes", isOn: $notesEnabled)
-                    .disabled(!transcriptionEnabled || !hasElevenLabsKey)
+                    .disabled(!transcriptionActive)
                     .onChange(of: notesEnabled) { _, newValue in
                         if newValue {
                             // Disable markdown when Apple Notes is enabled
@@ -97,7 +217,7 @@ struct TranscriptionSettingsView: View {
                         }
                     }
 
-                if !transcriptionEnabled {
+                if !transcriptionActive {
                     Text("Enable transcription above to use Apple Notes integration")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -148,7 +268,7 @@ struct TranscriptionSettingsView: View {
             // MARK: - Local Markdown Notes
             Section("Local Markdown Notes") {
                 Toggle("Save transcriptions as markdown files", isOn: $markdownEnabled)
-                    .disabled(!transcriptionEnabled || !hasElevenLabsKey)
+                    .disabled(!transcriptionActive)
                     .onChange(of: markdownEnabled) { _, newValue in
                         if newValue {
                             // Disable Apple Notes when markdown is enabled
@@ -199,7 +319,7 @@ struct TranscriptionSettingsView: View {
 
             // MARK: - Notes Status
             Section {
-                if !notesEnabled && !markdownEnabled && transcriptionEnabled {
+                if !notesEnabled && !markdownEnabled && transcriptionActive {
                     Label("Enable Apple Notes or Markdown to save transcriptions", systemImage: "exclamationmark.triangle")
                         .foregroundStyle(.orange)
                         .font(.caption)
@@ -280,7 +400,9 @@ struct TranscriptionSettingsView: View {
         .formStyle(.grouped)
         .padding()
         .task {
+            ensureTranscriptionDefaults()
             await checkAPIKeys()
+            refreshWhisperKitStatus()
             if hasOpenRouterKey {
                 await loadModels()
             }
@@ -299,6 +421,58 @@ struct TranscriptionSettingsView: View {
         } catch {
             hasElevenLabsKey = false
             hasOpenRouterKey = false
+        }
+    }
+
+    private func ensureTranscriptionDefaults() {
+        let defaults = UserDefaults.standard
+        if defaults.string(forKey: "transcription.provider") == nil {
+            defaults.set(TranscriptionProviderKind.elevenLabs.rawValue, forKey: "transcription.provider")
+        }
+        if defaults.string(forKey: "whisperkit.model") == nil {
+            defaults.set("base", forKey: "whisperkit.model")
+        }
+        if defaults.object(forKey: "s3.backupAfterTranscription") == nil {
+            defaults.set(true, forKey: "s3.backupAfterTranscription")
+        }
+        if defaults.object(forKey: "transcription.enabled") == nil {
+            let legacyEnabled = defaults.bool(forKey: "elevenlabs.enabled")
+            defaults.set(legacyEnabled, forKey: "transcription.enabled")
+        }
+    }
+
+    private func refreshWhisperKitStatus() {
+        whisperKitDownloadError = nil
+        if WhisperKitService.cachedModelPath(for: whisperKitModel) != nil {
+            whisperKitDownloadState = .ready
+        } else {
+            whisperKitDownloadState = .notDownloaded
+        }
+    }
+
+    private func downloadWhisperKitModel() {
+        whisperKitDownloadError = nil
+        whisperKitDownloadProgress = 0
+        whisperKitDownloadState = .downloading
+
+        Task {
+            do {
+                let modelURL = try await WhisperKitService.downloadModel(variant: whisperKitModel) { progress in
+                    Task { @MainActor in
+                        whisperKitDownloadProgress = progress.fractionCompleted
+                    }
+                }
+                WhisperKitService.storeDownloadedModel(path: modelURL, variant: whisperKitModel)
+                await MainActor.run {
+                    whisperKitDownloadState = .ready
+                    appState.reloadServices()
+                }
+            } catch {
+                await MainActor.run {
+                    whisperKitDownloadState = .notDownloaded
+                    whisperKitDownloadError = error.localizedDescription
+                }
+            }
         }
     }
 

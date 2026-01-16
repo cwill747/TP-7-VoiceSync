@@ -7,7 +7,9 @@
 
 import Foundation
 
-actor TranscriptionService {
+actor ElevenLabsTranscriptionService: TranscriptionProvider {
+    static let providerName = "ElevenLabs"
+
     private let apiKey: String
     private let baseURL = URL(string: "https://api.elevenlabs.io/v1")!
     private let modelID: String
@@ -54,6 +56,11 @@ actor TranscriptionService {
     }
 
     /// Transcribe audio from a local file (direct upload)
+    func transcribe(localPath: String) async throws -> TranscriptionResult {
+        let fileURL = URL(fileURLWithPath: localPath)
+        return try await transcribe(fileURL: fileURL)
+    }
+
     func transcribe(fileURL: URL) async throws -> TranscriptionResult {
         let url = baseURL.appendingPathComponent("speech-to-text")
 

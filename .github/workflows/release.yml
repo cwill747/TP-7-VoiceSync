@@ -15,6 +15,22 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history needed for commit count
+
+      - name: Extract version info
+        id: version
+        run: |
+          # Marketing version from tag (strip 'v' prefix)
+          TAG=${GITHUB_REF#refs/tags/v}
+          echo "MARKETING_VERSION=$TAG" >> $GITHUB_OUTPUT
+          
+          # Build number = total commit count (always increasing integer)
+          BUILD_NUMBER=$(git rev-list HEAD --count)
+          echo "BUILD_NUMBER=$BUILD_NUMBER" >> $GITHUB_OUTPUT
+          
+          echo "Marketing Version: $TAG"
+          echo "Build Number: $BUILD_NUMBER"
 
       - name: Set up Xcode
         uses: maxim-lobanov/setup-xcode@v1
@@ -88,6 +104,8 @@ jobs:
             CODE_SIGN_STYLE=Manual \
             CODE_SIGN_IDENTITY="$SIGNING_IDENTITY" \
             DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            MARKETING_VERSION="${{ steps.version.outputs.MARKETING_VERSION }}" \
+            CURRENT_PROJECT_VERSION="${{ steps.version.outputs.BUILD_NUMBER }}" \
             archive
 
           echo "Exporting archive..."
@@ -118,8 +136,7 @@ jobs:
           codesign -vvv --deep --strict "$APP_PATH"
           spctl -a -vvv "$APP_PATH" || true
 
-          VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP_PATH/Contents/Info.plist")
-          DMG_NAME="${DMG_BASENAME}-${VERSION}.dmg"
+          DMG_NAME="${DMG_BASENAME}-${{ steps.version.outputs.MARKETING_VERSION }}.dmg"
           DMG_PATH="$BUILD_DIR/$DMG_NAME"
 
           echo "Creating DMG..."
@@ -153,14 +170,10 @@ jobs:
           echo "Verifying notarization..."
           spctl -a -vvv --type install "$DMG_PATH"
 
-      - name: Get version from tag
-        id: version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
-
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          name: TP-7 VoiceSync v${{ steps.version.outputs.VERSION }}
+          name: TP-7 VoiceSync v${{ steps.version.outputs.MARKETING_VERSION }}
           draft: false
           prerelease: false
           files: |

@@ -304,7 +304,7 @@ struct APIKeysSettingsView: View {
         defer { isVerifyingElevenLabs = false }
 
         do {
-            try await TranscriptionService.validateAPIKey(elevenLabsAPIKey)
+            try await ElevenLabsTranscriptionService.validateAPIKey(elevenLabsAPIKey)
             elevenLabsStatus = .success("API key is valid")
             clearStatus(for: .elevenLabs)
         } catch {
