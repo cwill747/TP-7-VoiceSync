@@ -63,6 +63,8 @@ final class SyncService {
     func start() async {
         AppLogger.sync.info("Starting sync service")
 
+        ensureDeviceWatchDefault()
+
         // Request notification permission
         _ = try? await notificationService.requestPermission()
 
@@ -786,6 +788,16 @@ final class SyncService {
             "whisperkit.model": "base",
             "s3.backupAfterTranscription": true
         ])
+    }
+
+    private func ensureDeviceWatchDefault() {
+        let defaults = UserDefaults.standard
+
+        // If the user has never set this preference, default to watching.
+        // This does not override an explicit user choice (true/false).
+        if defaults.object(forKey: deviceWatchEnabledKey) == nil {
+            defaults.set(true, forKey: deviceWatchEnabledKey)
+        }
     }
 
     private func resolveTranscriptionEnabled() -> Bool {

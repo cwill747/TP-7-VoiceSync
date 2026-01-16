@@ -231,6 +231,8 @@ struct OnboardingView: View {
 
     private func canContinueFromCurrentStep() -> Bool {
         switch currentStep {
+        case .transcription:
+            return transcriptionConfigured
         case .localAudioFolder:
             return localAudioFolderConfigured
         case .localMarkdownFolder:
@@ -241,15 +243,12 @@ struct OnboardingView: View {
     }
 
     private func handleSkip() {
-        print("DEBUG: handleSkip called for step: \(currentStep)")
         switch currentStep {
         case .s3Setup:
             s3Skipped = true
-            print("DEBUG: S3 skipped, s3Skipped=\(s3Skipped)")
             goToNextStep()
         case .appleNotes:
             appleNotesSkipped = true
-            print("DEBUG: Apple Notes skipped, appleNotesSkipped=\(appleNotesSkipped)")
             goToNextStep()
         default:
             goToNextStep()
@@ -257,7 +256,6 @@ struct OnboardingView: View {
     }
 
     private func goToNextStep() {
-        print("DEBUG: goToNextStep from \(currentStep), s3Configured=\(s3Configured), s3Skipped=\(s3Skipped)")
         // Handle special transitions
         switch currentStep {
         case .s3Setup:
@@ -265,16 +263,13 @@ struct OnboardingView: View {
                 // S3 configured, skip local audio folder step
                 s3Skipped = false
                 currentStep = .openRouter
-                print("DEBUG: S3 configured, going to openRouter")
             } else if s3Skipped {
                 // S3 skipped, go to local audio folder
                 currentStep = .localAudioFolder
-                print("DEBUG: S3 skipped, going to localAudioFolder")
             } else {
                 // Just continuing without configuring - treat as skip
                 s3Skipped = true
                 currentStep = .localAudioFolder
-                print("DEBUG: S3 not configured, treating as skip, going to localAudioFolder")
             }
 
         case .localAudioFolder:

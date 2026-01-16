@@ -16,7 +16,7 @@ struct GeneralSettingsView: View {
     @AppStorage("notify.onConnect") private var notifyOnConnect = true
     @AppStorage("notify.onSync") private var notifyOnSync = true
     @AppStorage("daemon.debounceMs") private var debounceMs = 2000
-    @AppStorage("devicewatch.enabled") private var deviceWatchEnabled = false
+    @AppStorage("devicewatch.enabled") private var deviceWatchEnabled = true
 
     var body: some View {
         Form {
