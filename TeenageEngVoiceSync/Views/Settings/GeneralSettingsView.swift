@@ -11,6 +11,7 @@ import ServiceManagement
 
 struct GeneralSettingsView: View {
     @Environment(AppState.self) private var appState
+    @Environment(\.openWindow) private var openWindow
     @AppStorage("launchAtLogin") private var launchAtLogin = false
     @AppStorage("notify.onConnect") private var notifyOnConnect = true
     @AppStorage("notify.onSync") private var notifyOnSync = true
@@ -62,6 +63,16 @@ struct GeneralSettingsView: View {
                 LabeledContent("Build") {
                     Text(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1")
                 }
+            }
+
+            Section("Setup") {
+                Button("Run Setup Wizard Again") {
+                    openWindow(id: "onboarding")
+                }
+
+                Text("Re-run the initial setup wizard to reconfigure services")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)

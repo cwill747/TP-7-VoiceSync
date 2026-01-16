@@ -26,6 +26,7 @@ final class SyncService {
     private var s3Service: S3Service?
     private var transcriptionService: TranscriptionService?
     private let openRouterService = OpenRouterService()
+    private let localAudioService = LocalAudioService()
 
     init(modelContext: ModelContext) {
         self.modelContext = modelContext
@@ -77,6 +78,20 @@ final class SyncService {
         Task {
             await debouncer.stopProcessing()
         }
+    }
+
+    /// Reload services with current settings (called when settings change)
+    func reloadServices() async {
+        AppLogger.sync.info("Reloading services with updated settings")
+
+        // Clear existing services
+        s3Service = nil
+        transcriptionService = nil
+
+        // Reload from current settings
+        await loadServices()
+
+        AppLogger.sync.info("Services reloaded (s3=\(self.s3Service != nil), transcription=\(self.transcriptionService != nil))")
     }
 
     /// Enable or disable device watching and debounce processing.
@@ -173,12 +188,13 @@ final class SyncService {
 
     private func loadServices() async {
         do {
-            // Load S3 credentials
+            // Load S3 credentials only if S3 is enabled
+            let s3Enabled = UserDefaults.standard.bool(forKey: "s3.enabled")
             let bucket = UserDefaults.standard.string(forKey: "s3.bucket") ?? ""
             let region = UserDefaults.standard.string(forKey: "s3.region") ?? "us-east-1"
             let prefix = UserDefaults.standard.string(forKey: "s3.prefix") ?? "recordings/"
 
-            if !bucket.isEmpty {
+            if s3Enabled && !bucket.isEmpty {
                 let accessKey = try await KeychainService.shared.retrieve(for: .awsAccessKeyId) ?? ""
                 let secretKey = try await KeychainService.shared.retrieve(for: .awsSecretAccessKey) ?? ""
 
@@ -358,19 +374,20 @@ final class SyncService {
     }
 
     private func processRecording(_ recording: Recording) async {
-        // Skip if already uploaded
-        guard recording.s3Key == nil else { return }
+        // Skip if already processed (has S3 key or local copy)
+        guard recording.s3Key == nil && recording.localCopyPath == nil else { return }
 
         // Check for duplicate by hash
         if let hash = recording.fileHash {
             let descriptor = FetchDescriptor<Recording>(predicate: #Predicate {
-                $0.fileHash == hash && $0.s3Key != nil
+                $0.fileHash == hash && ($0.s3Key != nil || $0.localCopyPath != nil)
             })
             if let existing = try? modelContext.fetch(descriptor).first,
                existing.id != recording.id {
-                // Duplicate found, copy S3 info
+                // Duplicate found, copy info
                 recording.s3Key = existing.s3Key
                 recording.s3UploadedAt = existing.s3UploadedAt
+                recording.localCopyPath = existing.localCopyPath
                 recording.transcriptionText = existing.transcriptionText
                 recording.transcriptionLanguage = existing.transcriptionLanguage
                 recording.transcriptionStatus = existing.transcriptionStatus
@@ -381,36 +398,61 @@ final class SyncService {
             }
         }
 
-        // Upload to S3
-        guard let s3 = s3Service else {
-            lastError = "S3 not configured"
+        let sourceURL = URL(fileURLWithPath: recording.localPath)
+
+        // Check if user explicitly chose local storage (takes priority over S3)
+        let useLocalStorage = UserDefaults.standard.bool(forKey: "localaudio.enabled")
+        let localFolderPath = UserDefaults.standard.string(forKey: "localaudio.folderPath") ?? ""
+        AppLogger.sync.debug("Storage check: useLocalStorage=\(useLocalStorage), localFolderPath=\(localFolderPath, privacy: .private), s3Service=\(self.s3Service != nil)")
+
+        if useLocalStorage && LocalAudioService.isConfigured {
+            // User chose local storage - copy to configured folder
+            do {
+                let destinationURL = try await localAudioService.copyToLocalFolder(sourceURL: sourceURL)
+                recording.localCopyPath = destinationURL.path
+                recording.updatedAt = Date()
+                try? modelContext.save()
+                AppLogger.sync.info("Copied to local folder: \(recording.filename, privacy: .private)")
+            } catch {
+                lastError = error.localizedDescription
+                AppLogger.sync.error("Failed to copy to local folder: \(error.localizedDescription, privacy: .public)")
+                await notificationService.storageError("Failed to copy to local folder: \(error.localizedDescription)")
+                return
+            }
+        } else if let s3 = s3Service {
+            // S3 path: upload to cloud
+            do {
+                let result = try await s3.upload(fileURL: sourceURL)
+                recording.s3Key = result.s3Key
+                recording.s3UploadedAt = result.uploadedAt
+                recording.updatedAt = Date()
+                try? modelContext.save()
+                AppLogger.sync.info("Uploaded to S3: \(recording.filename, privacy: .private)")
+            } catch {
+                lastError = error.localizedDescription
+                await notificationService.storageError("S3 upload failed: \(error.localizedDescription)")
+                return
+            }
+        } else {
+            lastError = "No storage configured (S3 or local folder)"
+            AppLogger.sync.error("No storage configured")
+            await notificationService.storageError("No storage configured. Please configure S3 or local folder in Settings.")
             return
         }
 
-        do {
-            let url = URL(fileURLWithPath: recording.localPath)
-            let result = try await s3.upload(fileURL: url)
-
-            recording.s3Key = result.s3Key
-            recording.s3UploadedAt = result.uploadedAt
-            recording.updatedAt = Date()
-            try? modelContext.save()
-
-            // Transcribe
-            await transcribeRecording(recording)
-        } catch {
-            lastError = error.localizedDescription
-            if UserDefaults.standard.bool(forKey: "notify.onSync") {
-                await notificationService.syncError(error.localizedDescription)
-            }
-        }
+        // Transcribe
+        await transcribeRecording(recording)
     }
 
     private func transcribeRecording(_ recording: Recording) async {
-        guard let transcriber = transcriptionService,
-              let s3 = s3Service,
-              let s3Key = recording.s3Key else {
-            AppLogger.sync.debug("Skipping transcription (missing configuration)")
+        guard let transcriber = transcriptionService else {
+            AppLogger.sync.debug("Skipping transcription (transcription service not configured)")
+            return
+        }
+
+        // Need either S3 key or local copy path
+        guard recording.s3Key != nil || recording.localCopyPath != nil else {
+            AppLogger.sync.debug("Skipping transcription (no S3 key or local copy)")
             return
         }
 
@@ -418,9 +460,25 @@ final class SyncService {
         AppLogger.sync.info("Starting transcription for \(recording.filename, privacy: .private)")
 
         do {
-            let presignedURL = try s3.generatePresignedURL(s3Key: s3Key, expiry: 3600)
+            let result: TranscriptionResult
 
-            let result = try await transcriber.transcribe(cloudStorageURL: presignedURL.absoluteString)
+            if let s3Key = recording.s3Key, let s3 = s3Service {
+                // Use cloud URL method (existing behavior)
+                let presignedURL = try s3.generatePresignedURL(s3Key: s3Key, expiry: 3600)
+                result = try await transcriber.transcribe(cloudStorageURL: presignedURL.absoluteString)
+                AppLogger.sync.debug("Transcribed via cloud URL")
+            } else if let localCopyPath = recording.localCopyPath {
+                // Use direct file upload method
+                let fileURL = URL(fileURLWithPath: localCopyPath)
+                result = try await transcriber.transcribe(fileURL: fileURL)
+                AppLogger.sync.debug("Transcribed via direct upload")
+            } else {
+                // Fallback: try to use original file on device
+                let fileURL = URL(fileURLWithPath: recording.localPath)
+                result = try await transcriber.transcribe(fileURL: fileURL)
+                AppLogger.sync.debug("Transcribed via device file")
+            }
+
             AppLogger.sync.info("Transcription complete for \(recording.filename, privacy: .private) (language=\(result.languageCode, privacy: .public), chars=\(result.text.count, privacy: .public))")
 
             recording.transcriptionText = result.text
@@ -430,7 +488,7 @@ final class SyncService {
             recording.updatedAt = Date()
             try? modelContext.save()
 
-            // Create Apple Note
+            // Create Apple Note or markdown
             await createAppleNote(for: recording, transcription: result)
 
             // Notify
@@ -443,6 +501,9 @@ final class SyncService {
             recording.updatedAt = Date()
             try? modelContext.save()
             lastError = error.localizedDescription
+
+            // Send notification for transcription error
+            await notificationService.transcriptionError(error.localizedDescription, filename: recording.filename)
         }
     }
 
@@ -455,24 +516,51 @@ final class SyncService {
             return
         }
 
-        guard UserDefaults.standard.bool(forKey: "applenotes.enabled") else {
-            AppLogger.notes.debug("Skipping note creation (disabled in settings)")
+        // Check which note type to use - markdown takes priority if enabled
+        let markdownEnabled = UserDefaults.standard.bool(forKey: "markdown.enabled")
+        let markdownFolderPath = UserDefaults.standard.string(forKey: "markdown.folderPath") ?? ""
+        let appleNotesEnabled = UserDefaults.standard.bool(forKey: "applenotes.enabled")
+        AppLogger.notes.debug("Note settings: markdownEnabled=\(markdownEnabled), markdownPath=\(markdownFolderPath, privacy: .private), appleNotesEnabled=\(appleNotesEnabled)")
+
+        guard markdownEnabled || appleNotesEnabled else {
+            AppLogger.notes.debug("Skipping note creation (both disabled in settings)")
             return
         }
 
-        guard let s3 = s3Service else {
-            AppLogger.notes.info("Skipping note creation (S3 not configured)")
-            return
-        }
+        // Determine which service to use
+        let useMarkdown = markdownEnabled
 
-        guard let s3Key = recording.s3Key else {
-            AppLogger.notes.info("Skipping note creation (missing S3 key)")
+        // Determine audio URLs - either S3 presigned URLs or local file:// URLs
+        var playURLString: String
+        var downloadURLString: String
+
+        if let s3Key = recording.s3Key, let s3 = s3Service {
+            // Use S3 presigned URLs
+            let expiryString = UserDefaults.standard.string(forKey: "applenotes.linkExpiry") ?? "7d"
+            let expiry = parseLinkExpiry(expiryString)
+            do {
+                let playURL = try s3.generatePresignedURL(s3Key: s3Key, expiry: expiry)
+                let downloadURL = try s3.generateDownloadURL(s3Key: s3Key, filename: recording.filename, expiry: expiry)
+                playURLString = playURL.absoluteString
+                downloadURLString = downloadURL.absoluteString
+                AppLogger.notes.debug("Using S3 URLs for note")
+            } catch {
+                AppLogger.notes.error("Failed to generate S3 URLs: \(error.localizedDescription, privacy: .public)")
+                lastError = "Failed to generate S3 URLs: \(error.localizedDescription)"
+                return
+            }
+        } else if let localCopyPath = recording.localCopyPath {
+            // Use local file:// URLs
+            let localURL = URL(fileURLWithPath: localCopyPath)
+            playURLString = localURL.absoluteString
+            downloadURLString = localURL.absoluteString
+            AppLogger.notes.debug("Using local file URL for note")
+        } else {
+            AppLogger.notes.info("Skipping note creation (no S3 key or local copy)")
             return
         }
 
         let folder = UserDefaults.standard.string(forKey: "applenotes.folder") ?? "TP-7 Transcripts"
-        let expiryString = UserDefaults.standard.string(forKey: "applenotes.linkExpiry") ?? "7d"
-        let expiry = parseLinkExpiry(expiryString)
         AppLogger.notes.debug("Creating note (folder=\(folder, privacy: .private))")
 
         // Generate LLM title if enabled
@@ -497,33 +585,49 @@ final class SyncService {
         }
 
         do {
-            let playURL = try s3.generatePresignedURL(s3Key: s3Key, expiry: expiry)
-            let downloadURL = try s3.generateDownloadURL(s3Key: s3Key, filename: recording.filename, expiry: expiry)
+            if useMarkdown {
+                // Create local markdown file (takes priority)
+                let markdownService = LocalMarkdownService()
+                try await markdownService.createTranscriptionNote(
+                    transcription: transcription.text,
+                    filename: recording.filename,
+                    tpDeviceFilename: recording.filename,
+                    recordedAt: recording.recordedAt,
+                    fileSize: recording.fileSize,
+                    language: transcription.languageCode,
+                    playURL: playURLString,
+                    downloadURL: downloadURLString,
+                    customTitle: customTitle,
+                    summary: summary
+                )
+                AppLogger.notes.info("Successfully created markdown file for \(recording.filename, privacy: .private)")
+            } else if appleNotesEnabled {
+                // Create Apple Note
+                let notesService = AppleNotesService()
+                try await notesService.createTranscriptionNote(
+                    transcription: transcription.text,
+                    filename: recording.filename,
+                    tpDeviceFilename: recording.filename,
+                    recordedAt: recording.recordedAt,
+                    fileSize: recording.fileSize,
+                    language: transcription.languageCode,
+                    playURL: playURLString,
+                    downloadURL: downloadURLString,
+                    folder: folder,
+                    customTitle: customTitle,
+                    summary: summary
+                )
+                AppLogger.notes.info("Successfully created Apple Note for \(recording.filename, privacy: .private)")
+            }
 
-            let notesService = AppleNotesService()
-            try await notesService.createTranscriptionNote(
-                transcription: transcription.text,
-                filename: recording.filename,
-                tpDeviceFilename: recording.filename,
-                recordedAt: recording.recordedAt,
-                fileSize: recording.fileSize,
-                language: transcription.languageCode,
-                playURL: playURL.absoluteString,
-                downloadURL: downloadURL.absoluteString,
-                folder: folder,
-                customTitle: customTitle,
-                summary: summary
-            )
-
-            // Mark that Apple Note was created to prevent duplicates
+            // Mark that note was created to prevent duplicates
             recording.appleNoteCreatedAt = Date()
             recording.updatedAt = Date()
             try? modelContext.save()
-
-            AppLogger.notes.info("Successfully created note for \(recording.filename, privacy: .private)")
         } catch {
             AppLogger.notes.error("Failed to create note for \(recording.filename, privacy: .private): \(error.localizedDescription, privacy: .public)")
-            lastError = "Failed to create Apple Note: \(error.localizedDescription)"
+            lastError = "Failed to create note: \(error.localizedDescription)"
+            await notificationService.noteError(error.localizedDescription)
         }
     }
 

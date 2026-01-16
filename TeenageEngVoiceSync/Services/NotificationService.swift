@@ -95,4 +95,31 @@ actor NotificationService {
             identifier: "transcription-complete"
         )
     }
+
+    /// Notify transcription error
+    func transcriptionError(_ message: String, filename: String) async {
+        await send(
+            title: "Transcription Failed",
+            body: "\(filename): \(message)",
+            identifier: "transcription-error"
+        )
+    }
+
+    /// Notify storage error (S3 or local)
+    func storageError(_ message: String) async {
+        await send(
+            title: "Storage Error",
+            body: message,
+            identifier: "storage-error"
+        )
+    }
+
+    /// Notify note creation error
+    func noteError(_ message: String) async {
+        await send(
+            title: "Note Creation Failed",
+            body: message,
+            identifier: "note-error"
+        )
+    }
 }

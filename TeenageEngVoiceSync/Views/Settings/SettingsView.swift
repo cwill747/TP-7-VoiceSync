@@ -15,9 +15,9 @@ struct SettingsView: View {
                     Label("General", systemImage: "gear")
                 }
 
-            S3SettingsView()
+            StorageSettingsView()
                 .tabItem {
-                    Label("S3 Storage", systemImage: "cloud")
+                    Label("Storage", systemImage: "externaldrive")
                 }
 
             APIKeysSettingsView()

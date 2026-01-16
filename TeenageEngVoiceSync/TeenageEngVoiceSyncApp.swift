@@ -14,6 +14,8 @@ struct TeenageEngVoiceSyncApp: App {
     let modelContainer: ModelContainer
 
     @State private var appState = AppState()
+    @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
+    @Environment(\.openWindow) private var openWindow
 
     init() {
         do {
@@ -52,6 +54,10 @@ struct TeenageEngVoiceSyncApp: App {
             MenuBarIcon(state: appState)
                 .task {
                     await appState.initialize(modelContext: modelContainer.mainContext)
+                    // Open onboarding wizard on first launch
+                    if !hasCompletedOnboarding {
+                        openWindow(id: "onboarding")
+                    }
                 }
         }
         .menuBarExtraStyle(.window)
@@ -73,5 +79,12 @@ struct TeenageEngVoiceSyncApp: App {
                 .environment(appState)
                 .modelContainer(modelContainer)
         }
+
+        // Onboarding wizard window
+        Window("Setup Wizard", id: "onboarding") {
+            OnboardingView()
+        }
+        .windowResizability(.contentSize)
+        .defaultPosition(.center)
     }
 }

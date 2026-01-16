@@ -58,7 +58,11 @@ final class AppState {
 
     // Status text for menu bar
     var statusText: String {
-        if isSyncing {
+        if let error = lastError {
+            // Truncate error message for menu bar
+            let truncated = error.count > 50 ? String(error.prefix(47)) + "..." : error
+            return "Error: \(truncated)"
+        } else if isSyncing {
             return "Syncing..."
         } else if !isDeviceWatchEnabled {
             return "Watching disabled"
@@ -97,6 +101,16 @@ final class AppState {
         guard let syncService else { return }
         Task { @MainActor in
             await syncService.setDeviceWatchEnabled(enabled)
+        }
+    }
+
+    /// Reload services when settings change
+    func reloadServices() {
+        guard let syncService else { return }
+        // Clear any existing error when reloading
+        clearError()
+        Task { @MainActor in
+            await syncService.reloadServices()
         }
     }
 }

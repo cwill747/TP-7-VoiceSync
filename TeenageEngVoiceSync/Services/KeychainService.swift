@@ -54,22 +54,39 @@ actor KeychainService {
             kSecAttrService as String: "TeenageEngVoiceSync"
         ]
 
-        // Delete existing item first
-        let deleteStatus = SecItemDelete(query as CFDictionary)
-        AppLogger.keychain.debug("Delete existing for \(key.rawValue, privacy: .public): status \(deleteStatus, privacy: .public)")
+        // Attributes to update/add
+        let attributes: [String: Any] = [
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlocked
+        ]
 
-        // Add new item
-        var addQuery = query
-        addQuery[kSecValueData as String] = data
-        addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlocked
+        // Try to update existing item first
+        let updateStatus = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+        AppLogger.keychain.debug("Update for \(key.rawValue, privacy: .public): status \(updateStatus, privacy: .public)")
 
-        let status = SecItemAdd(addQuery as CFDictionary, nil)
-        AppLogger.keychain.debug("Save for \(key.rawValue, privacy: .public): status \(status, privacy: .public) (success=\(status == errSecSuccess))")
-
-        guard status == errSecSuccess else {
-            throw KeychainError.saveFailed(status)
+        if updateStatus == errSecSuccess {
+            AppLogger.keychain.info("Updated key \(key.rawValue, privacy: .public)")
+            return
         }
-        AppLogger.keychain.info("Saved key \(key.rawValue, privacy: .public)")
+
+        if updateStatus == errSecItemNotFound {
+            // Item doesn't exist, add it
+            var addQuery = query
+            addQuery[kSecValueData as String] = data
+            addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlocked
+
+            let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
+            AppLogger.keychain.debug("Add for \(key.rawValue, privacy: .public): status \(addStatus, privacy: .public)")
+
+            guard addStatus == errSecSuccess else {
+                throw KeychainError.saveFailed(addStatus)
+            }
+            AppLogger.keychain.info("Added key \(key.rawValue, privacy: .public)")
+            return
+        }
+
+        // Update failed for another reason
+        throw KeychainError.saveFailed(updateStatus)
     }
 
     func retrieve(for key: Key) throws -> String? {

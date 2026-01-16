@@ -25,6 +25,7 @@ final class Recording {
     var s3Key: String?
     var s3UploadedAt: Date?
     var fileHash: String?
+    var localCopyPath: String?  // Path in user's configured audio folder (not TP-7 device)
 
     // Transcription
     var transcriptionText: String?

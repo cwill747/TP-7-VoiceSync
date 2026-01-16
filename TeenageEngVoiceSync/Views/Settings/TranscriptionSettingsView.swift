@@ -9,6 +9,8 @@ import SwiftUI
 import os
 
 struct TranscriptionSettingsView: View {
+    @Environment(AppState.self) private var appState
+
     // Transcription settings
     @AppStorage("elevenlabs.enabled") private var transcriptionEnabled = false
     @AppStorage("elevenlabs.model") private var transcriptionModel = "scribe_v1"
@@ -17,6 +19,10 @@ struct TranscriptionSettingsView: View {
     @AppStorage("applenotes.enabled") private var notesEnabled = false
     @AppStorage("applenotes.folder") private var notesFolder = "TP-7 Transcripts"
     @AppStorage("applenotes.linkExpiry") private var linkExpiry = "7d"
+
+    // Local Markdown settings
+    @AppStorage("markdown.enabled") private var markdownEnabled = false
+    @AppStorage("markdown.folderPath") private var markdownFolderPath = ""
 
     // LLM settings
     @AppStorage("openrouter.enabled") private var llmEnabled = false
@@ -29,6 +35,13 @@ struct TranscriptionSettingsView: View {
     @State private var isLoadingModels = false
     @State private var isTestingNote = false
     @State private var testNoteStatus: TestStatus?
+    @State private var markdownInputPath = ""
+    @State private var markdownValidationStatus: ValidationStatus?
+
+    enum ValidationStatus {
+        case success
+        case error(String)
+    }
 
     private let openRouterService = OpenRouterService()
 
@@ -48,6 +61,7 @@ struct TranscriptionSettingsView: View {
                             // Disable dependent features when transcription is disabled
                             notesEnabled = false
                         }
+                        appState.reloadServices()
                     }
 
                 if !hasElevenLabsKey {
@@ -74,8 +88,14 @@ struct TranscriptionSettingsView: View {
 
             // MARK: - Apple Notes Integration
             Section("Apple Notes Integration") {
-                Toggle("Create notes for transcribed recordings", isOn: $notesEnabled)
+                Toggle("Save transcriptions to Apple Notes", isOn: $notesEnabled)
                     .disabled(!transcriptionEnabled || !hasElevenLabsKey)
+                    .onChange(of: notesEnabled) { _, newValue in
+                        if newValue {
+                            // Disable markdown when Apple Notes is enabled
+                            markdownEnabled = false
+                        }
+                    }
 
                 if !transcriptionEnabled {
                     Text("Enable transcription above to use Apple Notes integration")
@@ -83,45 +103,114 @@ struct TranscriptionSettingsView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                TextField("Notes Folder", text: $notesFolder)
-                    .textFieldStyle(.roundedBorder)
-                    .disabled(!notesEnabled)
+                if notesEnabled {
+                    TextField("Notes Folder", text: $notesFolder)
+                        .textFieldStyle(.roundedBorder)
 
-                Picker("Link expiry", selection: $linkExpiry) {
-                    Text("1 day").tag("1d")
-                    Text("7 days").tag("7d")
-                    Text("30 days").tag("30d")
-                    Text("90 days").tag("90d")
+                    Picker("Link expiry", selection: $linkExpiry) {
+                        Text("1 day").tag("1d")
+                        Text("7 days").tag("7d")
+                        Text("30 days").tag("30d")
+                        Text("90 days").tag("90d")
+                    }
+
+                    HStack {
+                        Button("Test Note Creation") {
+                            testNoteCreation()
+                        }
+                        .disabled(isTestingNote)
+
+                        if isTestingNote {
+                            ProgressView()
+                                .scaleEffect(0.7)
+                        }
+                    }
+
+                    if let status = testNoteStatus {
+                        switch status {
+                        case .success:
+                            Label("Test note created! Check your Notes app.", systemImage: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                                .font(.caption)
+                        case .error(let message):
+                            Label(message, systemImage: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.red)
+                                .font(.caption)
+                        }
+                    }
                 }
-                .disabled(!notesEnabled)
 
-                Text("Takes your uploaded recordings, uses ElevenLabs to transcribe them, and saves the transcriptions as Apple Notes")
+                Text("Creates notes in the Apple Notes app with transcription and audio links")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
 
-                HStack {
-                    Button("Test Note Creation") {
-                        testNoteCreation()
+            // MARK: - Local Markdown Notes
+            Section("Local Markdown Notes") {
+                Toggle("Save transcriptions as markdown files", isOn: $markdownEnabled)
+                    .disabled(!transcriptionEnabled || !hasElevenLabsKey)
+                    .onChange(of: markdownEnabled) { _, newValue in
+                        if newValue {
+                            // Disable Apple Notes when markdown is enabled
+                            notesEnabled = false
+                        }
                     }
-                    .disabled(!notesEnabled || isTestingNote)
 
-                    if isTestingNote {
-                        ProgressView()
-                            .scaleEffect(0.7)
+                if markdownEnabled {
+                    HStack {
+                        TextField("e.g. ~/Downloads/TP7-Notes", text: $markdownInputPath)
+                            .textFieldStyle(.roundedBorder)
+                            .onAppear {
+                                if !markdownFolderPath.isEmpty {
+                                    markdownInputPath = markdownFolderPath
+                                }
+                            }
+
+                        Button("Validate") {
+                            validateMarkdownFolder()
+                        }
+                        .disabled(markdownInputPath.isEmpty)
+                    }
+
+                    if let status = markdownValidationStatus {
+                        switch status {
+                        case .success:
+                            Label("Folder is valid and accessible", systemImage: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                                .font(.caption)
+                        case .error(let message):
+                            Label(message, systemImage: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.red)
+                                .font(.caption)
+                        }
+                    }
+
+                    if !markdownFolderPath.isEmpty {
+                        Text("Current: \(markdownFolderPath)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                 }
 
-                if let status = testNoteStatus {
-                    switch status {
-                    case .success:
-                        Label("Test note created! Check your Notes app.", systemImage: "checkmark.circle.fill")
-                            .foregroundStyle(.green)
-                            .font(.caption)
-                    case .error(let message):
-                        Label(message, systemImage: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.red)
-                            .font(.caption)
-                    }
+                Text("Creates .md files that work with any text editor or note-taking app")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            // MARK: - Notes Status
+            Section {
+                if !notesEnabled && !markdownEnabled && transcriptionEnabled {
+                    Label("Enable Apple Notes or Markdown to save transcriptions", systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.orange)
+                        .font(.caption)
+                } else if notesEnabled {
+                    Label("Transcriptions will be saved to Apple Notes", systemImage: "note.text")
+                        .foregroundStyle(.blue)
+                        .font(.caption)
+                } else if markdownEnabled {
+                    Label("Transcriptions will be saved as markdown files", systemImage: "doc.text")
+                        .foregroundStyle(.green)
+                        .font(.caption)
                 }
             }
 
@@ -257,6 +346,39 @@ struct TranscriptionSettingsView: View {
                 }
             }
         }
+    }
+
+    private func validateMarkdownFolder() {
+        markdownValidationStatus = nil
+
+        let path = markdownInputPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        let expandedPath = NSString(string: path).expandingTildeInPath
+
+        // Check if folder exists
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: expandedPath, isDirectory: &isDirectory) else {
+            markdownValidationStatus = .error("Folder does not exist")
+            return
+        }
+
+        guard isDirectory.boolValue else {
+            markdownValidationStatus = .error("Path is not a folder")
+            return
+        }
+
+        // Try to write a test file
+        let testFile = URL(fileURLWithPath: expandedPath).appendingPathComponent(".tp7-test-\(UUID().uuidString)")
+        do {
+            try "test".write(to: testFile, atomically: true, encoding: .utf8)
+            try FileManager.default.removeItem(at: testFile)
+        } catch {
+            markdownValidationStatus = .error("Cannot write to folder")
+            return
+        }
+
+        // Success - save the path
+        markdownFolderPath = expandedPath
+        markdownValidationStatus = .success
     }
 }
 

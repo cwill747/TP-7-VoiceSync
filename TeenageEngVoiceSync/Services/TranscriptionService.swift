@@ -53,6 +53,70 @@ actor TranscriptionService {
         }
     }
 
+    /// Transcribe audio from a local file (direct upload)
+    func transcribe(fileURL: URL) async throws -> TranscriptionResult {
+        let url = baseURL.appendingPathComponent("speech-to-text")
+
+        // Read the audio file data
+        let audioData = try Data(contentsOf: fileURL)
+        let filename = fileURL.lastPathComponent
+
+        // Determine MIME type based on extension
+        let mimeType: String
+        switch fileURL.pathExtension.lowercased() {
+        case "wav": mimeType = "audio/wav"
+        case "mp3": mimeType = "audio/mpeg"
+        case "m4a": mimeType = "audio/mp4"
+        case "ogg": mimeType = "audio/ogg"
+        case "flac": mimeType = "audio/flac"
+        default: mimeType = "audio/wav"
+        }
+
+        // Create multipart form data
+        let boundary = UUID().uuidString
+        var body = Data()
+
+        // Add model_id field
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"model_id\"\r\n\r\n".data(using: .utf8)!)
+        body.append("\(modelID)\r\n".data(using: .utf8)!)
+
+        // Add audio file (field name must be "file" per ElevenLabs API)
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"file\"; filename=\"\(filename)\"\r\n".data(using: .utf8)!)
+        body.append("Content-Type: \(mimeType)\r\n\r\n".data(using: .utf8)!)
+        body.append(audioData)
+        body.append("\r\n".data(using: .utf8)!)
+
+        // Close boundary
+        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+
+        // Create request
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue(apiKey, forHTTPHeaderField: "xi-api-key")
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        request.httpBody = body
+
+        // Execute request
+        let (data, response) = try await session.data(for: request)
+
+        // Check response
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw TranscriptionError.invalidResponse
+        }
+
+        guard httpResponse.statusCode == 200 else {
+            let errorMessage = String(data: data, encoding: .utf8) ?? "Unknown error"
+            throw TranscriptionError.apiError(statusCode: httpResponse.statusCode, message: errorMessage)
+        }
+
+        // Parse response
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return try decoder.decode(TranscriptionResult.self, from: data)
+    }
+
     /// Transcribe audio from a cloud storage URL (e.g., S3 presigned URL)
     func transcribe(cloudStorageURL: String) async throws -> TranscriptionResult {
         let url = baseURL.appendingPathComponent("speech-to-text")
