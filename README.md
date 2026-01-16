@@ -1,26 +1,12 @@
 # TP-7 VoiceSync
 
-A macOS menu bar app that automatically syncs, transcribes, and organizes your Teenage Engineering TP-7 voice recordings. Supports **fully local transcription** via [WhisperKit](https://github.com/argmaxinc/WhisperKit) — no cloud API required.
+A macOS menu bar app that automatically syncs, transcribes, and organizes your Teenage Engineering TP-7 voice recordings. Supports **fully local transcription** via [WhisperKit](https://github.com/argmaxinc/WhisperKit).
 
 | Main Interface | Menu Bar Popover | Apple Notes Integration |
 | :-----------------------------------------------------------: | :-------------------------------------: | :-------------------------------------: |
 | ![Main Interface](Images/Recordings.png) | ![Menu Bar Popover](Images/MenuBar.png) | ![Apple Notes](Images/AppleNote.png) |
 | _Recordings are automatically transcribed_ | _Menu Bar Popover_ | _Transcriptions synced to Apple Notes_ |
 
-## Table of Contents
-
-- [Features](#features)
-- [WhisperKit Integration](#whisperkit-integration)
-- [Why I Built This](#why-i-built-this)
-- [About the TP-7 and FieldKit](#about-the-tp-7-and-fieldkit)
-- [Requirements](#requirements)
-- [Installation](#installation)
-- [Setup Guide](#setup-guide)
-- [Permissions & Privacy](#permissions--privacy)
-- [Usage](#usage)
-- [Troubleshooting](#troubleshooting)
-- [Contributing](#contributing)
-- [License](#license)
 
 ## Features
 
@@ -33,6 +19,9 @@ A macOS menu bar app that automatically syncs, transcribes, and organizes your T
 - **Apple Notes Integration** — Creates notes with transcriptions, metadata, and playable audio links
 - **Menu Bar Interface** — Quick access to recent recordings and sync status
 - **Soft Delete** — Prevents re-syncing of recordings you've deleted
+
+> [!CAUTION]
+> This app is 1000% vibe-coded using Claude Code while I was waiting for builds to pass on another project. It is definitely not reviewed seriously for security concerns or major bugs that could crash your computer. Install with caution.
 
 ## WhisperKit Integration
 
@@ -47,17 +36,6 @@ TP-7 VoiceSync includes [WhisperKit](https://github.com/argmaxinc/WhisperKit) by
 
 The model is downloaded once and cached locally. Future transcriptions use the cached model with no network required.
 
-### Available Models
-
-| Model | Size | Speed | Quality | Best For |
-|-------|------|-------|---------|----------|
-| Tiny | 75 MB | Fastest | Basic | Quick tests, low-end hardware |
-| Base | 150 MB | Fast | Good | Everyday use, good balance |
-| Small | 500 MB | Medium | Better | Higher accuracy needs |
-| Medium | 1.5 GB | Slow | Great | When quality matters more than speed |
-| Distil Large v3 | 1.5 GB | Fast | Excellent | Best speed/quality ratio |
-| Large v3 | 3 GB | Slow | Best | Maximum accuracy |
-
 ### Automatic Model Download
 
 When you select WhisperKit and click "Download Model" in the Setup Wizard or Settings, the app:
@@ -68,13 +46,6 @@ When you select WhisperKit and click "Download Model" in the Setup Wizard or Set
 4. Marks the model as ready once complete
 
 If you switch models later, you can download the new model the same way. Each model is cached independently.
-
-### Why WhisperKit?
-
-- **Privacy** — Your audio never leaves your Mac
-- **No API costs** — Transcribe unlimited recordings for free
-- **Offline capable** — Works without internet after model download
-- **Apple Silicon optimized** — Runs efficiently on M1/M2/M3 Macs via CoreML
 
 ### Future: Local LLM for Titles & Summaries
 
@@ -98,9 +69,6 @@ I love taking memos with this thing, but I didn't know what to do with these rec
 After futzing around for a few days, I decided to make a little macOS app that allowed me to plug it in and automatically download the voice memos. 15 hours later, I ended up with a macOS app that transcribes the audio recordings and sends them to your Notes app.
 
 If you have a [TP-7](https://teenage.engineering/products/tp-7) and use it to record memos, then I encourage you to download and take a look.
-
-> [!CAUTION]
-> This app is 1000% vibe-coded using Claude Code while I was waiting for builds to pass. It is definitely not reviewed seriously for security concerns or major bugs that could crash your computer. Install with caution.
 
 ## About the TP-7 and FieldKit
 
