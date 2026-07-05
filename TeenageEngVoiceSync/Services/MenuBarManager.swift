@@ -10,6 +10,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
     weak var appState: AppState?
     var modelContext: ModelContext?
     var openMainWindow: (() -> Void)?
+    var openSettings: (() -> Void)?
 
     func initializeMenuBar() {
         guard statusItem == nil else { return }
@@ -92,7 +93,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
 
     @objc private func openPrefs() {
         NSApp.activate(ignoringOtherApps: true)
-        NSApp.sendAction(Selector(("openSettings:")), to: nil, from: nil)
+        openSettings?()
     }
 
     // MARK: - Private

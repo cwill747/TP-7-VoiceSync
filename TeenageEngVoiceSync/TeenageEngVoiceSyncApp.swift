@@ -19,6 +19,7 @@ struct TeenageEngVoiceSyncApp: App {
     @State private var appState = AppState()
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.openSettings) private var openSettings
 
     init() {
         do {
@@ -55,6 +56,10 @@ struct TeenageEngVoiceSyncApp: App {
                         NSApp.activate(ignoringOtherApps: true)
                         openWindow(id: "main")
                     }
+                    menuBarManager.openSettings = {
+                        NSApp.activate(ignoringOtherApps: true)
+                        openSettings()
+                    }
                     menuBarManager.initializeMenuBar()
 
                     await appState.initialize(modelContext: modelContainer.mainContext)
@@ -69,7 +74,7 @@ struct TeenageEngVoiceSyncApp: App {
             CommandGroup(replacing: .newItem) { }
         }
 
-        // Settings window — registered here so openSettings: selector works
+        // Settings window
         Settings {
             SettingsView()
                 .environment(appState)
