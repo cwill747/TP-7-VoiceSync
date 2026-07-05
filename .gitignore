@@ -17,3 +17,4 @@ xcuserdata/
 .env
 AGENTS.md
 scripts/reset-app-data.sh
+_scratch
