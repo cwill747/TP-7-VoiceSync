@@ -2,8 +2,8 @@
 >
 > This is a fork of [armynante/TP-7-VoiceSync](https://github.com/armynante/TP-7-VoiceSync).
 > It swaps transcription to **Parakeet** via [FluidAudio](https://github.com/FluidInference/FluidAudio)
-> (Apple Neural Engine) and adds a **Notion** output (a database page per recording, sorted by date).
-> See **[tasks.md](tasks.md)** for setup and remaining steps. Original README below.
+> (Apple Neural Engine), adds a **Notion** output (a database page per recording, sorted by date),
+> and talks to the TP-7 directly over MTP — no FieldKit required. Original README below.
 
 # TP-7 VoiceSync
 
@@ -17,7 +17,7 @@ A macOS menu bar app that automatically syncs, transcribes, and organizes your T
 
 ## Features
 
-- **Automatic Device Detection** — Detects when your TP-7 connects via FieldKit
+- **Automatic Device Detection** — Detects when your TP-7 connects over MTP
 - **Local Transcription via WhisperKit** — Transcribe entirely on-device with no API key or internet required (after model download)
 - **Cloud Transcription via ElevenLabs** — Alternative cloud-based transcription if you prefer
 - **Cloud Backup to S3 (Optional)** — Upload recordings to AWS S3 with SHA256 deduplication
@@ -77,7 +77,7 @@ After futzing around for a few days, I decided to make a little macOS app that a
 
 If you have a [TP-7](https://teenage.engineering/products/tp-7) and use it to record memos, then I encourage you to download and take a look.
 
-## About the TP-7 and FieldKit
+## About the TP-7
 
 ### The TP-7 Field Recorder
 
@@ -94,18 +94,9 @@ The [Teenage Engineering TP-7](https://teenage.engineering/products/tp-7) is a p
 - [TP-7 Product Page](https://teenage.engineering/products/tp-7) — Full specs and details
 - [TP-7 Guide](https://teenage.engineering/guides/tp-7) — Official user guide
 
-### FieldKit
-
-[FieldKit](https://teenage.engineering/guides/fieldkit) is a macOS application by Teenage Engineering that provides MTP (Media Transfer Protocol) support. This is required because macOS doesn't natively support MTP for file transfers.
-
-When you connect your TP-7 via USB and enable MTP mode, FieldKit mounts the device storage as an accessible folder on your Mac. This app monitors that folder for new recordings.
-
-**Get FieldKit:** [Mac App Store](https://apps.apple.com/us/app/field-kit/id1612653346)
-
 ## Requirements
 
 - **macOS 14.0 (Sonoma)** or later
-- **FieldKit** app from Mac App Store
 - **Transcription** (pick one):
   - **WhisperKit** (local, free) — download a model once, then transcribe offline
   - **ElevenLabs API key** (cloud) — pay-per-use cloud transcription
@@ -141,12 +132,11 @@ The wizard guides you through:
 
 After setup, **watching/syncing TP-7 recordings is enabled by default** (you can toggle it in **Settings > General**). If you run into weird syncing behavior right after initial setup or a permissions prompt, try **quitting the app and launching it again**.
 
-### Step 1: Install FieldKit
+### Step 1: Connect Your TP-7
 
-1. Install [FieldKit](https://apps.apple.com/us/app/field-kit/id1612653346) from the Mac App Store
-2. Connect your TP-7 via USB
-3. On the TP-7, enter MTP mode (shift + com, then T4)
-4. Verify FieldKit shows your device is connected
+1. Connect your TP-7 via USB
+2. On the TP-7, enter MTP mode (hold STOP while turning the device on)
+3. The app detects the device automatically over MTP
 
 ### Step 2: Configure Transcription
 
@@ -198,9 +188,9 @@ TP-7 VoiceSync runs locally by default, and only uses network services if you en
 
 When you first use the app, you may see the following permission prompts:
 
-### FieldKit Container Access
+### USB Device Access
 
-To watch for new recordings, the app reads the FieldKit container folder where the TP-7 MTP mount appears. macOS may prompt you to allow access to FieldKit's data.
+To watch for new recordings, the app talks to the TP-7 directly over MTP via USB. macOS may prompt you to allow access to the device.
 
 ### Keychain Storage
 
@@ -225,17 +215,11 @@ The app needs network access to upload to S3 and communicate with the ElevenLabs
 
 ## Usage
 
-1. **Connect your TP-7** via USB with FieldKit running
-2. **Turn on the connection** in the FieldKit menu bar app.
-
-| FieldKit Connection |
-| :-----------------: |
-| ![FieldKit App Connection](Images/FieldKitApp.png) |
-
-3. **New recordings automatically sync** — the app detects new WAV files and processes them (watching is enabled by default)
-4. **View recent recordings** in the menu bar popover
-5. **Access all recordings** via "Open Recordings" in the menu
-6. **Find transcriptions** in Apple Notes in your configured folder
+1. **Connect your TP-7** via USB and enter MTP mode (hold STOP while turning the device on)
+2. **New recordings automatically sync** — the app detects new WAV files and processes them (watching is enabled by default)
+3. **View recent recordings** in the menu bar popover
+4. **Access all recordings** via "Open Recordings" in the menu
+5. **Find transcriptions** in Apple Notes in your configured folder
 
 Each note includes:
 
@@ -248,8 +232,7 @@ Each note includes:
 
 ### Device Not Detected
 
-- Ensure FieldKit is running
-- Check that your TP-7 is in MTP mode (shift + com, then T4)
+- Check that your TP-7 is in MTP mode (hold STOP while turning the device on)
 - Try disconnecting and reconnecting the USB cable
 - Check **Settings > General** to ensure device watching is enabled (it's on by default)
 - If you just installed the app or just granted a permission prompt, try **quitting the app and launching it again**
