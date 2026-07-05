@@ -255,8 +255,9 @@ final class SyncService {
                     let modelID = UserDefaults.standard.string(forKey: "whisperkit.model") ?? "base"
                     transcriptionProvider = WhisperKitService(modelID: modelID)
                 case .parakeet:
-                    let modelVersion = UserDefaults.standard.string(forKey: ParakeetService.modelKey) ?? "v3"
-                    transcriptionProvider = ParakeetService(modelVersion: modelVersion)
+                    let modelVersion = UserDefaults.standard.string(forKey: ParakeetService.modelKey) ?? ParakeetModelVariant.v2.rawValue
+                    let diarizationEnabled = UserDefaults.standard.bool(forKey: ParakeetService.diarizationEnabledKey)
+                    transcriptionProvider = ParakeetService(modelVersion: modelVersion, diarizationEnabled: diarizationEnabled)
                 }
             }
         } catch {
@@ -856,7 +857,7 @@ final class SyncService {
         UserDefaults.standard.register(defaults: [
             "transcription.provider": TranscriptionProviderKind.elevenLabs.rawValue,
             "whisperkit.model": "base",
-            "parakeet.model": "v3",
+            "parakeet.model": ParakeetModelVariant.v2.rawValue,
             "notion.enabled": false,
             "s3.backupAfterTranscription": true
         ])

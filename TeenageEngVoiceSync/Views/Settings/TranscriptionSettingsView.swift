@@ -6,6 +6,8 @@
 //
 
 import SwiftUI
+import AppKit
+import UniformTypeIdentifiers
 import os
 
 struct TranscriptionSettingsView: View {
@@ -16,7 +18,8 @@ struct TranscriptionSettingsView: View {
     @AppStorage("transcription.provider") private var transcriptionProviderRaw = TranscriptionProviderKind.elevenLabs.rawValue
     @AppStorage("elevenlabs.model") private var elevenLabsModel = "scribe_v1"
     @AppStorage("whisperkit.model") private var whisperKitModel = "base"
-    @AppStorage("parakeet.model") private var parakeetModel = ParakeetModelVariant.v3.rawValue
+    @AppStorage("parakeet.model") private var parakeetModel = ParakeetModelVariant.v2.rawValue
+    @AppStorage("parakeet.diarizationEnabled") private var parakeetDiarizationEnabled = false
     @AppStorage("s3.backupAfterTranscription") private var whisperKitBackupToS3 = true
     @AppStorage("s3.enabled") private var s3Enabled = false
 
@@ -48,6 +51,15 @@ struct TranscriptionSettingsView: View {
     @State private var parakeetDownloadError: String?
     @State private var parakeetDownloadPhaseText: String?
     @State private var parakeetDownloadTask: Task<Void, Never>?
+    @State private var diarizerDownloadState: ModelDownloadState = .notDownloaded
+    @State private var diarizerDownloadProgress = 0.0
+    @State private var diarizerDownloadError: String?
+    @State private var diarizerDownloadPhaseText: String?
+    @State private var diarizerDownloadTask: Task<Void, Never>?
+    @State private var enrolledSpeakerName: String?
+    @State private var enrollmentNameInput = ""
+    @State private var isEnrolling = false
+    @State private var enrollmentError: String?
     @State private var availableLLMModels: [OpenRouterModel] = []
     @State private var isLoadingModels = false
     @State private var isTestingNote = false
@@ -276,6 +288,105 @@ struct TranscriptionSettingsView: View {
                     Text("Runs locally on the Apple Neural Engine. First transcription downloads the model if you skip this.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+
+                    Divider()
+
+                    Toggle("Speaker diarization", isOn: $parakeetDiarizationEnabled)
+                        .disabled(diarizerDownloadState == .downloading)
+                        .onChange(of: parakeetDiarizationEnabled) { _, _ in
+                            appState.reloadServices()
+                        }
+
+                    if parakeetDiarizationEnabled {
+                        HStack {
+                            Button("Download Diarization Model") {
+                                downloadDiarizerModel()
+                            }
+                            .disabled(diarizerDownloadState == .downloading)
+
+                            if diarizerDownloadState == .downloading {
+                                ProgressView(value: diarizerDownloadProgress)
+                                    .frame(width: 120)
+
+                                Button("Cancel") {
+                                    diarizerDownloadTask?.cancel()
+                                }
+                                .buttonStyle(.borderless)
+                            }
+                        }
+
+                        if let errorMessage = diarizerDownloadError {
+                            Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.red)
+                                .font(.caption)
+                        } else {
+                            switch diarizerDownloadState {
+                            case .notDownloaded:
+                                Label("Diarization model not downloaded yet", systemImage: "icloud.and.arrow.down")
+                                    .foregroundStyle(.secondary)
+                                    .font(.caption)
+                            case .downloading:
+                                Label(diarizerDownloadPhaseText ?? "Downloading model...", systemImage: "arrow.down.circle")
+                                    .foregroundStyle(.secondary)
+                                    .font(.caption)
+                            case .ready:
+                                Label("Diarization model downloaded", systemImage: "checkmark.circle.fill")
+                                    .foregroundStyle(.green)
+                                    .font(.caption)
+                            }
+                        }
+
+                        Text("Labels each paragraph \"Speaker 1\", \"Speaker 2\", etc. based on who's talking. Adds a one-time model download and extra processing time per recording.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        Divider()
+
+                        if let enrolledSpeakerName {
+                            Label("Your voice is enrolled as \"\(enrolledSpeakerName)\"", systemImage: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                                .font(.caption)
+
+                            Button("Remove") {
+                                ParakeetService.clearEnrolledSpeaker()
+                                self.enrolledSpeakerName = nil
+                                enrollmentNameInput = ""
+                            }
+                            .buttonStyle(.borderless)
+                        } else {
+                            TextField("Your name (e.g. Cameron)", text: $enrollmentNameInput)
+                                .textFieldStyle(.roundedBorder)
+                                .disabled(isEnrolling)
+
+                            HStack {
+                                Button("Choose Sample Recording…") {
+                                    enrollFromSampleRecording()
+                                }
+                                .disabled(isEnrolling || enrollmentNameInput.trimmingCharacters(in: .whitespaces).isEmpty || diarizerDownloadState != .ready)
+
+                                if isEnrolling {
+                                    ProgressView()
+                                        .scaleEffect(0.7)
+                                }
+                            }
+
+                            if diarizerDownloadState != .ready {
+                                Text("Download the diarization model above first.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+
+                            if let enrollmentError {
+                                Label(enrollmentError, systemImage: "exclamationmark.triangle.fill")
+                                    .foregroundStyle(.red)
+                                    .font(.caption)
+                            }
+
+                            Text("Pick a recording where you're the only speaker (a solo voice memo works well). Your voice will be labeled by name instead of \"Speaker N\" from then on.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                 }
             }
 
@@ -550,6 +661,7 @@ struct TranscriptionSettingsView: View {
             await loadNotionSettings()
             refreshWhisperKitStatus()
             refreshParakeetStatus()
+            refreshDiarizerStatus()
             if hasOpenRouterKey {
                 await loadModels()
             }
@@ -599,7 +711,7 @@ struct TranscriptionSettingsView: View {
 
     private func refreshParakeetStatus() {
         parakeetDownloadError = nil
-        let variant = ParakeetModelVariant(rawValue: parakeetModel) ?? .v3
+        let variant = ParakeetModelVariant(rawValue: parakeetModel) ?? .v2
         parakeetDownloadState = ParakeetService.cachedModelExists(for: variant) ? .ready : .notDownloaded
     }
 
@@ -609,7 +721,7 @@ struct TranscriptionSettingsView: View {
         parakeetDownloadPhaseText = "Listing files…"
         parakeetDownloadState = .downloading
 
-        let variant = ParakeetModelVariant(rawValue: parakeetModel) ?? .v3
+        let variant = ParakeetModelVariant(rawValue: parakeetModel) ?? .v2
         parakeetDownloadTask = Task {
             do {
                 try await ParakeetService.downloadModel(variant: variant) { status in
@@ -647,6 +759,85 @@ struct TranscriptionSettingsView: View {
 
     private func cancelParakeetDownload() {
         parakeetDownloadTask?.cancel()
+    }
+
+    private func refreshDiarizerStatus() {
+        diarizerDownloadError = nil
+        diarizerDownloadState = ParakeetService.diarizerModelExists() ? .ready : .notDownloaded
+        enrolledSpeakerName = ParakeetService.EnrolledSpeakerProfile.loadStored()?.name
+    }
+
+    private func enrollFromSampleRecording() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Enroll"
+        panel.allowedContentTypes = [.audio]
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        let name = enrollmentNameInput.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty else { return }
+
+        enrollmentError = nil
+        isEnrolling = true
+
+        Task {
+            do {
+                try await ParakeetService.enrollSpeaker(from: url.path, name: name)
+                await MainActor.run {
+                    enrolledSpeakerName = name
+                    isEnrolling = false
+                }
+            } catch {
+                await MainActor.run {
+                    enrollmentError = error.localizedDescription
+                    isEnrolling = false
+                }
+            }
+        }
+    }
+
+    private func downloadDiarizerModel() {
+        diarizerDownloadError = nil
+        diarizerDownloadProgress = 0
+        diarizerDownloadPhaseText = "Listing files…"
+        diarizerDownloadState = .downloading
+
+        diarizerDownloadTask = Task {
+            do {
+                try await ParakeetService.downloadDiarizerModel { status in
+                    Task { @MainActor in
+                        diarizerDownloadProgress = status.fractionCompleted
+                        diarizerDownloadPhaseText = status.phaseDescription
+                    }
+                }
+                await MainActor.run {
+                    diarizerDownloadState = .ready
+                    diarizerDownloadPhaseText = nil
+                    appState.reloadServices()
+                }
+            } catch is CancellationError {
+                await MainActor.run {
+                    diarizerDownloadState = .notDownloaded
+                    diarizerDownloadPhaseText = nil
+                }
+            } catch {
+                if (error as? URLError)?.code == .cancelled {
+                    await MainActor.run {
+                        diarizerDownloadState = .notDownloaded
+                        diarizerDownloadPhaseText = nil
+                    }
+                    return
+                }
+                await MainActor.run {
+                    diarizerDownloadState = .notDownloaded
+                    diarizerDownloadError = error.localizedDescription
+                    diarizerDownloadPhaseText = nil
+                }
+            }
+        }
     }
 
     private func downloadWhisperKitModel() {

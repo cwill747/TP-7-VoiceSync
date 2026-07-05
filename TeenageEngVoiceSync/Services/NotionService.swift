@@ -326,8 +326,13 @@ actor NotionService {
 
     /// Splits arbitrary-length text into paragraph blocks under Notion's
     /// 2000-char-per-rich-text limit (uses 1900 for safety).
+    ///
+    /// Splits on blank lines first (e.g. the "Speaker N: ..." turns a diarized
+    /// transcript produces) so a turn only gets hard-split by character count
+    /// if it individually exceeds the limit, instead of fusing two speakers'
+    /// text together mid-block.
     private func paragraphBlocks(_ text: String) -> [[String: Any]] {
-        let chunks = text.chunked(into: 1900)
+        let chunks = text.components(separatedBy: "\n\n").flatMap { $0.chunked(into: 1900) }
         return chunks.map { chunk in
             [
                 "object": "block",
