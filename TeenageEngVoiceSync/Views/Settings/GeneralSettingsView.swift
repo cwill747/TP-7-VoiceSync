@@ -5,6 +5,7 @@
 //  General app settings.
 //
 
+import AppKit
 import SwiftUI
 import os
 import ServiceManagement
@@ -13,6 +14,7 @@ struct GeneralSettingsView: View {
     @Environment(AppState.self) private var appState
     @Environment(\.openWindow) private var openWindow
     @AppStorage("launchAtLogin") private var launchAtLogin = false
+    @AppStorage("app.showInDock") private var showInDock = true
     @AppStorage("notify.onConnect") private var notifyOnConnect = true
     @AppStorage("notify.onSync") private var notifyOnSync = true
     @AppStorage("daemon.debounceMs") private var debounceMs = 2000
@@ -24,6 +26,10 @@ struct GeneralSettingsView: View {
                 Toggle("Launch at login", isOn: $launchAtLogin)
                     .onChange(of: launchAtLogin) { _, newValue in
                         updateLoginItem(enabled: newValue)
+                    }
+                Toggle("Show icon in Dock", isOn: $showInDock)
+                    .onChange(of: showInDock) { _, _ in
+                        (NSApp.delegate as? AppDelegate)?.applyDockVisibilityPolicy()
                     }
             }
 

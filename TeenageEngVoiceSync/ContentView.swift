@@ -2,58 +2,56 @@
 //  ContentView.swift
 //  TeenageEngVoiceSync
 //
-//  Main recordings window content.
+//  Main recordings window — outer section shell.
 //
 
 import SwiftUI
 import SwiftData
 
-struct ContentView: View {
-    @Environment(AppState.self) private var appState
-    @Environment(\.modelContext) private var modelContext
+enum SidebarItem: String, CaseIterable, Identifiable {
+    case recordings
+    case people
 
-    @Query(filter: #Predicate<Recording> { $0.deletedAt == nil },
-           sort: \Recording.recordedAt, order: .reverse)
-    private var recordings: [Recording]
+    var id: String { rawValue }
 
-    @State private var selectedRecording: Recording?
-    @State private var searchText = ""
-
-    var body: some View {
-        NavigationSplitView {
-            // Sidebar - recordings list
-            RecordingsListView(
-                recordings: filteredRecordings,
-                selectedRecording: $selectedRecording
-            )
-            .navigationSplitViewColumnWidth(min: 250, ideal: 300, max: 400)
-        } detail: {
-            // Detail panel
-            if let recording = selectedRecording {
-                RecordingDetailView(recording: recording, selectedRecording: $selectedRecording)
-            } else {
-                ContentUnavailableView(
-                    "Select a Recording",
-                    systemImage: "waveform",
-                    description: Text("Choose a recording from the list to view its details.")
-                )
-            }
-        }
-        .searchable(text: $searchText, prompt: "Search recordings")
-        .toolbar {
-            ToolbarItem(placement: .status) {
-                StatusToolbarItem(appState: appState)
-            }
+    var label: String {
+        switch self {
+        case .recordings: return "Recordings"
+        case .people: return "People"
         }
     }
 
-    private var filteredRecordings: [Recording] {
-        if searchText.isEmpty {
-            return recordings
+    var systemImage: String {
+        switch self {
+        case .recordings: return "waveform"
+        case .people: return "person.2"
         }
-        return recordings.filter { recording in
-            recording.filename.localizedCaseInsensitiveContains(searchText) ||
-            (recording.transcriptionText?.localizedCaseInsensitiveContains(searchText) ?? false)
+    }
+}
+
+struct ContentView: View {
+    @State private var selectedSection: SidebarItem = .recordings
+
+    var body: some View {
+        NavigationSplitView {
+            List(SidebarItem.allCases, selection: $selectedSection) { item in
+                Label(item.label, systemImage: item.systemImage)
+                    .tag(item)
+            }
+            .listStyle(.sidebar)
+            .navigationSplitViewColumnWidth(min: 150, ideal: 170, max: 200)
+            .navigationTitle("TP-7 VoiceSync")
+        } detail: {
+            switch selectedSection {
+            case .recordings:
+                RecordingsScreen()
+            case .people:
+                ContentUnavailableView(
+                    "People",
+                    systemImage: "person.2",
+                    description: Text("Speaker management is coming in a future update.")
+                )
+            }
         }
     }
 }
