@@ -313,7 +313,6 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = TeenageEngVoiceSync/TeenageEngVoiceSync.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
-				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
@@ -340,7 +339,7 @@
 					"$(PROJECT_DIR)/Vendor/TP7MTP",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = mscontrol.ai.TeenageEngVoiceSync;
+				PRODUCT_BUNDLE_IDENTIFIER = us.cwill.TeenageEngVoiceSync;
 				PRODUCT_NAME = "TP-7 VoiceSync";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				REGISTER_APP_GROUPS = YES;
@@ -361,7 +360,6 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = TeenageEngVoiceSync/TeenageEngVoiceSync.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
-				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
@@ -388,7 +386,7 @@
 					"$(PROJECT_DIR)/Vendor/TP7MTP",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = mscontrol.ai.TeenageEngVoiceSync;
+				PRODUCT_BUNDLE_IDENTIFIER = us.cwill.TeenageEngVoiceSync;
 				PRODUCT_NAME = "TP-7 VoiceSync";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				REGISTER_APP_GROUPS = YES;

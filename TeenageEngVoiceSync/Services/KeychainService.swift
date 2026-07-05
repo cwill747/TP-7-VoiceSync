@@ -40,63 +40,41 @@ actor KeychainService {
         }
     }
 
+    private static let service = "TeenageEngVoiceSync"
+    private static let account = "credentials"
+
     private init() {}
 
     func save(_ value: String, for key: Key) throws {
-        guard let data = value.data(using: .utf8) else {
-            AppLogger.keychain.error("Save failed: encoding error for key \(key.rawValue, privacy: .public)")
-            throw KeychainError.encodingFailed
-        }
-
-        // Query for existing item
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrAccount as String: key.rawValue,
-            kSecAttrService as String: "TeenageEngVoiceSync"
-        ]
-
-        // Attributes to update/add
-        let attributes: [String: Any] = [
-            kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlocked
-        ]
-
-        // Try to update existing item first
-        let updateStatus = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
-        AppLogger.keychain.debug("Update for \(key.rawValue, privacy: .public): status \(updateStatus, privacy: .public)")
-
-        if updateStatus == errSecSuccess {
-            AppLogger.keychain.info("Updated key \(key.rawValue, privacy: .public)")
-            return
-        }
-
-        if updateStatus == errSecItemNotFound {
-            // Item doesn't exist, add it
-            var addQuery = query
-            addQuery[kSecValueData as String] = data
-            addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlocked
-
-            let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
-            AppLogger.keychain.debug("Add for \(key.rawValue, privacy: .public): status \(addStatus, privacy: .public)")
-
-            guard addStatus == errSecSuccess else {
-                throw KeychainError.saveFailed(addStatus)
-            }
-            AppLogger.keychain.info("Added key \(key.rawValue, privacy: .public)")
-            return
-        }
-
-        // Update failed for another reason
-        throw KeychainError.saveFailed(updateStatus)
+        var blob = try readBlob()
+        blob[key.rawValue] = value
+        try writeBlob(blob)
+        AppLogger.keychain.info("Saved key \(key.rawValue, privacy: .public)")
     }
 
     func retrieve(for key: Key) throws -> String? {
-        AppLogger.keychain.debug("Retrieving key \(key.rawValue, privacy: .public)...")
+        let blob = try readBlob()
+        return blob[key.rawValue]
+    }
 
+    func delete(for key: Key) throws {
+        var blob = try readBlob()
+        blob.removeValue(forKey: key.rawValue)
+        try writeBlob(blob)
+    }
+
+    func hasValue(for key: Key) throws -> Bool {
+        guard let value = try retrieve(for: key) else { return false }
+        return !value.isEmpty
+    }
+
+    // MARK: - Private
+
+    private func readBlob() throws -> [String: String] {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrAccount as String: key.rawValue,
-            kSecAttrService as String: "TeenageEngVoiceSync",
+            kSecAttrService as String: Self.service,
+            kSecAttrAccount as String: Self.account,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
@@ -104,44 +82,57 @@ actor KeychainService {
         var result: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
 
-        AppLogger.keychain.debug("Retrieve for \(key.rawValue, privacy: .public): status \(status, privacy: .public)")
-
         if status == errSecItemNotFound {
-            AppLogger.keychain.debug("No value found for \(key.rawValue, privacy: .public)")
-            return nil
+            return [:]
         }
 
         guard status == errSecSuccess else {
-            AppLogger.keychain.error("Retrieve failed for \(key.rawValue, privacy: .public): status \(status, privacy: .public)")
+            AppLogger.keychain.error("Blob read failed: \(status, privacy: .public)")
             throw KeychainError.retrieveFailed(status)
         }
 
         guard let data = result as? Data,
-              let value = String(data: data, encoding: .utf8) else {
-            AppLogger.keychain.error("Could not decode data for \(key.rawValue, privacy: .public)")
-            return nil
+              let blob = try? JSONDecoder().decode([String: String].self, from: data) else {
+            AppLogger.keychain.error("Blob decode failed")
+            return [:]
         }
 
-        AppLogger.keychain.info("Retrieved key \(key.rawValue, privacy: .public)")
-        return value
+        return blob
     }
 
-    func delete(for key: Key) throws {
+    private func writeBlob(_ blob: [String: String]) throws {
+        guard let data = try? JSONEncoder().encode(blob) else {
+            throw KeychainError.encodingFailed
+        }
+
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrAccount as String: key.rawValue,
-            kSecAttrService as String: "TeenageEngVoiceSync"
+            kSecAttrService as String: Self.service,
+            kSecAttrAccount as String: Self.account
         ]
 
-        let status = SecItemDelete(query as CFDictionary)
+        let attributes: [String: Any] = [
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlocked
+        ]
 
-        guard status == errSecSuccess || status == errSecItemNotFound else {
-            throw KeychainError.deleteFailed(status)
+        let updateStatus = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+
+        if updateStatus == errSecSuccess {
+            return
         }
-    }
 
-    func hasValue(for key: Key) throws -> Bool {
-        let value = try retrieve(for: key)
-        return value != nil && !value!.isEmpty
+        if updateStatus == errSecItemNotFound {
+            var addQuery = query
+            addQuery[kSecValueData as String] = data
+            addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlocked
+            let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
+            guard addStatus == errSecSuccess else {
+                throw KeychainError.saveFailed(addStatus)
+            }
+            return
+        }
+
+        throw KeychainError.saveFailed(updateStatus)
     }
 }
