@@ -40,7 +40,45 @@ actor KeychainService {
         }
     }
 
+    private var didMigrate = false
+
     private init() {}
+
+    // Migrate from the single-JSON-blob keychain item used in an earlier build.
+    private func migrateFromBlobIfNeeded() {
+        guard !didMigrate else { return }
+        didMigrate = true
+
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: "TeenageEngVoiceSync",
+            kSecAttrAccount as String: "credentials",
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        guard status == errSecSuccess,
+              let data = result as? Data,
+              let blob = try? JSONDecoder().decode([String: String].self, from: data) else {
+            return
+        }
+
+        for key in Key.allCases {
+            if let value = blob[key.rawValue] {
+                try? save(value, for: key)
+            }
+        }
+
+        let deleteQuery: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: "TeenageEngVoiceSync",
+            kSecAttrAccount as String: "credentials"
+        ]
+        SecItemDelete(deleteQuery as CFDictionary)
+        AppLogger.keychain.info("Migrated credentials from JSON blob to per-key storage")
+    }
 
     func save(_ value: String, for key: Key) throws {
         guard let data = value.data(using: .utf8) else {
@@ -83,6 +121,8 @@ actor KeychainService {
     }
 
     func retrieve(for key: Key) throws -> String? {
+        migrateFromBlobIfNeeded()
+
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrAccount as String: key.rawValue,
