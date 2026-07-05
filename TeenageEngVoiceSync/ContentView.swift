@@ -36,8 +36,11 @@ struct ContentView: View {
            sort: \Recording.recordedAt, order: .reverse)
     private var recordings: [Recording]
 
+    @Query(sort: \Person.createdAt) private var persons: [Person]
+
     @State private var selectedSection: SidebarItem = .recordings
     @State private var selectedRecording: Recording?
+    @State private var selectedPerson: Person?
     @State private var searchText = ""
 
     var body: some View {
@@ -58,14 +61,7 @@ struct ContentView: View {
                 )
                 .navigationSplitViewColumnWidth(min: 250, ideal: 300, max: 400)
             case .people:
-                List { }
-                    .overlay {
-                        ContentUnavailableView(
-                            "No People Yet",
-                            systemImage: "person.2",
-                            description: Text("Speaker management is coming in a future update.")
-                        )
-                    }
+                PeopleScreen(selectedPerson: $selectedPerson)
             }
         } detail: {
             switch selectedSection {
@@ -80,11 +76,15 @@ struct ContentView: View {
                     )
                 }
             case .people:
-                ContentUnavailableView(
-                    "Coming Soon",
-                    systemImage: "person.2",
-                    description: Text("Speaker management is coming in a future update.")
-                )
+                if let person = selectedPerson {
+                    PersonDetailView(person: person)
+                } else {
+                    ContentUnavailableView(
+                        "Select a Person",
+                        systemImage: "person",
+                        description: Text("Choose a person to manage their voice samples.")
+                    )
+                }
             }
         }
         .searchable(text: $searchText, prompt: "Search recordings")
@@ -92,6 +92,11 @@ struct ContentView: View {
             ToolbarItem(placement: .status) {
                 StatusToolbarItem(appState: appState)
             }
+        }
+        .onChange(of: selectedSection) { _, _ in
+            // Reset detail selections when switching sections
+            selectedRecording = nil
+            selectedPerson = nil
         }
     }
 
@@ -129,5 +134,5 @@ struct StatusToolbarItem: View {
 #Preview {
     ContentView()
         .environment(AppState())
-        .modelContainer(for: [Recording.self, Device.self], inMemory: true)
+        .modelContainer(for: [Recording.self, Device.self, Person.self, VoiceSample.self], inMemory: true)
 }

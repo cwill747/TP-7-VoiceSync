@@ -56,10 +56,6 @@ struct TranscriptionSettingsView: View {
     @State private var diarizerDownloadError: String?
     @State private var diarizerDownloadPhaseText: String?
     @State private var diarizerDownloadTask: Task<Void, Never>?
-    @State private var enrolledSpeakerName: String?
-    @State private var enrollmentNameInput = ""
-    @State private var isEnrolling = false
-    @State private var enrollmentError: String?
     @State private var availableLLMModels: [OpenRouterModel] = []
     @State private var isLoadingModels = false
     @State private var isTestingNote = false
@@ -342,50 +338,9 @@ struct TranscriptionSettingsView: View {
 
                         Divider()
 
-                        if let enrolledSpeakerName {
-                            Label("Your voice is enrolled as \"\(enrolledSpeakerName)\"", systemImage: "checkmark.circle.fill")
-                                .foregroundStyle(.green)
-                                .font(.caption)
-
-                            Button("Remove") {
-                                ParakeetService.clearEnrolledSpeaker()
-                                self.enrolledSpeakerName = nil
-                                enrollmentNameInput = ""
-                            }
-                            .buttonStyle(.borderless)
-                        } else {
-                            TextField("Your name (e.g. Cameron)", text: $enrollmentNameInput)
-                                .textFieldStyle(.roundedBorder)
-                                .disabled(isEnrolling)
-
-                            HStack {
-                                Button("Choose Sample Recording…") {
-                                    enrollFromSampleRecording()
-                                }
-                                .disabled(isEnrolling || enrollmentNameInput.trimmingCharacters(in: .whitespaces).isEmpty || diarizerDownloadState != .ready)
-
-                                if isEnrolling {
-                                    ProgressView()
-                                        .scaleEffect(0.7)
-                                }
-                            }
-
-                            if diarizerDownloadState != .ready {
-                                Text("Download the diarization model above first.")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-
-                            if let enrollmentError {
-                                Label(enrollmentError, systemImage: "exclamationmark.triangle.fill")
-                                    .foregroundStyle(.red)
-                                    .font(.caption)
-                            }
-
-                            Text("Pick a recording where you're the only speaker (a solo voice memo works well). Your voice will be labeled by name instead of \"Speaker N\" from then on.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
+                        Label("Manage who's speaking in the People section of the main window.", systemImage: "person.2")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                 }
             }
@@ -764,39 +719,6 @@ struct TranscriptionSettingsView: View {
     private func refreshDiarizerStatus() {
         diarizerDownloadError = nil
         diarizerDownloadState = ParakeetService.diarizerModelExists() ? .ready : .notDownloaded
-        enrolledSpeakerName = ParakeetService.EnrolledSpeakerProfile.loadStored()?.name
-    }
-
-    private func enrollFromSampleRecording() {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = false
-        panel.allowsMultipleSelection = false
-        panel.prompt = "Enroll"
-        panel.allowedContentTypes = [.audio]
-
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-
-        let name = enrollmentNameInput.trimmingCharacters(in: .whitespaces)
-        guard !name.isEmpty else { return }
-
-        enrollmentError = nil
-        isEnrolling = true
-
-        Task {
-            do {
-                try await ParakeetService.enrollSpeaker(from: url.path, name: name)
-                await MainActor.run {
-                    enrolledSpeakerName = name
-                    isEnrolling = false
-                }
-            } catch {
-                await MainActor.run {
-                    enrollmentError = error.localizedDescription
-                    isEnrolling = false
-                }
-            }
-        }
     }
 
     private func downloadDiarizerModel() {

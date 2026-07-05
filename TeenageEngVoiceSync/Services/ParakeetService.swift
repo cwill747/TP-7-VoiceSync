@@ -40,6 +40,13 @@ enum ParakeetModelVariant: String, CaseIterable, Identifiable {
     }
 }
 
+/// A known speaker's profile, extracted from a `Person` model before crossing actor boundaries.
+struct KnownPersonProfile: Sendable {
+    let personId: String
+    let name: String
+    let embedding: [Float]
+}
+
 actor ParakeetService: TranscriptionProvider {
     static let providerName = "Parakeet"
 
@@ -59,19 +66,12 @@ actor ParakeetService: TranscriptionProvider {
 
     static let diarizationEnabledKey = "parakeet.diarizationEnabled"
 
-    /// Fixed speaker-database ID used for the user's own enrolled voice, so
-    /// `formatDiarizedTranscript` can recognize it and label it by name
-    /// instead of "Speaker N".
-    private static let enrolledSpeakerId = "enrolled_user"
-
-    /// The user's own voice profile, enrolled from a sample recording so
-    /// diarization can label their segments by name. Persisted as JSON
-    /// (a 256-float embedding, ~1KB) alongside the other Parakeet settings.
+    /// Legacy single-profile storage, kept for one-time migration to the SwiftData Person model.
     struct EnrolledSpeakerProfile: Codable {
         var name: String
         var embedding: [Float]
 
-        private static let storageKey = "parakeet.enrolledSpeaker"
+        static let storageKey = "parakeet.enrolledSpeaker"
 
         static func loadStored() -> EnrolledSpeakerProfile? {
             guard let data = UserDefaults.standard.data(forKey: storageKey),
@@ -91,13 +91,9 @@ actor ParakeetService: TranscriptionProvider {
         }
     }
 
-    /// Enrolls the user's voice from a sample recording so future diarization
-    /// runs label their segments as `name` instead of "Speaker N".
-    ///
-    /// `localPath` should ideally be a recording where the user is the only
-    /// speaker — this extracts a single embedding assuming the whole clip is
-    /// one voice, matching FluidAudio's documented enrollment workflow.
-    static func enrollSpeaker(from localPath: String, name: String) async throws {
+    /// Extracts a speaker embedding from a local audio file without full diarization.
+    /// Used both for initial enrollment and for the People screen's "Add sample" flow.
+    static func extractEmbedding(from localPath: String) async throws -> [Float] {
         let url = URL(fileURLWithPath: localPath)
         let samples = try AudioConverter().resampleAudioFile(url)
 
@@ -105,7 +101,12 @@ actor ParakeetService: TranscriptionProvider {
         let diarizer = DiarizerManager(config: .default)
         diarizer.initialize(models: models)
 
-        let embedding = try diarizer.extractSpeakerEmbedding(from: samples)
+        return try diarizer.extractSpeakerEmbedding(from: samples)
+    }
+
+    // Retained for legacy single-profile enrollment via Settings (redirects to People flow now).
+    static func enrollSpeaker(from localPath: String, name: String) async throws {
+        let embedding = try await extractEmbedding(from: localPath)
         EnrolledSpeakerProfile(name: name, embedding: embedding).store()
     }
 
@@ -117,10 +118,24 @@ actor ParakeetService: TranscriptionProvider {
     private let diarizationEnabled: Bool
     private var manager: AsrManager?
     private var diarizer: DiarizerManager?
+    /// Populated by SyncService before transcription runs.
+    private var knownPersonProfiles: [KnownPersonProfile] = []
 
-    init(modelVersion: String = ParakeetModelVariant.v2.rawValue, diarizationEnabled: Bool = false) {
+    init(
+        modelVersion: String = ParakeetModelVariant.v2.rawValue,
+        diarizationEnabled: Bool = false,
+        knownPersonProfiles: [KnownPersonProfile] = []
+    ) {
         self.variant = ParakeetModelVariant(rawValue: modelVersion) ?? .v2
         self.diarizationEnabled = diarizationEnabled
+        self.knownPersonProfiles = knownPersonProfiles
+    }
+
+    /// Update the known speaker roster. Resets the cached diarizer so the next
+    /// transcription picks up the new profiles.
+    func updateKnownSpeakers(_ profiles: [KnownPersonProfile]) {
+        knownPersonProfiles = profiles
+        diarizer = nil  // force re-init with the new roster
     }
 
     /// Whether the CoreML models for this variant are already cached on disk.
@@ -152,8 +167,6 @@ actor ParakeetService: TranscriptionProvider {
     }
 
     /// Maps a FluidAudio download phase to the label shown in the settings UI.
-    /// Shared by `downloadDiarizerModel` and `downloadModel` since both report
-    /// progress through the same `DownloadUtils.DownloadPhase` type.
     private static func phaseDescription(for phase: DownloadUtils.DownloadPhase) -> String {
         switch phase {
         case .listing:
@@ -188,8 +201,7 @@ actor ParakeetService: TranscriptionProvider {
     /// Downloads (but does not load) the CoreML models for this variant, reporting progress.
     ///
     /// Cancellable: cancelling the enclosing `Task` propagates into FluidAudio's
-    /// `URLSession`-based transfers (Swift's async URLSession APIs observe task
-    /// cancellation and abort the in-flight request), surfacing as `CancellationError`.
+    /// `URLSession`-based transfers, surfacing as `CancellationError`.
     static func downloadModel(
         variant: ParakeetModelVariant,
         progressHandler: @escaping @Sendable (DownloadStatus) -> Void
@@ -209,27 +221,15 @@ actor ParakeetService: TranscriptionProvider {
 
         let url = URL(fileURLWithPath: localPath)
         var decoderState = TdtDecoderState.make()
-        // v2 is English-only regardless, so this hint only actually affects v3's
-        // joint decoder. Only apply it there when the caller wants v2 anyway —
-        // hinting v3 (the multilingual model) toward English would bias it away
-        // from the non-English languages it exists to support.
         let language: Language? = variant == .v2 ? .english : nil
 
         let result: ASRResult
         var decodedSamples: [Float]?
         if diarizationEnabled {
-            // Diarization needs the fully-decoded samples anyway, so decode once
-            // here and feed the same buffer to both ASR and the diarizer instead
-            // of letting FluidAudio decode the file again internally.
             let samples = try AudioConverter().resampleAudioFile(url)
             decodedSamples = samples
             result = try await manager.transcribe(samples, decoderState: &decoderState, language: language)
         } else {
-            // Transcribe straight from the file URL. FluidAudio runs the source
-            // through AudioConverter internally (handling the TP-7's 24-bit WAV,
-            // resampling to the 16 kHz mono Float32 tensors Parakeet expects, and
-            // disk-backing very large files), which the docs recommend over
-            // decoding samples by hand.
             result = try await manager.transcribe(url, decoderState: &decoderState, language: language)
         }
 
@@ -239,10 +239,16 @@ actor ParakeetService: TranscriptionProvider {
         }
 
         var finalText = text
+        var speakerSegments: [StoredSpeakerSegment]?
         if diarizationEnabled, let decodedSamples {
             do {
-                if let diarized = try await diarizedText(samples: decodedSamples, tokenTimings: result.tokenTimings) {
-                    finalText = diarized
+                let diarized = try await diarizedOutput(
+                    samples: decodedSamples,
+                    tokenTimings: result.tokenTimings
+                )
+                if let diarized {
+                    finalText = diarized.text
+                    speakerSegments = diarized.segments
                 }
             } catch {
                 AppLogger.app.error("Diarization failed, falling back to flat transcript: \(String(describing: error), privacy: .public)")
@@ -251,21 +257,17 @@ actor ParakeetService: TranscriptionProvider {
 
         return TranscriptionResult(
             text: finalText,
-            // Parakeet v3 is multilingual but does not surface a reliable
-            // per-utterance language code; keep it neutral. Swap for the
-            // detected language if a future FluidAudio release exposes it.
             languageCode: variant == .v2 ? "en" : "auto",
             languageProbability: nil,
             transcriptionId: nil,
-            words: nil
+            words: nil,
+            speakerSegments: speakerSegments
         )
     }
 
-    /// Word span aggregated from sub-word `TokenTiming`s. FluidAudio 0.15.4 (the
-    /// pinned version here) exposes the boundary-detection primitives
-    /// (`isWordBoundary`/`stripWordBoundaryPrefix`) publicly but not its internal
-    /// `buildWordTimings` aggregator, so this reimplements just the aggregation
-    /// step on top of those public helpers.
+    /// Word span aggregated from sub-word `TokenTiming`s. FluidAudio 0.15.4 exposes the
+    /// boundary-detection primitives publicly but not its internal `buildWordTimings`
+    /// aggregator, so this reimplements just the aggregation step on top of those helpers.
     private struct WordSpan {
         let word: String
         let startTime: TimeInterval
@@ -294,10 +296,6 @@ actor ParakeetService: TranscriptionProvider {
                 flush()
                 currentWord = ""
             }
-            // Only anchor the start time on the token that begins a new word.
-            // If a boundary-only token strips to empty text (e.g. a bare "▁"),
-            // this keeps its timestamp as the word's start without treating the
-            // following continuation token as the start of yet another word.
             if !hasPendingWord || boundary {
                 wordStart = timing.startTime
                 hasPendingWord = true
@@ -309,93 +307,135 @@ actor ParakeetService: TranscriptionProvider {
         return spans
     }
 
-    /// Runs speaker diarization on pre-decoded `samples` and merges it with the ASR
-    /// word timings, producing a "Speaker N: ..." labeled transcript. Falls back to
-    /// nil (flat text) if there are no token timings or diarization finds no segments.
-    private func diarizedText(samples: [Float], tokenTimings: [TokenTiming]?) async throws -> String? {
+    private struct DiarizedOutput {
+        let text: String
+        let segments: [StoredSpeakerSegment]
+    }
+
+    /// Runs speaker diarization and merges it with ASR word timings.
+    /// Returns both the labeled transcript text and per-segment data for storage.
+    private func diarizedOutput(samples: [Float], tokenTimings: [TokenTiming]?) async throws -> DiarizedOutput? {
         guard let tokenTimings, !tokenTimings.isEmpty else { return nil }
 
         let diarizer = try await loadDiarizer()
         let diarizationResult = try diarizer.performCompleteDiarization(samples)
 
         let words = Self.buildWordSpans(from: tokenTimings)
-        return Self.formatDiarizedTranscript(words: words, segments: diarizationResult.segments)
+        return Self.buildDiarizedOutput(
+            words: words,
+            segments: diarizationResult.segments,
+            knownPersonProfiles: knownPersonProfiles
+        )
     }
 
-    /// Groups ASR words into "Speaker N: ..." paragraphs using diarization segments,
-    /// assigning each word to whichever segment contains its time midpoint (falling
-    /// back to the nearest segment boundary). Speaker numbers are assigned in the
-    /// order they first speak.
-    ///
-    /// `words` and `segments` are both processed in time order, so segment lookup
-    /// advances a single pointer forward instead of rescanning all segments per word.
-    private static func formatDiarizedTranscript(words: [WordSpan], segments: [TimedSpeakerSegment]) -> String? {
+    /// Groups ASR words into labeled paragraphs using diarization segments.
+    /// Returns both a rendered transcript string and `StoredSpeakerSegment` records
+    /// (one per speaker turn) that include embeddings for later correction.
+    private static func buildDiarizedOutput(
+        words: [WordSpan],
+        segments: [TimedSpeakerSegment],
+        knownPersonProfiles: [KnownPersonProfile]
+    ) -> DiarizedOutput? {
         guard !words.isEmpty, !segments.isEmpty else { return nil }
 
         let sortedSegments = segments.sorted { $0.startTimeSeconds < $1.startTimeSeconds }
         var segmentIndex = 0
 
-        func speakerId(atMidpoint midpoint: Double) -> String {
+        func segmentAtMidpoint(_ midpoint: Double) -> TimedSpeakerSegment {
             while segmentIndex + 1 < sortedSegments.count,
                   Double(sortedSegments[segmentIndex + 1].startTimeSeconds) <= midpoint {
                 segmentIndex += 1
             }
             let current = sortedSegments[segmentIndex]
-            if midpoint < Double(current.startTimeSeconds) {
-                // Before the first segment starts; nothing earlier to compare against.
-                return current.speakerId
-            }
-            if midpoint <= Double(current.endTimeSeconds) {
-                return current.speakerId
-            }
-            // In the gap after `current` (the while loop above already ruled out
-            // any later segment starting at or before `midpoint`): pick whichever
-            // segment boundary is closer.
-            guard segmentIndex + 1 < sortedSegments.count else { return current.speakerId }
+            if midpoint < Double(current.startTimeSeconds) { return current }
+            if midpoint <= Double(current.endTimeSeconds) { return current }
+            guard segmentIndex + 1 < sortedSegments.count else { return current }
             let next = sortedSegments[segmentIndex + 1]
             let distanceToCurrent = midpoint - Double(current.endTimeSeconds)
             let distanceToNext = Double(next.startTimeSeconds) - midpoint
-            return distanceToNext < distanceToCurrent ? next.speakerId : current.speakerId
+            return distanceToNext < distanceToCurrent ? next : current
         }
 
-        let enrolledName = EnrolledSpeakerProfile.loadStored()?.name
-
+        // Map each diarizer speakerId → resolved display name and known person ID
         var speakerLabels: [String: String] = [:]
+        var speakerPersonIds: [String: String] = [:]
         var anonymousSpeakerCount = 0
+
+        func resolveLabel(for rawSpeakerId: String, embedding: [Float]) -> (label: String, personId: String?) {
+            if let cached = speakerLabels[rawSpeakerId] {
+                return (cached, speakerPersonIds[rawSpeakerId])
+            }
+            // Try to match against known persons by cosine similarity
+            if !knownPersonProfiles.isEmpty, !embedding.isEmpty {
+                var best: (profile: KnownPersonProfile, similarity: Float)?
+                for profile in knownPersonProfiles where profile.embedding.count == embedding.count {
+                    let sim = cosineSimilarity(profile.embedding, embedding)
+                    if sim > 0.75, best == nil || sim > best!.similarity {
+                        best = (profile, sim)
+                    }
+                }
+                if let match = best {
+                    speakerLabels[rawSpeakerId] = match.profile.name
+                    speakerPersonIds[rawSpeakerId] = match.profile.personId
+                    return (match.profile.name, match.profile.personId)
+                }
+            }
+            // No match — assign an anonymous label
+            anonymousSpeakerCount += 1
+            let label = "Speaker \(anonymousSpeakerCount)"
+            speakerLabels[rawSpeakerId] = label
+            return (label, nil)
+        }
+
+        var storedSegments: [StoredSpeakerSegment] = []
         var paragraphs: [String] = []
-        var currentSpeakerId: String?
+        var currentRawSpeakerId: String?
+        var currentDiarizerSegment: TimedSpeakerSegment?
         var currentWords: [String] = []
+        var currentStart: TimeInterval = 0
+        var currentEnd: TimeInterval = 0
 
         func flush() {
-            guard let speakerId = currentSpeakerId, !currentWords.isEmpty else { return }
-            let label = speakerLabels[speakerId] ?? {
-                let name: String
-                if speakerId == enrolledSpeakerId, let enrolledName {
-                    name = enrolledName
-                } else {
-                    anonymousSpeakerCount += 1
-                    name = "Speaker \(anonymousSpeakerCount)"
-                }
-                speakerLabels[speakerId] = name
-                return name
-            }()
-            paragraphs.append("\(label): \(currentWords.joined(separator: " "))")
+            guard let rawId = currentRawSpeakerId, !currentWords.isEmpty,
+                  let diarizerSeg = currentDiarizerSegment else { return }
+
+            let embedding = diarizerSeg.embedding ?? []
+            let (label, personId) = resolveLabel(for: rawId, embedding: Array(embedding))
+            let text = currentWords.joined(separator: " ")
+            paragraphs.append("\(label): \(text)")
+
+            storedSegments.append(StoredSpeakerSegment(
+                startTime: currentStart,
+                endTime: currentEnd,
+                rawSpeakerId: rawId,
+                text: text,
+                embedding: Array(embedding),
+                assignedPersonName: label.hasPrefix("Speaker ") ? nil : label,
+                assignedPersonId: personId
+            ))
         }
 
         for word in words {
             let midpoint = (word.startTime + word.endTime) / 2
-            let resolvedSpeakerId = speakerId(atMidpoint: midpoint)
+            let diarizerSeg = segmentAtMidpoint(midpoint)
 
-            if resolvedSpeakerId != currentSpeakerId {
+            if diarizerSeg.speakerId != currentRawSpeakerId {
                 flush()
                 currentWords = []
-                currentSpeakerId = resolvedSpeakerId
+                currentRawSpeakerId = diarizerSeg.speakerId
+                currentDiarizerSegment = diarizerSeg
+                currentStart = word.startTime
             }
             currentWords.append(word.word)
+            currentEnd = word.endTime
         }
         flush()
 
-        return paragraphs.isEmpty ? nil : paragraphs.joined(separator: "\n\n")
+        guard !paragraphs.isEmpty else { return nil }
+        return DiarizedOutput(
+            text: paragraphs.joined(separator: "\n\n"),
+            segments: storedSegments
+        )
     }
 
     func transcribe(cloudStorageURL: String) async throws -> TranscriptionResult {
@@ -432,17 +472,37 @@ actor ParakeetService: TranscriptionProvider {
         let diarizer = DiarizerManager(config: .default)
         diarizer.initialize(models: models)
 
-        if let profile = EnrolledSpeakerProfile.loadStored() {
-            let knownSpeaker = Speaker(
-                id: Self.enrolledSpeakerId,
+        // Register all known persons so the diarizer can match their voices.
+        let speakers = knownPersonProfiles.compactMap { profile -> Speaker? in
+            guard !profile.embedding.isEmpty else { return nil }
+            return Speaker(
+                id: profile.personId,
                 name: profile.name,
                 currentEmbedding: profile.embedding,
                 isPermanent: true
             )
-            diarizer.initializeKnownSpeakers([knownSpeaker])
+        }
+        if !speakers.isEmpty {
+            diarizer.initializeKnownSpeakers(speakers)
         }
 
         self.diarizer = diarizer
         return diarizer
     }
+}
+
+// MARK: - Cosine similarity helper
+
+private func cosineSimilarity(_ a: [Float], _ b: [Float]) -> Float {
+    guard a.count == b.count, !a.isEmpty else { return 0 }
+    var dot: Float = 0
+    var normA: Float = 0
+    var normB: Float = 0
+    for i in 0..<a.count {
+        dot += a[i] * b[i]
+        normA += a[i] * a[i]
+        normB += b[i] * b[i]
+    }
+    let denom = normA.squareRoot() * normB.squareRoot()
+    return denom > 0 ? dot / denom : 0
 }
