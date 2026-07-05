@@ -883,7 +883,8 @@ struct TranscriptionSettingsView: View {
             return
         }
 
-        // Success - save the path
+        // Success - save the path and bookmark
+        SecurityScopedBookmark.save(url: URL(fileURLWithPath: expandedPath), key: "markdown.folderPath")
         markdownFolderPath = expandedPath
         markdownValidationStatus = .success
     }

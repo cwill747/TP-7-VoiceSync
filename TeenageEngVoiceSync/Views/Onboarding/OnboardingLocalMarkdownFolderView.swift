@@ -139,7 +139,8 @@ struct OnboardingLocalMarkdownFolderView: View {
             return
         }
 
-        // Success - save the path and enable markdown
+        // Success - save the path, bookmark, and enable markdown
+        SecurityScopedBookmark.save(url: URL(fileURLWithPath: expandedPath), key: "markdown.folderPath")
         folderPath = expandedPath
         markdownEnabled = true
         appleNotesEnabled = false  // Disable Apple Notes when markdown is enabled

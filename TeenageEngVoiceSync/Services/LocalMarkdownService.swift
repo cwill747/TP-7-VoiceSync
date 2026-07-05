@@ -22,13 +22,11 @@ actor LocalMarkdownService {
         customTitle: String? = nil,
         summary: String? = nil
     ) async throws {
-        // Get folder from UserDefaults
-        let folderURL = try resolveFolder()
+        let (folderURL, scoped) = try resolveFolder()
+        defer { if scoped { folderURL.stopAccessingSecurityScopedResource() } }
 
-        // Generate title
         let title = customTitle ?? "TP-7 Recording - \(recordedAt.formatted(.dateTime.month(.wide).day().year()))"
 
-        // Generate markdown content
         let content = generateMarkdownContent(
             title: title,
             transcription: transcription,
@@ -41,11 +39,9 @@ actor LocalMarkdownService {
             summary: summary
         )
 
-        // Generate safe filename
         let safeFilename = generateSafeFilename(title: title, recordedAt: recordedAt)
         let fileURL = folderURL.appendingPathComponent(safeFilename)
 
-        // Write file
         do {
             try content.write(to: fileURL, atomically: true, encoding: .utf8)
         } catch {
@@ -145,8 +141,15 @@ actor LocalMarkdownService {
         return "\(truncatedTitle) - \(dateStr).md"
     }
 
-    /// Resolves the folder URL from stored path
-    private func resolveFolder() throws -> URL {
+    /// Resolves the folder URL from stored bookmark (preferred) or plain path
+    private func resolveFolder() throws -> (URL, Bool) {
+        if let url = SecurityScopedBookmark.resolve(key: "markdown.folderPath") {
+            guard url.startAccessingSecurityScopedResource() else {
+                throw MarkdownError.folderAccessDenied
+            }
+            return (url, true)
+        }
+
         let folderPath = UserDefaults.standard.string(forKey: "markdown.folderPath") ?? ""
         guard !folderPath.isEmpty else {
             throw MarkdownError.folderNotConfigured
@@ -154,14 +157,13 @@ actor LocalMarkdownService {
 
         let url = URL(fileURLWithPath: folderPath)
 
-        // Verify folder exists
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: folderPath, isDirectory: &isDirectory),
               isDirectory.boolValue else {
             throw MarkdownError.folderAccessDenied
         }
 
-        return url
+        return (url, false)
     }
 }
 

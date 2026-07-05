@@ -139,7 +139,8 @@ struct OnboardingLocalAudioFolderView: View {
             return
         }
 
-        // Success - save the path and enable local storage
+        // Success - save the path, bookmark, and enable local storage
+        SecurityScopedBookmark.save(url: URL(fileURLWithPath: expandedPath), key: "localaudio.folderPath")
         folderPath = expandedPath
         localAudioEnabled = true
         s3Enabled = false  // Disable S3 when local storage is enabled
