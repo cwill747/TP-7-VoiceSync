@@ -8,18 +8,33 @@
 
 /* Begin PBXBuildFile section */
 		7E59D3082FF9DCEE005C7F4B /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = 7E59D3072FF9DCEE005C7F4B /* FluidAudio */; };
-		E8C0521153BBC298A4A89675 /* WhisperKit in Frameworks */ = {isa = PBXBuildFile; productRef = 6671A7855FACA8A9417F95BE /* WhisperKit */; };
 		C1A1E2049F1E4A2B8C6D0F04 /* libtp7mtp.dylib in Frameworks */ = {isa = PBXBuildFile; fileRef = C1A1E2059F1E4A2B8C6D0F05 /* libtp7mtp.dylib */; };
 		C1A1E2069F1E4A2B8C6D0F06 /* libusb-1.0.0.dylib in Frameworks */ = {isa = PBXBuildFile; fileRef = C1A1E2079F1E4A2B8C6D0F07 /* libusb-1.0.0.dylib */; };
 		C1A1E2089F1E4A2B8C6D0F08 /* libtp7mtp.dylib in Embed Vendored Libraries */ = {isa = PBXBuildFile; fileRef = C1A1E2059F1E4A2B8C6D0F05 /* libtp7mtp.dylib */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		C1A1E2099F1E4A2B8C6D0F09 /* libusb-1.0.0.dylib in Embed Vendored Libraries */ = {isa = PBXBuildFile; fileRef = C1A1E2079F1E4A2B8C6D0F07 /* libusb-1.0.0.dylib */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+		E8C0521153BBC298A4A89675 /* WhisperKit in Frameworks */ = {isa = PBXBuildFile; productRef = 6671A7855FACA8A9417F95BE /* WhisperKit */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		C1A1E20D9F1E4A2B8C6D0F0D /* Embed Vendored Libraries */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+				C1A1E2089F1E4A2B8C6D0F08 /* libtp7mtp.dylib in Embed Vendored Libraries */,
+				C1A1E2099F1E4A2B8C6D0F09 /* libusb-1.0.0.dylib in Embed Vendored Libraries */,
+			);
+			name = "Embed Vendored Libraries";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		8ECCCD6A2F15E24600FFB286 /* TP-7 VoiceSync.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "TP-7 VoiceSync.app"; sourceTree = BUILT_PRODUCTS_DIR; };
-		C1A1E2059F1E4A2B8C6D0F05 /* libtp7mtp.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; path = "libtp7mtp.dylib"; sourceTree = "<group>"; };
+		C1A1E2059F1E4A2B8C6D0F05 /* libtp7mtp.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; path = libtp7mtp.dylib; sourceTree = "<group>"; };
 		C1A1E2079F1E4A2B8C6D0F07 /* libusb-1.0.0.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; path = "libusb-1.0.0.dylib"; sourceTree = "<group>"; };
-		C1A1E20A9F1E4A2B8C6D0F0A /* libtp7mtp.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "libtp7mtp.h"; sourceTree = "<group>"; };
+		C1A1E20A9F1E4A2B8C6D0F0A /* libtp7mtp.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = libtp7mtp.h; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -81,21 +96,6 @@
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
-
-/* Begin PBXCopyFilesBuildPhase section */
-		C1A1E20D9F1E4A2B8C6D0F0D /* Embed Vendored Libraries */ = {
-			isa = PBXCopyFilesBuildPhase;
-			buildActionMask = 2147483647;
-			dstPath = "";
-			dstSubfolderSpec = 10;
-			files = (
-				C1A1E2089F1E4A2B8C6D0F08 /* libtp7mtp.dylib in Embed Vendored Libraries */,
-				C1A1E2099F1E4A2B8C6D0F09 /* libusb-1.0.0.dylib in Embed Vendored Libraries */,
-			);
-			name = "Embed Vendored Libraries";
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXNativeTarget section */
 		8ECCCD692F15E24600FFB286 /* TeenageEngVoiceSync */ = {
@@ -328,7 +328,7 @@
 					"$(PROJECT_DIR)/Vendor/TP7MTP",
 				);
 				INFOPLIST_KEY_CFBundleDisplayName = "TP-7 VoiceSync";
-				INFOPLIST_KEY_LSUIElement = YES;
+				INFOPLIST_KEY_LSUIElement = NO;
 				INFOPLIST_KEY_NSAppleEventsUsageDescription = "TP-7 VoiceSync needs to access Notes to save your transcriptions.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -348,7 +348,7 @@
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_OBJC_BRIDGING_HEADER = "TeenageEngVoiceSync/TP7MTPBridging.h";
+				SWIFT_OBJC_BRIDGING_HEADER = TeenageEngVoiceSync/TP7MTPBridging.h;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 			};
@@ -376,7 +376,7 @@
 					"$(PROJECT_DIR)/Vendor/TP7MTP",
 				);
 				INFOPLIST_KEY_CFBundleDisplayName = "TP-7 VoiceSync";
-				INFOPLIST_KEY_LSUIElement = YES;
+				INFOPLIST_KEY_LSUIElement = NO;
 				INFOPLIST_KEY_NSAppleEventsUsageDescription = "TP-7 VoiceSync needs to access Notes to save your transcriptions.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -396,7 +396,7 @@
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_OBJC_BRIDGING_HEADER = "TeenageEngVoiceSync/TP7MTPBridging.h";
+				SWIFT_OBJC_BRIDGING_HEADER = TeenageEngVoiceSync/TP7MTPBridging.h;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 			};

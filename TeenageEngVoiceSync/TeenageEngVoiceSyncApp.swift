@@ -11,11 +11,15 @@ import SwiftData
 
 @main
 struct TeenageEngVoiceSyncApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+    @StateObject private var menuBarManager = MenuBarManager()
+
     let modelContainer: ModelContainer
 
     @State private var appState = AppState()
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.openSettings) private var openSettings
 
     init() {
         do {
@@ -24,16 +28,11 @@ struct TeenageEngVoiceSyncApp: App {
                 Device.self
             ])
 
-            // Use app-specific storage location to avoid conflicts with other apps
             let appSupportURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
             let appDataURL = appSupportURL.appendingPathComponent("TeenageEngVoiceSync", isDirectory: true)
-
-            // Create directory if it doesn't exist
             try? FileManager.default.createDirectory(at: appDataURL, withIntermediateDirectories: true)
-
             let storeURL = appDataURL.appendingPathComponent("tp7sync.store")
 
-            // Create container with explicit URL
             modelContainer = try ModelContainer(
                 for: schema,
                 configurations: [ModelConfiguration(url: storeURL)]
@@ -44,31 +43,33 @@ struct TeenageEngVoiceSyncApp: App {
     }
 
     var body: some Scene {
-        // Menu bar icon with popover
-        MenuBarExtra {
-            PopoverView()
+        // Primary recordings window — task here bootstraps the whole app
+        Window("TP-7 Recordings", id: "main") {
+            ContentView()
                 .environment(appState)
                 .modelContainer(modelContainer)
-        } label: {
-            // The label is always rendered, so .task here runs on app launch
-            MenuBarIcon(state: appState)
                 .task {
+                    // Wire the menu bar manager before showing the menu bar item
+                    menuBarManager.appState = appState
+                    menuBarManager.modelContext = modelContainer.mainContext
+                    menuBarManager.openMainWindow = {
+                        NSApp.activate(ignoringOtherApps: true)
+                        openWindow(id: "main")
+                    }
+                    menuBarManager.openSettings = {
+                        NSApp.activate(ignoringOtherApps: true)
+                        openSettings()
+                    }
+                    menuBarManager.initializeMenuBar()
+
                     await appState.initialize(modelContext: modelContainer.mainContext)
-                    // Open onboarding wizard on first launch
+
                     if !hasCompletedOnboarding {
                         openWindow(id: "onboarding")
                     }
                 }
         }
-        .menuBarExtraStyle(.window)
-
-        // Main recordings window
-        Window("TP-7 Recordings", id: "main") {
-            ContentView()
-                .environment(appState)
-                .modelContainer(modelContainer)
-        }
-        .defaultSize(width: 900, height: 600)
+        .defaultSize(width: 960, height: 640)
         .commands {
             CommandGroup(replacing: .newItem) { }
         }
@@ -80,7 +81,7 @@ struct TeenageEngVoiceSyncApp: App {
                 .modelContainer(modelContainer)
         }
 
-        // Onboarding wizard window
+        // Onboarding wizard
         Window("Setup Wizard", id: "onboarding") {
             OnboardingView()
         }
