@@ -362,6 +362,16 @@ struct DiarizedTranscriptView: View {
         }
         .padding()
         .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+        .onChange(of: recording.persistentModelID) { _, _ in
+            // Reset local state when the selected recording changes so stale
+            // segments from the previous recording are never shown or persisted.
+            if let fresh = recording.speakerSegmentsData,
+               let decoded = try? JSONDecoder().decode([StoredSpeakerSegment].self, from: fresh) {
+                localSegments = decoded
+            } else {
+                localSegments = []
+            }
+        }
     }
 
     private func reassign(segment: inout StoredSpeakerSegment, personId: String, personName: String) {

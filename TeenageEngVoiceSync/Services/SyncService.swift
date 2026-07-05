@@ -142,8 +142,12 @@ final class SyncService {
             recording.transcriptionStatus = .completed
             recording.transcribedAt = Date()
             recording.updatedAt = Date()
+            // Always overwrite (including nil) so a flat retranscription clears
+            // any diarization blob from a previous Parakeet run.
             if let segs = result.speakerSegments, !segs.isEmpty {
                 recording.speakerSegmentsData = try? JSONEncoder().encode(segs)
+            } else {
+                recording.speakerSegmentsData = nil
             }
 
             // Reset note tracking to allow new note creation after retranscription
@@ -591,6 +595,8 @@ final class SyncService {
             recording.updatedAt = Date()
             if let segs = result.speakerSegments, !segs.isEmpty {
                 recording.speakerSegmentsData = try? JSONEncoder().encode(segs)
+            } else {
+                recording.speakerSegmentsData = nil
             }
             try? modelContext.save()
             return result

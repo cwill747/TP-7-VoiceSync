@@ -9,7 +9,7 @@ struct PeopleScreen: View {
 
     @Query(sort: \Person.createdAt) private var persons: [Person]
 
-    @State private var selectedPerson: Person?
+    @Binding var selectedPerson: Person?
     @State private var showAddPerson = false
     @State private var newPersonName = ""
 

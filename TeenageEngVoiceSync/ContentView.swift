@@ -61,7 +61,7 @@ struct ContentView: View {
                 )
                 .navigationSplitViewColumnWidth(min: 250, ideal: 300, max: 400)
             case .people:
-                PeopleScreen()
+                PeopleScreen(selectedPerson: $selectedPerson)
             }
         } detail: {
             switch selectedSection {

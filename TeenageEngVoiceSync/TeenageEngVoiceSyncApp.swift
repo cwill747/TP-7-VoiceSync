@@ -65,8 +65,10 @@ struct TeenageEngVoiceSyncApp: App {
                     }
                     menuBarManager.initializeMenuBar()
 
-                    await appState.initialize(modelContext: modelContainer.mainContext)
+                    // Migrate before initialize so persons are in the DB when
+                    // SyncService.loadServices() snapshots known speakers.
                     migrateEnrolledSpeakerIfNeeded(context: modelContainer.mainContext)
+                    await appState.initialize(modelContext: modelContainer.mainContext)
 
                     if !hasCompletedOnboarding {
                         openWindow(id: "onboarding")
