@@ -132,6 +132,9 @@ final class SyncService {
             case .whisperKit:
                 let sourcePath = recording.localCopyPath ?? recording.localPath
                 result = try await transcriber.transcribe(localPath: sourcePath)
+            case .parakeet:
+                let sourcePath = recording.localCopyPath ?? recording.localPath
+                result = try await transcriber.transcribe(localPath: sourcePath)
             }
 
             recording.transcriptionText = result.text
@@ -142,9 +145,11 @@ final class SyncService {
 
             // Reset note tracking to allow new note creation after retranscription
             recording.appleNoteCreatedAt = nil
+            recording.notionPageCreatedAt = nil
 
             // Create Apple Note
             await createAppleNote(for: recording, transcription: result)
+            await createNotionPage(for: recording, transcription: result)
 
             // Notify
             if UserDefaults.standard.bool(forKey: "notify.onSync") {
@@ -243,6 +248,9 @@ final class SyncService {
                 case .whisperKit:
                     let modelID = UserDefaults.standard.string(forKey: "whisperkit.model") ?? "base"
                     transcriptionProvider = WhisperKitService(modelID: modelID)
+                case .parakeet:
+                    let modelVersion = UserDefaults.standard.string(forKey: ParakeetService.modelKey) ?? "v3"
+                    transcriptionProvider = ParakeetService(modelVersion: modelVersion)
                 }
             }
         } catch {
@@ -430,7 +438,8 @@ final class SyncService {
 
         let provider = transcriptionProviderKind ?? .elevenLabs
         let backupToS3 = UserDefaults.standard.bool(forKey: "s3.backupAfterTranscription")
-        let shouldTranscribeFirst = provider == .whisperKit && transcriptionProvider != nil
+        let isLocalProvider = provider == .whisperKit || provider == .parakeet
+        let shouldTranscribeFirst = isLocalProvider && transcriptionProvider != nil
 
         if shouldTranscribeFirst {
             let transcriptionResult = await transcribeRecording(recording, provider: provider)
@@ -438,18 +447,20 @@ final class SyncService {
 
             if let transcriptionResult {
                 await createAppleNote(for: recording, transcription: transcriptionResult)
+                await createNotionPage(for: recording, transcription: transcriptionResult)
                 if UserDefaults.standard.bool(forKey: "notify.onSync") {
                     await notificationService.transcriptionComplete(preview: transcriptionResult.text)
                 }
             }
         } else {
-            let allowS3Upload = provider != .whisperKit || backupToS3
+            let allowS3Upload = !isLocalProvider || backupToS3
             let storageOk = await storeRecording(recording, allowS3Upload: allowS3Upload)
             guard storageOk else { return }
 
             let transcriptionResult = await transcribeRecording(recording, provider: provider)
             if let transcriptionResult {
                 await createAppleNote(for: recording, transcription: transcriptionResult)
+                await createNotionPage(for: recording, transcription: transcriptionResult)
                 if UserDefaults.standard.bool(forKey: "notify.onSync") {
                     await notificationService.transcriptionComplete(preview: transcriptionResult.text)
                 }
@@ -533,6 +544,10 @@ final class SyncService {
                 let sourcePath = recording.localCopyPath ?? recording.localPath
                 result = try await transcriber.transcribe(localPath: sourcePath)
                 AppLogger.sync.debug("Transcribed locally with WhisperKit")
+            case .parakeet:
+                let sourcePath = recording.localCopyPath ?? recording.localPath
+                result = try await transcriber.transcribe(localPath: sourcePath)
+                AppLogger.sync.debug("Transcribed locally with Parakeet")
             }
 
             AppLogger.sync.info("Transcription complete for \(recording.filename, privacy: .private) (language=\(result.languageCode, privacy: .public), chars=\(result.text.count, privacy: .public))")
@@ -553,6 +568,55 @@ final class SyncService {
 
             await notificationService.transcriptionError(error.localizedDescription, filename: recording.filename)
             return nil
+        }
+    }
+
+    private func createNotionPage(for recording: Recording, transcription: TranscriptionResult) async {
+        guard recording.notionPageCreatedAt == nil else { return }
+        guard UserDefaults.standard.bool(forKey: "notion.enabled") else { return }
+
+        let databaseId = UserDefaults.standard.string(forKey: "notion.databaseId") ?? ""
+        guard !databaseId.isEmpty,
+              let apiKey = try? await KeychainService.shared.retrieve(for: .notionAPIKey),
+              !apiKey.isEmpty else {
+            AppLogger.notes.debug("Notion not configured; skipping")
+            return
+        }
+
+        // Resolve audio URLs the same way createAppleNote does.
+        var playURLString = ""
+        var downloadURLString = ""
+        if let s3Key = recording.s3Key, let s3 = s3Service {
+            let expiry = parseLinkExpiry(UserDefaults.standard.string(forKey: "applenotes.linkExpiry") ?? "7d")
+            playURLString = (try? s3.generatePresignedURL(s3Key: s3Key, expiry: expiry).absoluteString) ?? ""
+            downloadURLString = (try? s3.generateDownloadURL(s3Key: s3Key, filename: recording.filename, expiry: expiry).absoluteString) ?? ""
+        } else if let localCopyPath = recording.localCopyPath {
+            let u = URL(fileURLWithPath: localCopyPath).absoluteString
+            playURLString = u; downloadURLString = u
+        }
+
+        let service = NotionService(apiKey: apiKey, databaseId: databaseId)
+        do {
+            try await service.createTranscriptionNote(
+                transcription: transcription.text,
+                filename: recording.filename,
+                tpDeviceFilename: recording.filename,
+                recordedAt: recording.recordedAt,
+                fileSize: recording.fileSize,
+                duration: recording.duration,
+                language: transcription.languageCode,
+                playURL: playURLString,
+                downloadURL: downloadURLString,
+                customTitle: recording.llmTitle,
+                summary: recording.llmSummary
+            )
+            recording.notionPageCreatedAt = Date()
+            recording.updatedAt = Date()
+            try? modelContext.save()
+            AppLogger.notes.info("Created Notion page for \(recording.filename, privacy: .private)")
+        } catch {
+            AppLogger.notes.error("Notion delivery failed: \(error.localizedDescription, privacy: .public)")
+            lastError = "Notion: \(error.localizedDescription)"
         }
     }
 
@@ -786,6 +850,8 @@ final class SyncService {
         UserDefaults.standard.register(defaults: [
             "transcription.provider": TranscriptionProviderKind.elevenLabs.rawValue,
             "whisperkit.model": "base",
+            "parakeet.model": "v3",
+            "notion.enabled": false,
             "s3.backupAfterTranscription": true
         ])
     }

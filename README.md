@@ -1,3 +1,10 @@
+> ## Fork: Parakeet + Notion
+>
+> This is a fork of [armynante/TP-7-VoiceSync](https://github.com/armynante/TP-7-VoiceSync).
+> It swaps transcription to **Parakeet** via [FluidAudio](https://github.com/FluidInference/FluidAudio)
+> (Apple Neural Engine) and adds a **Notion** output (a database page per recording, sorted by date).
+> See **[tasks.md](tasks.md)** for setup and remaining steps. Original README below.
+
 # TP-7 VoiceSync
 
 A macOS menu bar app that automatically syncs, transcribes, and organizes your Teenage Engineering TP-7 voice recordings. Supports **fully local transcription** via [WhisperKit](https://github.com/argmaxinc/WhisperKit).

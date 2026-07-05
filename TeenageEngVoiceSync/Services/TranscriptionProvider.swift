@@ -10,6 +10,7 @@ import Foundation
 enum TranscriptionProviderKind: String, CaseIterable, Identifiable {
     case elevenLabs = "elevenlabs"
     case whisperKit = "whisperkit"
+    case parakeet = "parakeet"
 
     var id: String { rawValue }
 
@@ -19,6 +20,8 @@ enum TranscriptionProviderKind: String, CaseIterable, Identifiable {
             return "ElevenLabs (Cloud)"
         case .whisperKit:
             return "WhisperKit (Local)"
+        case .parakeet:
+            return "Parakeet (Local, ANE)"
         }
     }
 
@@ -28,6 +31,8 @@ enum TranscriptionProviderKind: String, CaseIterable, Identifiable {
             return "ElevenLabs"
         case .whisperKit:
             return "WhisperKit"
+        case .parakeet:
+            return "Parakeet"
         }
     }
 
@@ -37,6 +42,8 @@ enum TranscriptionProviderKind: String, CaseIterable, Identifiable {
             return "Cloud transcription using ElevenLabs Scribe models."
         case .whisperKit:
             return "On-device transcription with optional offline model downloads."
+        case .parakeet:
+            return "On-device Parakeet TDT via FluidAudio, runs on the Apple Neural Engine."
         }
     }
 }

@@ -41,6 +41,9 @@ final class Recording {
     // Apple Notes integration
     var appleNoteCreatedAt: Date?
 
+    // Notion integration
+    var notionPageCreatedAt: Date?
+
     // Metadata
     var createdAt: Date
     var updatedAt: Date
