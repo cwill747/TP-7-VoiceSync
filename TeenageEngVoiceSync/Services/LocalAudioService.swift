@@ -30,16 +30,15 @@ actor LocalAudioService {
     /// - Parameter sourceURL: The source file URL (e.g., on TP-7 device)
     /// - Returns: The destination URL in the local folder
     func copyToLocalFolder(sourceURL: URL) async throws -> URL {
-        let folderURL = try resolveFolder()
+        let (folderURL, scoped) = try resolveFolder()
+        defer { if scoped { folderURL.stopAccessingSecurityScopedResource() } }
 
         let destinationURL = folderURL.appendingPathComponent(sourceURL.lastPathComponent)
 
-        // Remove existing file if present
         if FileManager.default.fileExists(atPath: destinationURL.path) {
             try FileManager.default.removeItem(at: destinationURL)
         }
 
-        // Copy the file
         do {
             try FileManager.default.copyItem(at: sourceURL, to: destinationURL)
         } catch {
@@ -55,8 +54,15 @@ actor LocalAudioService {
         return !folderPath.isEmpty
     }
 
-    /// Resolves the folder URL from stored path
-    private func resolveFolder() throws -> URL {
+    /// Resolves the folder URL from stored bookmark (preferred) or plain path
+    private func resolveFolder() throws -> (URL, Bool) {
+        if let url = SecurityScopedBookmark.resolve(key: "localaudio.folderPath") {
+            guard url.startAccessingSecurityScopedResource() else {
+                throw LocalAudioError.folderAccessDenied
+            }
+            return (url, true)
+        }
+
         let folderPath = UserDefaults.standard.string(forKey: "localaudio.folderPath") ?? ""
         guard !folderPath.isEmpty else {
             throw LocalAudioError.folderNotConfigured
@@ -64,13 +70,12 @@ actor LocalAudioService {
 
         let url = URL(fileURLWithPath: folderPath)
 
-        // Verify folder exists
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: folderPath, isDirectory: &isDirectory),
               isDirectory.boolValue else {
             throw LocalAudioError.folderAccessDenied
         }
 
-        return url
+        return (url, false)
     }
 }

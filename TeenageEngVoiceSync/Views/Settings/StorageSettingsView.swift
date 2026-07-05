@@ -271,6 +271,7 @@ struct StorageSettingsView: View {
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
+        SecurityScopedBookmark.save(url: url, key: "localaudio.folderPath")
         localInputPath = url.path
         validateLocalFolder()
     }
