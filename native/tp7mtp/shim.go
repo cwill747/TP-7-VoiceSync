@@ -28,6 +28,10 @@ import (
 
 const recordingsDir = "/recordings"
 
+// Only allow connections to Teenage Engineering TP-7 devices.
+const allowedManufacturer = "teenage engineering"
+const allowedModel = "TP-7"
+
 type deviceInfo struct {
 	Manufacturer string `json:"manufacturer"`
 	Model        string `json:"model"`
@@ -88,6 +92,19 @@ func tp7mtp_open() *C.char {
 		return toCString(errResponse("%s", err.Error()))
 	}
 
+	info, err := mtpx.FetchDeviceInfo(dev)
+	if err != nil {
+		mtpx.Dispose(dev)
+		return toCString(errResponse("%s", err.Error()))
+	}
+
+	// Reject non-TP-7 devices to avoid interacting with unrelated MTP hardware.
+	if !strings.EqualFold(info.Manufacturer, allowedManufacturer) ||
+		!strings.Contains(info.Model, allowedModel) {
+		mtpx.Dispose(dev)
+		return toCString(errResponse("connected MTP device is not a TP-7 (got %s %s)", info.Manufacturer, info.Model))
+	}
+
 	storages, err := mtpx.FetchStorages(dev)
 	if err != nil {
 		mtpx.Dispose(dev)
@@ -96,12 +113,6 @@ func tp7mtp_open() *C.char {
 	if len(storages) == 0 {
 		mtpx.Dispose(dev)
 		return toCString(errResponse("no storage found on device"))
-	}
-
-	info, err := mtpx.FetchDeviceInfo(dev)
-	if err != nil {
-		mtpx.Dispose(dev)
-		return toCString(errResponse("%s", err.Error()))
 	}
 
 	sessionsMu.Lock()

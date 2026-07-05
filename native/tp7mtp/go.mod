@@ -1,6 +1,6 @@
 module tp7mtp
 
-go 1.25.0
+go 1.25
 
 require (
 	github.com/ganeshrvel/go-mtpfs v1.0.4-0.20240426083057-1c3302b3c476 // indirect
