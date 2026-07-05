@@ -2,7 +2,13 @@
 //  DeviceWatchService.swift
 //  TeenageEngVoiceSync
 //
-//  Watches for TP-7 devices via FieldKit container polling.
+//  Watches for a TP-7 over MTP (via the vendored libtp7mtp backend) and
+//  downloads new recordings to a local cache directory.
+//
+//  A single MTP session is held open for the entire time the device is
+//  connected, and reused for every list/download/delete call - the TP-7's
+//  MTP firmware does not tolerate a fresh session being opened and closed
+//  per file transfer.
 //
 
 import Foundation
@@ -16,21 +22,13 @@ final class DeviceWatchService {
     private(set) var recordingsPath: String?
 
     private var watchTask: Task<Void, Never>?
-    private let fieldKitPath: URL
-    private var lastKnownDevice: String?
-    private var deviceWasLost = false
-    private var hasLoggedInitialScan = false
+    private var session: TP7MTPSession?
+    private var knownFilenames: Set<String> = []
 
     // Callbacks
     var onDeviceConnected: ((String) -> Void)?
     var onDeviceDisconnected: ((String) -> Void)?
     var onNewRecordings: (([URL], String) -> Void)?
-
-    init() {
-        let homeDir = FileManager.default.homeDirectoryForCurrentUser
-        fieldKitPath = homeDir
-            .appendingPathComponent("Library/Containers/engineering.teenage.fieldkit/Data/Documents")
-    }
 
     /// Start watching for TP-7 devices
     func startWatching() {
@@ -47,171 +45,145 @@ final class DeviceWatchService {
     func stopWatching() {
         watchTask?.cancel()
         watchTask = nil
-        isConnected = false
-        currentDeviceSerial = nil
-        recordingsPath = nil
-        lastKnownDevice = nil
-        deviceWasLost = false
+        closeSession()
     }
 
     private func watchLoop() async {
-        // Initial device check
-        await detectDevices()
-
-        // Dynamic polling: fast when disconnected, slow when connected
         while !Task.isCancelled {
-            let interval: Duration = isConnected ? .seconds(10) : .seconds(1)
+            if session == nil {
+                await tryConnect()
+            } else {
+                await pollConnectedSession()
+            }
 
-            try? await Task.sleep(for: interval)
             guard !Task.isCancelled else { break }
-
-            await detectDevices()
+            let interval: Duration = isConnected ? .seconds(10) : .seconds(2)
+            try? await Task.sleep(for: interval)
         }
     }
 
-    private func detectDevices() async {
-        let result = findTP7Device()
+    /// Attempts to open a fresh session when no device is currently connected.
+    private func tryConnect() async {
+        let result = await Task.detached(priority: .utility) {
+            TP7MTPSession.open()
+        }.value
 
-        switch result {
-        case .success(let device):
-            handleDeviceFound(device)
-        case .failure:
-            handleDeviceNotFound()
+        guard case .success(let newSession) = result else { return }
+
+        session = newSession
+        isConnected = true
+        currentDeviceSerial = newSession.device.serial
+        recordingsPath = "/recordings"
+        knownFilenames = []
+
+        AppLogger.device.info("Device connected (serial=\(newSession.device.serial, privacy: .private))")
+        onDeviceConnected?(newSession.device.serial)
+
+        await scanRecordings()
+    }
+
+    /// Uses the existing open session to check for new recordings. If any
+    /// call fails, treats it as a disconnect and closes the session so the
+    /// next loop iteration attempts a fresh connect.
+    private func pollConnectedSession() async {
+        let stillHealthy = await scanRecordings()
+        if !stillHealthy {
+            handleDisconnected()
         }
     }
 
-    private func handleDeviceFound(_ device: TP7Device) {
-        let isReconnection = deviceWasLost && lastKnownDevice == device.serial
-        let isNewDevice = lastKnownDevice != device.serial
+    /// Returns false if the session appears to be dead (device disconnected).
+    @discardableResult
+    private func scanRecordings() async -> Bool {
+        guard let session else { return false }
+        let serial = session.device.serial
 
-        AppLogger.device.info("Device found (serial=\(device.serial, privacy: .private), reconnection=\(isReconnection), newDevice=\(isNewDevice))")
+        let listResult = await Task.detached(priority: .utility) {
+            session.listRecordings()
+        }.value
 
-        if isReconnection {
-            isConnected = true
-            currentDeviceSerial = device.serial
-            recordingsPath = device.recordingsPath
-            deviceWasLost = false
-            onDeviceConnected?(device.serial)
+        guard case .success(let files) = listResult else { return false }
 
-            // Scan for new recordings after reconnection
-            Task {
-                // Wait for MTP mount to be ready
-                try? await Task.sleep(for: .seconds(3))
-                await scanRecordings(at: device.recordingsPath, serial: device.serial)
+        let newFiles = files.filter { !knownFilenames.contains($0.name) }
+        guard !newFiles.isEmpty else { return true }
+
+        var downloadedURLs: [URL] = []
+
+        for file in newFiles {
+            knownFilenames.insert(file.name)
+
+            guard let destination = Self.cacheDestination(for: file.name, serial: serial) else { continue }
+
+            if FileManager.default.fileExists(atPath: destination.path) {
+                downloadedURLs.append(destination)
+                continue
             }
-        } else if isNewDevice {
-            isConnected = true
-            currentDeviceSerial = device.serial
-            recordingsPath = device.recordingsPath
-            lastKnownDevice = device.serial
-            deviceWasLost = false
-            onDeviceConnected?(device.serial)
 
-            // Scan for recordings
-            Task {
-                try? await Task.sleep(for: .seconds(3))
-                await scanRecordings(at: device.recordingsPath, serial: device.serial)
+            let downloadResult = await Task.detached(priority: .utility) {
+                session.download(filename: file.name, to: destination)
+            }.value
+
+            switch downloadResult {
+            case .success:
+                downloadedURLs.append(destination)
+            case .failure(let error):
+                AppLogger.device.error("Failed to download \(file.name, privacy: .private): \(error.localizedDescription, privacy: .public)")
             }
+        }
+
+        if !downloadedURLs.isEmpty {
+            onNewRecordings?(downloadedURLs, serial)
+        }
+
+        return true
+    }
+
+    private func handleDisconnected() {
+        guard let serial = currentDeviceSerial else {
+            closeSession()
+            return
+        }
+        AppLogger.device.info("Device disconnected (serial=\(serial, privacy: .private))")
+        closeSession()
+        onDeviceDisconnected?(serial)
+    }
+
+    private func closeSession() {
+        let sessionToClose = session
+        session = nil
+        isConnected = false
+        currentDeviceSerial = nil
+        recordingsPath = nil
+        knownFilenames = []
+
+        guard let sessionToClose else { return }
+        Task.detached(priority: .utility) {
+            sessionToClose.close()
         }
     }
 
-    private func handleDeviceNotFound() {
-        if isConnected && !deviceWasLost {
-            if let serial = lastKnownDevice {
-                onDeviceDisconnected?(serial)
-            }
-            deviceWasLost = true
-            isConnected = false
-            currentDeviceSerial = nil
-            recordingsPath = nil
+    /// Deletes a recording from the currently connected device over MTP.
+    /// Blocking; call off the main thread. No-op if no device is connected.
+    func deleteFromDevice(filename: String) async -> Result<Void, TP7MTPError> {
+        guard let session else {
+            return .failure(.device("No device connected"))
         }
+        return await Task.detached(priority: .utility) {
+            session.deleteRecording(filename: filename)
+        }.value
     }
 
-    private func findTP7Device() -> Result<TP7Device, DeviceError> {
-        let fileManager = FileManager.default
-
-        // Check if FieldKit container exists
-        guard fileManager.fileExists(atPath: fieldKitPath.path) else {
-            AppLogger.device.info("FieldKit container not found")
-            return .failure(.containerNotFound)
+    private static func cacheDestination(for filename: String, serial: String) -> URL? {
+        guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            return nil
         }
+        let dir = appSupport
+            .appendingPathComponent("TP-7 VoiceSync", isDirectory: true)
+            .appendingPathComponent("DeviceDownloads", isDirectory: true)
+            .appendingPathComponent(serial, isDirectory: true)
 
-        do {
-            let contents = try fileManager.contentsOfDirectory(
-                at: fieldKitPath,
-                includingPropertiesForKeys: nil
-            )
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
 
-            if !hasLoggedInitialScan {
-                AppLogger.device.debug("Initial scan found \(contents.count, privacy: .public) items in FieldKit container")
-                hasLoggedInitialScan = true
-            }
-
-            // Look for TP-7 MTP Device folders
-            for item in contents {
-                let name = item.lastPathComponent
-
-                if name.hasPrefix("TP-7 MTP Device-") {
-                    // Extract serial from folder name
-                    let serial = String(name.dropFirst("TP-7 MTP Device-".count))
-                    AppLogger.device.debug("Found TP-7 folder (serial=\(serial, privacy: .private))")
-
-                    // Find recordings folder
-                    let recordingsDir = item.appendingPathComponent("recordings")
-
-                    if fileManager.fileExists(atPath: recordingsDir.path) {
-                        AppLogger.device.debug("Found recordings folder")
-                        return .success(TP7Device(
-                            serial: serial,
-                            recordingsPath: recordingsDir.path,
-                            basePath: item.path
-                        ))
-                    } else {
-                        AppLogger.device.debug("No recordings folder found")
-                    }
-                }
-            }
-
-            return .failure(.noDeviceFound)
-        } catch {
-            AppLogger.device.error("Error reading FieldKit container: \(String(describing: error), privacy: .public)")
-            return .failure(.accessError(error))
-        }
+        return dir.appendingPathComponent(filename)
     }
-
-    private func scanRecordings(at path: String, serial: String) async {
-        let fileManager = FileManager.default
-        let recordingsURL = URL(fileURLWithPath: path)
-
-        do {
-            let contents = try fileManager.contentsOfDirectory(
-                at: recordingsURL,
-                includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey]
-            )
-
-            let wavFiles = contents.filter { url in
-                let name = url.lastPathComponent
-                return !name.hasPrefix(".") &&
-                       name.lowercased().hasSuffix(".wav")
-            }
-
-            if !wavFiles.isEmpty {
-                onNewRecordings?(wavFiles, serial)
-            }
-        } catch {
-            AppLogger.device.error("Failed to scan recordings: \(String(describing: error), privacy: .public)")
-        }
-    }
-}
-
-struct TP7Device {
-    let serial: String
-    let recordingsPath: String
-    let basePath: String
-}
-
-enum DeviceError: Error {
-    case containerNotFound
-    case noDeviceFound
-    case accessError(Error)
 }

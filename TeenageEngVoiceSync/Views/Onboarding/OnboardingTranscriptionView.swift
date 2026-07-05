@@ -304,6 +304,8 @@ struct OnboardingTranscriptionView: View {
             isConfigured = !apiKey.isEmpty
         case .whisperKit:
             isConfigured = whisperKitDownloadState == .ready
+        case .parakeet:
+            isConfigured = true
         }
     }
 

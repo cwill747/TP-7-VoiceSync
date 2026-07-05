@@ -6,15 +6,21 @@
 //
 
 import SwiftUI
+import AppKit
 
 struct StorageSettingsView: View {
     @Environment(AppState.self) private var appState
 
     // S3 Settings
     @AppStorage("s3.enabled") private var s3Enabled = false
+    @AppStorage("s3.provider") private var providerRaw = S3Provider.aws.rawValue
     @AppStorage("s3.bucket") private var bucket = ""
     @AppStorage("s3.region") private var region = "us-east-1"
     @AppStorage("s3.prefix") private var prefix = "recordings/"
+
+    private var provider: S3Provider {
+        S3Provider(rawValue: providerRaw) ?? .aws
+    }
 
     // Local Audio Settings
     @AppStorage("localaudio.enabled") private var localAudioEnabled = false
@@ -50,13 +56,34 @@ struct StorageSettingsView: View {
                     }
 
                 if s3Enabled {
+                    Picker("Provider", selection: Binding(
+                        get: { provider },
+                        set: { newValue in
+                            providerRaw = newValue.rawValue
+                            region = newValue.defaultRegion
+                        }
+                    )) {
+                        ForEach(S3Provider.allCases) { provider in
+                            Text(provider.displayName).tag(provider)
+                        }
+                    }
+
                     TextField("Bucket Name", text: $bucket)
                         .textFieldStyle(.roundedBorder)
 
-                    Picker("Region", selection: $region) {
-                        ForEach(awsRegions, id: \.self) { region in
-                            Text(region).tag(region)
+                    if provider == .aws {
+                        Picker("Region", selection: $region) {
+                            ForEach(awsRegions, id: \.self) { region in
+                                Text(region).tag(region)
+                            }
                         }
+                    } else {
+                        TextField("Region (e.g. us-west-004)", text: $region)
+                            .textFieldStyle(.roundedBorder)
+
+                        Text("Find your bucket's region in the Backblaze B2 console under Bucket Settings (Endpoint).")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
 
                     TextField("Key Prefix", text: $prefix)
@@ -67,11 +94,11 @@ struct StorageSettingsView: View {
                         .foregroundStyle(.secondary)
 
                     if !hasCredentials {
-                        Label("Configure AWS credentials in the API Keys tab", systemImage: "exclamationmark.triangle")
+                        Label("Configure credentials in the API Keys tab", systemImage: "exclamationmark.triangle")
                             .foregroundStyle(.orange)
                             .font(.caption)
                     } else {
-                        Label("AWS credentials configured", systemImage: "checkmark.circle.fill")
+                        Label("Credentials configured", systemImage: "checkmark.circle.fill")
                             .foregroundStyle(.green)
                             .font(.caption)
                     }
@@ -122,6 +149,10 @@ struct StorageSettingsView: View {
                                     localInputPath = localFolderPath
                                 }
                             }
+
+                        Button("Choose…") {
+                            chooseLocalFolder()
+                        }
 
                         Button("Validate") {
                             validateLocalFolder()
@@ -204,7 +235,8 @@ struct StorageSettingsView: View {
                 region: region,
                 prefix: prefix,
                 accessKeyId: accessKeyId,
-                secretAccessKey: secretAccessKey
+                secretAccessKey: secretAccessKey,
+                provider: provider
             )
 
             try await service.validateBucket()
@@ -223,6 +255,25 @@ struct StorageSettingsView: View {
     }
 
     // MARK: - Local Folder Methods
+
+    private func chooseLocalFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Choose"
+
+        let startPath = localInputPath.isEmpty ? localFolderPath : localInputPath
+        if !startPath.isEmpty {
+            let expanded = NSString(string: startPath).expandingTildeInPath
+            panel.directoryURL = URL(fileURLWithPath: expanded)
+        }
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        localInputPath = url.path
+        validateLocalFolder()
+    }
 
     private func validateLocalFolder() {
         localValidationStatus = nil

@@ -2,7 +2,7 @@
 //  OnboardingS3View.swift
 //  TeenageEngVoiceSync
 //
-//  AWS S3 configuration for cloud storage (optional).
+//  S3-compatible configuration for cloud storage (optional): AWS S3 or Backblaze B2.
 //
 
 import SwiftUI
@@ -11,9 +11,14 @@ struct OnboardingS3View: View {
     @Binding var isConfigured: Bool
 
     @AppStorage("s3.enabled") private var s3Enabled = false
+    @AppStorage("s3.provider") private var providerRaw = S3Provider.aws.rawValue
     @AppStorage("s3.bucket") private var bucket = ""
     @AppStorage("s3.region") private var region = "us-east-1"
     @AppStorage("s3.prefix") private var prefix = "recordings/"
+
+    private var provider: S3Provider {
+        S3Provider(rawValue: providerRaw) ?? .aws
+    }
 
     @State private var accessKeyId = ""
     @State private var secretAccessKey = ""
@@ -43,32 +48,58 @@ struct OnboardingS3View: View {
                         .font(.system(size: 40))
                         .foregroundStyle(.tint)
 
-                    Text("AWS S3 Cloud Storage")
+                    Text("S3 Cloud Storage")
                         .font(.title2)
                         .fontWeight(.semibold)
 
-                    Text("Optional: Upload recordings to S3 to enable playback links in Apple Notes. If you skip this, files will be stored locally.")
+                    Text("Optional: Upload recordings to AWS S3 or Backblaze B2 to enable playback links in Apple Notes. If you skip this, files will be stored locally.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                 }
 
+                // Provider
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Provider")
+                        .font(.headline)
+
+                    Picker("Provider", selection: Binding(
+                        get: { provider },
+                        set: { newValue in
+                            providerRaw = newValue.rawValue
+                            region = newValue.defaultRegion
+                        }
+                    )) {
+                        ForEach(S3Provider.allCases) { provider in
+                            Text(provider.displayName).tag(provider)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                }
+
                 // Bucket configuration
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("S3 Bucket")
+                    Text("Bucket")
                         .font(.headline)
 
                     TextField("Bucket name", text: $bucket)
                         .textFieldStyle(.roundedBorder)
 
                     HStack {
-                        Picker("Region", selection: $region) {
-                            ForEach(awsRegions, id: \.self) { r in
-                                Text(r).tag(r)
+                        if provider == .aws {
+                            Picker("Region", selection: $region) {
+                                ForEach(awsRegions, id: \.self) { r in
+                                    Text(r).tag(r)
+                                }
                             }
+                            .pickerStyle(.menu)
+                            .frame(maxWidth: 200)
+                        } else {
+                            TextField("Region (e.g. us-west-004)", text: $region)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(maxWidth: 200)
                         }
-                        .pickerStyle(.menu)
-                        .frame(maxWidth: 200)
 
                         TextField("Key prefix", text: $prefix)
                             .textFieldStyle(.roundedBorder)
@@ -79,9 +110,9 @@ struct OnboardingS3View: View {
                         .foregroundStyle(.secondary)
                 }
 
-                // AWS Credentials
+                // Credentials
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("AWS Credentials")
+                    Text("Credentials")
                         .font(.headline)
 
                     TextField("Access Key ID", text: $accessKeyId)
@@ -106,8 +137,13 @@ struct OnboardingS3View: View {
                     }
                     .disabled(isLoading)
 
-                    Link("Open AWS Console", destination: URL(string: "https://console.aws.amazon.com/iam/home#/security_credentials")!)
-                        .font(.caption)
+                    if provider == .aws {
+                        Link("Open AWS Console", destination: URL(string: "https://console.aws.amazon.com/iam/home#/security_credentials")!)
+                            .font(.caption)
+                    } else {
+                        Link("Open Backblaze B2 Application Keys", destination: URL(string: "https://secure.backblaze.com/app_keys.htm")!)
+                            .font(.caption)
+                    }
                 }
 
                 // Test button
@@ -131,7 +167,7 @@ struct OnboardingS3View: View {
                 }
 
                 // Info
-                Text("Your AWS credentials are stored securely in your Mac's Keychain.")
+                Text("Your credentials are stored securely in your Mac's Keychain.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -183,7 +219,8 @@ struct OnboardingS3View: View {
             region: region,
             prefix: prefix,
             accessKeyId: accessKeyId,
-            secretAccessKey: secretAccessKey
+            secretAccessKey: secretAccessKey,
+            provider: provider
         )
 
         do {

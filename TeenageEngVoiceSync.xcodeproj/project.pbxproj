@@ -7,11 +7,19 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		7E59D3082FF9DCEE005C7F4B /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = 7E59D3072FF9DCEE005C7F4B /* FluidAudio */; };
 		E8C0521153BBC298A4A89675 /* WhisperKit in Frameworks */ = {isa = PBXBuildFile; productRef = 6671A7855FACA8A9417F95BE /* WhisperKit */; };
+		C1A1E2049F1E4A2B8C6D0F04 /* libtp7mtp.dylib in Frameworks */ = {isa = PBXBuildFile; fileRef = C1A1E2059F1E4A2B8C6D0F05 /* libtp7mtp.dylib */; };
+		C1A1E2069F1E4A2B8C6D0F06 /* libusb-1.0.0.dylib in Frameworks */ = {isa = PBXBuildFile; fileRef = C1A1E2079F1E4A2B8C6D0F07 /* libusb-1.0.0.dylib */; };
+		C1A1E2089F1E4A2B8C6D0F08 /* libtp7mtp.dylib in Embed Vendored Libraries */ = {isa = PBXBuildFile; fileRef = C1A1E2059F1E4A2B8C6D0F05 /* libtp7mtp.dylib */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+		C1A1E2099F1E4A2B8C6D0F09 /* libusb-1.0.0.dylib in Embed Vendored Libraries */ = {isa = PBXBuildFile; fileRef = C1A1E2079F1E4A2B8C6D0F07 /* libusb-1.0.0.dylib */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		8ECCCD6A2F15E24600FFB286 /* TP-7 VoiceSync.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "TP-7 VoiceSync.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		C1A1E2059F1E4A2B8C6D0F05 /* libtp7mtp.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; path = "libtp7mtp.dylib"; sourceTree = "<group>"; };
+		C1A1E2079F1E4A2B8C6D0F07 /* libusb-1.0.0.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; path = "libusb-1.0.0.dylib"; sourceTree = "<group>"; };
+		C1A1E20A9F1E4A2B8C6D0F0A /* libtp7mtp.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "libtp7mtp.h"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -27,7 +35,10 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				7E59D3082FF9DCEE005C7F4B /* FluidAudio in Frameworks */,
 				E8C0521153BBC298A4A89675 /* WhisperKit in Frameworks */,
+				C1A1E2049F1E4A2B8C6D0F04 /* libtp7mtp.dylib in Frameworks */,
+				C1A1E2069F1E4A2B8C6D0F06 /* libusb-1.0.0.dylib in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -38,6 +49,7 @@
 			isa = PBXGroup;
 			children = (
 				8ECCCD6C2F15E24600FFB286 /* TeenageEngVoiceSync */,
+				C1A1E20B9F1E4A2B8C6D0F0B /* Vendor */,
 				8ECCCD6B2F15E24600FFB286 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -50,7 +62,40 @@
 			name = Products;
 			sourceTree = "<group>";
 		};
+		C1A1E20B9F1E4A2B8C6D0F0B /* Vendor */ = {
+			isa = PBXGroup;
+			children = (
+				C1A1E20C9F1E4A2B8C6D0F0C /* TP7MTP */,
+			);
+			path = Vendor;
+			sourceTree = "<group>";
+		};
+		C1A1E20C9F1E4A2B8C6D0F0C /* TP7MTP */ = {
+			isa = PBXGroup;
+			children = (
+				C1A1E2059F1E4A2B8C6D0F05 /* libtp7mtp.dylib */,
+				C1A1E20A9F1E4A2B8C6D0F0A /* libtp7mtp.h */,
+				C1A1E2079F1E4A2B8C6D0F07 /* libusb-1.0.0.dylib */,
+			);
+			path = TP7MTP;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		C1A1E20D9F1E4A2B8C6D0F0D /* Embed Vendored Libraries */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+				C1A1E2089F1E4A2B8C6D0F08 /* libtp7mtp.dylib in Embed Vendored Libraries */,
+				C1A1E2099F1E4A2B8C6D0F09 /* libusb-1.0.0.dylib in Embed Vendored Libraries */,
+			);
+			name = "Embed Vendored Libraries";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXNativeTarget section */
 		8ECCCD692F15E24600FFB286 /* TeenageEngVoiceSync */ = {
@@ -60,6 +105,7 @@
 				8ECCCD662F15E24600FFB286 /* Sources */,
 				8ECCCD672F15E24600FFB286 /* Frameworks */,
 				8ECCCD682F15E24600FFB286 /* Resources */,
+				C1A1E20D9F1E4A2B8C6D0F0D /* Embed Vendored Libraries */,
 			);
 			buildRules = (
 			);
@@ -71,6 +117,7 @@
 			name = TeenageEngVoiceSync;
 			packageProductDependencies = (
 				6671A7855FACA8A9417F95BE /* WhisperKit */,
+				7E59D3072FF9DCEE005C7F4B /* FluidAudio */,
 			);
 			productName = TeenageEngVoiceSync;
 			productReference = 8ECCCD6A2F15E24600FFB286 /* TP-7 VoiceSync.app */;
@@ -84,7 +131,7 @@
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
 				LastSwiftUpdateCheck = 2600;
-				LastUpgradeCheck = 2600;
+				LastUpgradeCheck = 2650;
 				TargetAttributes = {
 					8ECCCD692F15E24600FFB286 = {
 						CreatedOnToolsVersion = 26.0.1;
@@ -101,7 +148,8 @@
 			mainGroup = 8ECCCD612F15E24600FFB286;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				81D8A9F9F9818A4843D8D40A /* WhisperKit */,
+				81D8A9F9F9818A4843D8D40A /* XCRemoteSwiftPackageReference "WhisperKit" */,
+				7E59D3062FF9DCEE005C7F4B /* XCRemoteSwiftPackageReference "FluidAudio" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 8ECCCD6B2F15E24600FFB286 /* Products */;
@@ -132,25 +180,6 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
-
-/* Begin XCRemoteSwiftPackageReference section */
-		81D8A9F9F9818A4843D8D40A /* WhisperKit */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/argmaxinc/WhisperKit.git";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 0.9.0;
-			};
-		};
-/* End XCRemoteSwiftPackageReference section */
-
-/* Begin XCSwiftPackageProductDependency section */
-		6671A7855FACA8A9417F95BE /* WhisperKit */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 81D8A9F9F9818A4843D8D40A /* WhisperKit */;
-			productName = WhisperKit;
-		};
-/* End XCSwiftPackageProductDependency section */
 
 /* Begin XCBuildConfiguration section */
 		8ECCCD892F15E24800FFB286 /* Debug */ = {
@@ -187,8 +216,9 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = dwarf;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 5XZ5XQ2F3F;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
@@ -212,6 +242,7 @@
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 			};
@@ -251,8 +282,9 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 5XZ5XQ2F3F;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
@@ -269,6 +301,7 @@
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
 			};
 			name = Release;
@@ -280,16 +313,20 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = TeenageEngVoiceSync/TeenageEngVoiceSync.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
-				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 7P9UN8DHNA;
+				DEAD_CODE_STRIPPING = YES;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Vendor/TP7MTP",
+				);
 				INFOPLIST_KEY_CFBundleDisplayName = "TP-7 VoiceSync";
 				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_NSAppleEventsUsageDescription = "TP-7 VoiceSync needs to access Notes to save your transcriptions.";
@@ -297,6 +334,10 @@
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
+				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Vendor/TP7MTP",
 				);
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = mscontrol.ai.TeenageEngVoiceSync;
@@ -307,6 +348,7 @@
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "TeenageEngVoiceSync/TP7MTPBridging.h";
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 			};
@@ -319,16 +361,20 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = TeenageEngVoiceSync/TeenageEngVoiceSync.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
-				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 7P9UN8DHNA;
+				DEAD_CODE_STRIPPING = YES;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Vendor/TP7MTP",
+				);
 				INFOPLIST_KEY_CFBundleDisplayName = "TP-7 VoiceSync";
 				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_NSAppleEventsUsageDescription = "TP-7 VoiceSync needs to access Notes to save your transcriptions.";
@@ -336,6 +382,10 @@
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
+				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Vendor/TP7MTP",
 				);
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = mscontrol.ai.TeenageEngVoiceSync;
@@ -346,6 +396,7 @@
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "TeenageEngVoiceSync/TP7MTPBridging.h";
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 			};
@@ -373,6 +424,39 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		7E59D3062FF9DCEE005C7F4B /* XCRemoteSwiftPackageReference "FluidAudio" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/FluidInference/FluidAudio.git";
+			requirement = {
+				kind = versionRange;
+				maximumVersion = 1.0.0;
+				minimumVersion = 0.12.4;
+			};
+		};
+		81D8A9F9F9818A4843D8D40A /* XCRemoteSwiftPackageReference "WhisperKit" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/argmaxinc/WhisperKit.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.9.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		6671A7855FACA8A9417F95BE /* WhisperKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 81D8A9F9F9818A4843D8D40A /* XCRemoteSwiftPackageReference "WhisperKit" */;
+			productName = WhisperKit;
+		};
+		7E59D3072FF9DCEE005C7F4B /* FluidAudio */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 7E59D3062FF9DCEE005C7F4B /* XCRemoteSwiftPackageReference "FluidAudio" */;
+			productName = FluidAudio;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 8ECCCD622F15E24600FFB286 /* Project object */;
 }

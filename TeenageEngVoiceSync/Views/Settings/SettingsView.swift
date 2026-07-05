@@ -30,11 +30,6 @@ struct SettingsView: View {
                     Label("Transcription", systemImage: "text.bubble")
                 }
 
-            NotionSettingsView()
-                .tabItem {
-                    Label("Notion", systemImage: "note.text")
-                }
-
             AdvancedSettingsView()
                 .tabItem {
                     Label("Advanced", systemImage: "slider.horizontal.3")

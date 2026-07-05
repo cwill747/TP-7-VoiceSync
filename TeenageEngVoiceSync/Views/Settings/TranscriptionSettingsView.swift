@@ -16,6 +16,7 @@ struct TranscriptionSettingsView: View {
     @AppStorage("transcription.provider") private var transcriptionProviderRaw = TranscriptionProviderKind.elevenLabs.rawValue
     @AppStorage("elevenlabs.model") private var elevenLabsModel = "scribe_v1"
     @AppStorage("whisperkit.model") private var whisperKitModel = "base"
+    @AppStorage("parakeet.model") private var parakeetModel = ParakeetModelVariant.v3.rawValue
     @AppStorage("s3.backupAfterTranscription") private var whisperKitBackupToS3 = true
     @AppStorage("s3.enabled") private var s3Enabled = false
 
@@ -28,6 +29,10 @@ struct TranscriptionSettingsView: View {
     @AppStorage("markdown.enabled") private var markdownEnabled = false
     @AppStorage("markdown.folderPath") private var markdownFolderPath = ""
 
+    // Notion settings
+    @AppStorage("notion.enabled") private var notionEnabled = false
+    @AppStorage("notion.databaseId") private var notionDatabaseId = ""
+
     // LLM settings
     @AppStorage("openrouter.enabled") private var llmEnabled = false
     @AppStorage("openrouter.model") private var selectedLLMModel = ""
@@ -35,22 +40,32 @@ struct TranscriptionSettingsView: View {
     // State
     @State private var hasElevenLabsKey = false
     @State private var hasOpenRouterKey = false
-    @State private var whisperKitDownloadState: WhisperKitDownloadState = .notDownloaded
+    @State private var whisperKitDownloadState: ModelDownloadState = .notDownloaded
     @State private var whisperKitDownloadProgress = 0.0
     @State private var whisperKitDownloadError: String?
+    @State private var parakeetDownloadState: ModelDownloadState = .notDownloaded
+    @State private var parakeetDownloadProgress = 0.0
+    @State private var parakeetDownloadError: String?
+    @State private var parakeetDownloadPhaseText: String?
+    @State private var parakeetDownloadTask: Task<Void, Never>?
     @State private var availableLLMModels: [OpenRouterModel] = []
     @State private var isLoadingModels = false
     @State private var isTestingNote = false
     @State private var testNoteStatus: TestStatus?
     @State private var markdownInputPath = ""
     @State private var markdownValidationStatus: ValidationStatus?
+    @State private var notionAPIKey = ""
+    @State private var showNotionKey = false
+    @State private var notionStatus: String?
+    @State private var isValidatingNotion = false
+    @State private var isLoadingNotionKey = true
 
     enum ValidationStatus {
         case success
         case error(String)
     }
 
-    enum WhisperKitDownloadState {
+    enum ModelDownloadState {
         case notDownloaded
         case downloading
         case ready
@@ -83,6 +98,8 @@ struct TranscriptionSettingsView: View {
         case .elevenLabs:
             return hasElevenLabsKey
         case .whisperKit:
+            return true
+        case .parakeet:
             return true
         }
     }
@@ -204,6 +221,61 @@ struct TranscriptionSettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+
+                if transcriptionProvider == .parakeet {
+                    Picker("Model", selection: $parakeetModel) {
+                        ForEach(ParakeetModelVariant.allCases) { variant in
+                            Text(variant.displayName).tag(variant.rawValue)
+                        }
+                    }
+                    .disabled(parakeetDownloadState == .downloading)
+                    .onChange(of: parakeetModel) { _, _ in
+                        refreshParakeetStatus()
+                        appState.reloadServices()
+                    }
+
+                    HStack {
+                        Button("Download Model") {
+                            downloadParakeetModel()
+                        }
+                        .disabled(parakeetDownloadState == .downloading)
+
+                        if parakeetDownloadState == .downloading {
+                            ProgressView(value: parakeetDownloadProgress)
+                                .frame(width: 120)
+
+                            Button("Cancel") {
+                                cancelParakeetDownload()
+                            }
+                            .buttonStyle(.borderless)
+                        }
+                    }
+
+                    if let errorMessage = parakeetDownloadError {
+                        Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.red)
+                            .font(.caption)
+                    } else {
+                        switch parakeetDownloadState {
+                        case .notDownloaded:
+                            Label("Model not downloaded yet", systemImage: "icloud.and.arrow.down")
+                                .foregroundStyle(.secondary)
+                                .font(.caption)
+                        case .downloading:
+                            Label(parakeetDownloadPhaseText ?? "Downloading model...", systemImage: "arrow.down.circle")
+                                .foregroundStyle(.secondary)
+                                .font(.caption)
+                        case .ready:
+                            Label("Model downloaded", systemImage: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                                .font(.caption)
+                        }
+                    }
+
+                    Text("Runs locally on the Apple Neural Engine. First transcription downloads the model if you skip this.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             // MARK: - Apple Notes Integration
@@ -317,20 +389,82 @@ struct TranscriptionSettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
+            // MARK: - Notion Integration
+            Section("Notion Integration") {
+                Toggle("Send transcriptions to Notion", isOn: $notionEnabled)
+                    .disabled(!transcriptionActive || isLoadingNotionKey)
+
+                if !transcriptionActive {
+                    Text("Enable transcription above to use Notion integration")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                if notionEnabled {
+                    HStack {
+                        if showNotionKey {
+                            TextField("Integration Secret (ntn_… or secret_…)", text: $notionAPIKey)
+                                .textFieldStyle(.roundedBorder)
+                        } else {
+                            SecureField("Integration Secret (ntn_… or secret_…)", text: $notionAPIKey)
+                                .textFieldStyle(.roundedBorder)
+                        }
+                        Button { showNotionKey.toggle() } label: {
+                            Image(systemName: showNotionKey ? "eye.slash" : "eye")
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                    .disabled(isLoadingNotionKey)
+
+                    TextField("Database ID (32-char hex from the DB URL)", text: $notionDatabaseId)
+                        .textFieldStyle(.roundedBorder)
+                        .disabled(isLoadingNotionKey)
+
+                    HStack {
+                        Button(isValidatingNotion ? "Validating…" : "Save & Validate") {
+                            Task { await saveAndValidateNotion() }
+                        }
+                        .disabled(isLoadingNotionKey || isValidatingNotion || notionAPIKey.isEmpty || notionDatabaseId.isEmpty)
+
+                        if let notionStatus {
+                            Text(notionStatus)
+                                .font(.caption)
+                                .foregroundStyle(notionStatus == "Connected" ? .green : .red)
+                        }
+                    }
+
+                    Text("Create an integration at notion.so/my-integrations, then share your database with it via ••• → Connections.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Text("Creates a page per recording in your Notion database, alongside Apple Notes or Markdown if enabled")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             // MARK: - Notes Status
             Section {
-                if !notesEnabled && !markdownEnabled && transcriptionActive {
-                    Label("Enable Apple Notes or Markdown to save transcriptions", systemImage: "exclamationmark.triangle")
+                if !notesEnabled && !markdownEnabled && !notionEnabled && transcriptionActive {
+                    Label("Enable Apple Notes, Markdown, or Notion to save transcriptions", systemImage: "exclamationmark.triangle")
                         .foregroundStyle(.orange)
                         .font(.caption)
-                } else if notesEnabled {
-                    Label("Transcriptions will be saved to Apple Notes", systemImage: "note.text")
-                        .foregroundStyle(.blue)
-                        .font(.caption)
-                } else if markdownEnabled {
-                    Label("Transcriptions will be saved as markdown files", systemImage: "doc.text")
-                        .foregroundStyle(.green)
-                        .font(.caption)
+                } else {
+                    if notesEnabled {
+                        Label("Transcriptions will be saved to Apple Notes", systemImage: "note.text")
+                            .foregroundStyle(.blue)
+                            .font(.caption)
+                    } else if markdownEnabled {
+                        Label("Transcriptions will be saved as markdown files", systemImage: "doc.text")
+                            .foregroundStyle(.green)
+                            .font(.caption)
+                    }
+
+                    if notionEnabled {
+                        Label("Transcriptions will be synced to Notion", systemImage: "note.text")
+                            .foregroundStyle(.purple)
+                            .font(.caption)
+                    }
                 }
             }
 
@@ -402,7 +536,9 @@ struct TranscriptionSettingsView: View {
         .task {
             ensureTranscriptionDefaults()
             await checkAPIKeys()
+            await loadNotionSettings()
             refreshWhisperKitStatus()
+            refreshParakeetStatus()
             if hasOpenRouterKey {
                 await loadModels()
             }
@@ -450,6 +586,58 @@ struct TranscriptionSettingsView: View {
         }
     }
 
+    private func refreshParakeetStatus() {
+        parakeetDownloadError = nil
+        let variant = ParakeetModelVariant(rawValue: parakeetModel) ?? .v3
+        parakeetDownloadState = ParakeetService.cachedModelExists(for: variant) ? .ready : .notDownloaded
+    }
+
+    private func downloadParakeetModel() {
+        parakeetDownloadError = nil
+        parakeetDownloadProgress = 0
+        parakeetDownloadPhaseText = "Listing files…"
+        parakeetDownloadState = .downloading
+
+        let variant = ParakeetModelVariant(rawValue: parakeetModel) ?? .v3
+        parakeetDownloadTask = Task {
+            do {
+                try await ParakeetService.downloadModel(variant: variant) { status in
+                    Task { @MainActor in
+                        parakeetDownloadProgress = status.fractionCompleted
+                        parakeetDownloadPhaseText = status.phaseDescription
+                    }
+                }
+                await MainActor.run {
+                    parakeetDownloadState = .ready
+                    parakeetDownloadPhaseText = nil
+                    appState.reloadServices()
+                }
+            } catch is CancellationError {
+                await MainActor.run {
+                    parakeetDownloadState = .notDownloaded
+                    parakeetDownloadPhaseText = nil
+                }
+            } catch {
+                if (error as? URLError)?.code == .cancelled {
+                    await MainActor.run {
+                        parakeetDownloadState = .notDownloaded
+                        parakeetDownloadPhaseText = nil
+                    }
+                    return
+                }
+                await MainActor.run {
+                    parakeetDownloadState = .notDownloaded
+                    parakeetDownloadError = error.localizedDescription
+                    parakeetDownloadPhaseText = nil
+                }
+            }
+        }
+    }
+
+    private func cancelParakeetDownload() {
+        parakeetDownloadTask?.cancel()
+    }
+
     private func downloadWhisperKitModel() {
         whisperKitDownloadError = nil
         whisperKitDownloadProgress = 0
@@ -495,6 +683,24 @@ struct TranscriptionSettingsView: View {
         } catch {
             AppLogger.app.error("Failed to load OpenRouter models: \(String(describing: error), privacy: .public)")
         }
+    }
+
+    private func loadNotionSettings() async {
+        notionAPIKey = (try? await KeychainService.shared.retrieve(for: .notionAPIKey)) ?? ""
+        isLoadingNotionKey = false
+    }
+
+    private func saveAndValidateNotion() async {
+        isValidatingNotion = true
+        notionStatus = nil
+        do {
+            try await KeychainService.shared.save(notionAPIKey, for: .notionAPIKey)
+            try await NotionService.validate(apiKey: notionAPIKey, databaseId: notionDatabaseId)
+            notionStatus = "Connected"
+        } catch {
+            notionStatus = "Failed: \(error.localizedDescription)"
+        }
+        isValidatingNotion = false
     }
 
     private func testNoteCreation() {

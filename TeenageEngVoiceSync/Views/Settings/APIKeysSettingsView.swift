@@ -66,7 +66,7 @@ struct APIKeysSettingsView: View {
                     }
                     .disabled(isLoading)
 
-                    Text("Used to upload recordings to your S3 bucket")
+                    Text("Used to upload recordings to your S3 bucket (AWS S3 or Backblaze B2)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
 
@@ -92,7 +92,7 @@ struct APIKeysSettingsView: View {
                     }
                 }
             } header: {
-                Label("AWS S3", systemImage: "cloud")
+                Label("S3 Storage", systemImage: "cloud")
             }
 
             // MARK: - ElevenLabs Section
@@ -262,7 +262,8 @@ struct APIKeysSettingsView: View {
         defer { isVerifyingAWS = false }
 
         let bucket = UserDefaults.standard.string(forKey: "s3.bucket") ?? ""
-        let region = UserDefaults.standard.string(forKey: "s3.region") ?? "us-east-1"
+        let provider = S3Provider(rawValue: UserDefaults.standard.string(forKey: "s3.provider") ?? "") ?? .aws
+        let region = UserDefaults.standard.string(forKey: "s3.region") ?? provider.defaultRegion
         let prefix = UserDefaults.standard.string(forKey: "s3.prefix") ?? "recordings/"
 
         guard !bucket.isEmpty else {
@@ -275,7 +276,8 @@ struct APIKeysSettingsView: View {
             region: region,
             prefix: prefix,
             accessKeyId: awsAccessKeyId,
-            secretAccessKey: awsSecretAccessKey
+            secretAccessKey: awsSecretAccessKey,
+            provider: provider
         )
 
         do {

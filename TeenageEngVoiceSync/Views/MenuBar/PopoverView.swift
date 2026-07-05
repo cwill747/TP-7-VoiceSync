@@ -65,6 +65,7 @@ struct PopoverView: View {
             // Actions
             HStack {
                 Button("Open Recordings") {
+                    NSApplication.shared.activate(ignoringOtherApps: true)
                     openWindow(id: "main")
                 }
                 .buttonStyle(.borderless)
@@ -72,6 +73,7 @@ struct PopoverView: View {
                 Spacer()
 
                 Button {
+                    NSApplication.shared.activate(ignoringOtherApps: true)
                     openSettings()
                 } label: {
                     Image(systemName: "gear")

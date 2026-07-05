@@ -63,6 +63,43 @@ actor ParakeetService: TranscriptionProvider {
         self.variant = ParakeetModelVariant(rawValue: modelVersion) ?? .v3
     }
 
+    /// Whether the CoreML models for this variant are already cached on disk.
+    static func cachedModelExists(for variant: ParakeetModelVariant) -> Bool {
+        let directory = AsrModels.defaultCacheDirectory(for: variant.asrVersion)
+        return AsrModels.modelsExist(at: directory, version: variant.asrVersion)
+    }
+
+    /// Snapshot of an in-progress model download, for UI display.
+    struct DownloadStatus: Sendable {
+        let fractionCompleted: Double
+        let phaseDescription: String
+    }
+
+    /// Downloads (but does not load) the CoreML models for this variant, reporting progress.
+    ///
+    /// Cancellable: cancelling the enclosing `Task` propagates into FluidAudio's
+    /// `URLSession`-based transfers (Swift's async URLSession APIs observe task
+    /// cancellation and abort the in-flight request), surfacing as `CancellationError`.
+    static func downloadModel(
+        variant: ParakeetModelVariant,
+        progressHandler: @escaping @Sendable (DownloadStatus) -> Void
+    ) async throws {
+        _ = try await AsrModels.download(version: variant.asrVersion) { progress in
+            let phaseDescription: String
+            switch progress.phase {
+            case .listing:
+                phaseDescription = "Listing files…"
+            case .downloading(let completed, let total) where total > 0:
+                phaseDescription = "Downloading files… (\(completed)/\(total))"
+            case .downloading:
+                phaseDescription = "Downloading…"
+            case .compiling:
+                phaseDescription = "Compiling model…"
+            }
+            progressHandler(DownloadStatus(fractionCompleted: progress.fractionCompleted, phaseDescription: phaseDescription))
+        }
+    }
+
     // MARK: - TranscriptionProvider
 
     func transcribe(localPath: String) async throws -> TranscriptionResult {
@@ -73,7 +110,8 @@ actor ParakeetService: TranscriptionProvider {
         // resampling to the 16 kHz mono Float32 tensors Parakeet expects), which
         // the docs recommend over decoding samples by hand.
         let url = URL(fileURLWithPath: localPath)
-        let result = try await manager.transcribe(url, source: .system)
+        var decoderState = TdtDecoderState.make()
+        let result = try await manager.transcribe(url, decoderState: &decoderState)
 
         let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else {

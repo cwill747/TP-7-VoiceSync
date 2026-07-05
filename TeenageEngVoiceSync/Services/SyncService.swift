@@ -165,16 +165,20 @@ final class SyncService {
     func deleteRecording(_ recording: Recording) async {
         AppLogger.sync.info("Delete requested for recording \(recording.filename, privacy: .private)")
 
-        // 1. Try device deletion (if connected and file exists)
-        if deviceWatch.isConnected,
-           FileManager.default.fileExists(atPath: recording.localPath) {
-            do {
-                try FileManager.default.removeItem(atPath: recording.localPath)
+        // 1. Try device deletion over MTP (if connected)
+        if deviceWatch.isConnected {
+            switch await deviceWatch.deleteFromDevice(filename: recording.filename) {
+            case .success:
                 AppLogger.sync.info("Removed recording from device: \(recording.filename, privacy: .private)")
-            } catch {
-                AppLogger.sync.info("Could not delete from device (may be read-only): \(String(describing: error), privacy: .public)")
+            case .failure(let error):
+                AppLogger.sync.info("Could not delete from device: \(error.localizedDescription, privacy: .public)")
                 // Continue - not a fatal error
             }
+        }
+
+        // Remove the locally cached copy downloaded from the device
+        if FileManager.default.fileExists(atPath: recording.localPath) {
+            try? FileManager.default.removeItem(atPath: recording.localPath)
         }
 
         // 2. Delete from S3
@@ -214,7 +218,8 @@ final class SyncService {
             // Load S3 credentials only if S3 is enabled
             let s3Enabled = UserDefaults.standard.bool(forKey: "s3.enabled")
             let bucket = UserDefaults.standard.string(forKey: "s3.bucket") ?? ""
-            let region = UserDefaults.standard.string(forKey: "s3.region") ?? "us-east-1"
+            let s3Provider = S3Provider(rawValue: UserDefaults.standard.string(forKey: "s3.provider") ?? "") ?? .aws
+            let region = UserDefaults.standard.string(forKey: "s3.region") ?? s3Provider.defaultRegion
             let prefix = UserDefaults.standard.string(forKey: "s3.prefix") ?? "recordings/"
 
             if s3Enabled && !bucket.isEmpty {
@@ -227,7 +232,8 @@ final class SyncService {
                         region: region,
                         prefix: prefix,
                         accessKeyId: accessKey,
-                        secretAccessKey: secretKey
+                        secretAccessKey: secretKey,
+                        provider: s3Provider
                     )
                 }
             }

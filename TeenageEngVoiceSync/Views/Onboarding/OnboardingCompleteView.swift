@@ -55,7 +55,7 @@ struct OnboardingCompleteView: View {
                     // Show either S3 or Local Audio Folder
                     if s3Configured {
                         configRow(
-                            title: "AWS S3 Storage",
+                            title: "S3 Storage",
                             configured: true,
                             required: false
                         )

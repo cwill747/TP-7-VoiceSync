@@ -2,16 +2,48 @@
 //  S3Service.swift
 //  TeenageEngVoiceSync
 //
-//  AWS S3 upload and presigned URL service.
+//  S3-compatible upload and presigned URL service (AWS S3, Backblaze B2, etc).
 //  Uses URLSession with AWS Signature V4 signing.
 //
 
 import Foundation
 import CryptoKit
 
+/// S3-compatible storage providers supported by the app.
+enum S3Provider: String, CaseIterable, Identifiable, Codable {
+    case aws
+    case backblazeB2
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .aws: return "AWS S3"
+        case .backblazeB2: return "Backblaze B2"
+        }
+    }
+
+    var defaultRegion: String {
+        switch self {
+        case .aws: return "us-east-1"
+        case .backblazeB2: return "us-west-004"
+        }
+    }
+
+    /// Virtual-hosted-style endpoint host, e.g. "s3.us-east-1.amazonaws.com".
+    /// The bucket name is prepended by the caller: "\(bucket).\(endpointHost)".
+    func endpointHost(region: String) -> String {
+        switch self {
+        case .aws: return "s3.\(region).amazonaws.com"
+        case .backblazeB2: return "s3.\(region).backblazeb2.com"
+        }
+    }
+}
+
 actor S3Service {
     private let bucket: String
     private let region: String
+    private let endpointHost: String
     private let prefix: String
     private let accessKeyId: String
     private let secretAccessKey: String
@@ -29,10 +61,12 @@ actor S3Service {
         region: String,
         prefix: String,
         accessKeyId: String,
-        secretAccessKey: String
+        secretAccessKey: String,
+        provider: S3Provider = .aws
     ) {
         self.bucket = bucket
         self.region = region
+        self.endpointHost = provider.endpointHost(region: region)
         self.prefix = prefix
         self.accessKeyId = accessKeyId
         self.secretAccessKey = secretAccessKey
@@ -57,7 +91,7 @@ actor S3Service {
         let fileSize = attributes[.size] as? Int64 ?? Int64(data.count)
 
         // Create request
-        let url = URL(string: "https://\(bucket).s3.\(region).amazonaws.com/\(s3Key)")!
+        let url = URL(string: "https://\(bucket).\(endpointHost)/\(s3Key)")!
         var request = URLRequest(url: url)
         request.httpMethod = "PUT"
         request.httpBody = data
@@ -96,7 +130,7 @@ actor S3Service {
 
         let amzDate = amzDateString(from: date)
 
-        let host = "\(bucket).s3.\(region).amazonaws.com"
+        let host = "\(bucket).\(endpointHost)"
         let canonicalURI = "/" + s3Key.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed)!
 
         // Canonical query string
@@ -170,7 +204,7 @@ actor S3Service {
 
     /// Delete an object from S3
     func deleteObject(s3Key: String) async throws {
-        let url = URL(string: "https://\(bucket).s3.\(region).amazonaws.com/\(s3Key)")!
+        let url = URL(string: "https://\(bucket).\(endpointHost)/\(s3Key)")!
         var request = URLRequest(url: url)
         request.httpMethod = "DELETE"
 
@@ -185,7 +219,7 @@ actor S3Service {
 
     /// Validate bucket access
     func validateBucket() async throws {
-        let url = URL(string: "https://\(bucket).s3.\(region).amazonaws.com/")!
+        let url = URL(string: "https://\(bucket).\(endpointHost)/")!
         var request = URLRequest(url: url)
         request.httpMethod = "HEAD"
 
