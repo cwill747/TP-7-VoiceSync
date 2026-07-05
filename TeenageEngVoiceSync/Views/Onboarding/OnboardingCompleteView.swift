@@ -14,6 +14,7 @@ struct OnboardingCompleteView: View {
     let openRouterConfigured: Bool
     let appleNotesConfigured: Bool
     let localMarkdownFolderConfigured: Bool
+    let notionConfigured: Bool
 
     @AppStorage("transcription.provider") private var transcriptionProviderRaw = TranscriptionProviderKind.elevenLabs.rawValue
 
@@ -70,6 +71,12 @@ struct OnboardingCompleteView: View {
                     configRow(
                         title: "OpenRouter AI Titles",
                         configured: openRouterConfigured,
+                        required: false
+                    )
+
+                    configRow(
+                        title: "Notion Integration",
+                        configured: notionConfigured,
                         required: false
                     )
 
@@ -138,7 +145,8 @@ struct OnboardingCompleteView: View {
         localAudioFolderConfigured: false,
         openRouterConfigured: false,
         appleNotesConfigured: false,
-        localMarkdownFolderConfigured: true
+        localMarkdownFolderConfigured: true,
+        notionConfigured: false
     )
     .frame(width: 600, height: 440)
 }

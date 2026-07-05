@@ -15,6 +15,7 @@ enum OnboardingStep: Int, CaseIterable {
     case openRouter
     case appleNotes
     case localMarkdownFolder  // Only shown if Apple Notes is skipped
+    case notion
     case complete
 
     var title: String {
@@ -26,6 +27,7 @@ enum OnboardingStep: Int, CaseIterable {
         case .openRouter: return "OpenRouter"
         case .appleNotes: return "Apple Notes"
         case .localMarkdownFolder: return "Notes Folder"
+        case .notion: return "Notion"
         case .complete: return "Complete"
         }
     }
@@ -34,7 +36,7 @@ enum OnboardingStep: Int, CaseIterable {
         switch self {
         case .welcome, .transcription, .complete: return false
         case .localAudioFolder, .localMarkdownFolder: return false  // Required fallback steps
-        case .s3Setup, .openRouter, .appleNotes: return true
+        case .s3Setup, .openRouter, .appleNotes, .notion: return true
         }
     }
 }
@@ -54,6 +56,7 @@ struct OnboardingView: View {
     @State private var appleNotesConfigured = false
     @State private var appleNotesSkipped = false
     @State private var localMarkdownFolderConfigured = false
+    @State private var notionConfigured = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -96,6 +99,7 @@ struct OnboardingView: View {
             steps.append(.localMarkdownFolder)
         }
 
+        steps.append(.notion)
         steps.append(.complete)
         return steps
     }
@@ -169,6 +173,8 @@ struct OnboardingView: View {
             OnboardingAppleNotesView(isConfigured: $appleNotesConfigured)
         case .localMarkdownFolder:
             OnboardingLocalMarkdownFolderView(isConfigured: $localMarkdownFolderConfigured)
+        case .notion:
+            OnboardingNotionView(isConfigured: $notionConfigured)
         case .complete:
             OnboardingCompleteView(
                 transcriptionConfigured: transcriptionConfigured,
@@ -176,7 +182,8 @@ struct OnboardingView: View {
                 localAudioFolderConfigured: localAudioFolderConfigured,
                 openRouterConfigured: openRouterConfigured,
                 appleNotesConfigured: appleNotesConfigured,
-                localMarkdownFolderConfigured: localMarkdownFolderConfigured
+                localMarkdownFolderConfigured: localMarkdownFolderConfigured,
+                notionConfigured: notionConfigured
             )
         }
     }
@@ -279,7 +286,7 @@ struct OnboardingView: View {
             if appleNotesConfigured {
                 // Apple Notes configured, skip local markdown folder step
                 appleNotesSkipped = false
-                currentStep = .complete
+                currentStep = .notion
             } else if appleNotesSkipped {
                 // Apple Notes skipped, go to local markdown folder
                 currentStep = .localMarkdownFolder
@@ -290,7 +297,7 @@ struct OnboardingView: View {
             }
 
         case .localMarkdownFolder:
-            currentStep = .complete
+            currentStep = .notion
 
         default:
             // Standard sequential navigation
@@ -315,12 +322,15 @@ struct OnboardingView: View {
         case .localMarkdownFolder:
             currentStep = .appleNotes
 
-        case .complete:
+        case .notion:
             if appleNotesSkipped && !appleNotesConfigured {
                 currentStep = .localMarkdownFolder
             } else {
                 currentStep = .appleNotes
             }
+
+        case .complete:
+            currentStep = .notion
 
         default:
             // Standard sequential navigation

@@ -57,6 +57,7 @@ struct TranscriptionSettingsView: View {
     @State private var notionAPIKey = ""
     @State private var showNotionKey = false
     @State private var notionStatus: String?
+    @State private var notionWarnings: [String] = []
     @State private var isValidatingNotion = false
     @State private var isLoadingNotionKey = true
 
@@ -421,7 +422,7 @@ struct TranscriptionSettingsView: View {
                         .disabled(isLoadingNotionKey)
 
                     HStack {
-                        Button(isValidatingNotion ? "Validating…" : "Save & Validate") {
+                        Button(isValidatingNotion ? "Connecting…" : "Save & Connect") {
                             Task { await saveAndValidateNotion() }
                         }
                         .disabled(isLoadingNotionKey || isValidatingNotion || notionAPIKey.isEmpty || notionDatabaseId.isEmpty)
@@ -433,7 +434,17 @@ struct TranscriptionSettingsView: View {
                         }
                     }
 
-                    Text("Create an integration at notion.so/my-integrations, then share your database with it via ••• → Connections.")
+                    if !notionWarnings.isEmpty {
+                        VStack(alignment: .leading, spacing: 2) {
+                            ForEach(notionWarnings, id: \.self) { warning in
+                                Text(warning)
+                                    .font(.caption)
+                                    .foregroundStyle(.orange)
+                            }
+                        }
+                    }
+
+                    Text("Create an integration at notion.so/my-integrations, then share your database with it via ••• → Connections. Any missing properties are added automatically.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -693,10 +704,13 @@ struct TranscriptionSettingsView: View {
     private func saveAndValidateNotion() async {
         isValidatingNotion = true
         notionStatus = nil
+        notionWarnings = []
         do {
             try await KeychainService.shared.save(notionAPIKey, for: .notionAPIKey)
-            try await NotionService.validate(apiKey: notionAPIKey, databaseId: notionDatabaseId)
+            let result = try await NotionService.provisionDatabase(apiKey: notionAPIKey, databaseId: notionDatabaseId)
+            result.props.store()
             notionStatus = "Connected"
+            notionWarnings = result.warnings
         } catch {
             notionStatus = "Failed: \(error.localizedDescription)"
         }

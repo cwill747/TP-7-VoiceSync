@@ -601,7 +601,7 @@ final class SyncService {
             playURLString = u; downloadURLString = u
         }
 
-        let service = NotionService(apiKey: apiKey, databaseId: databaseId)
+        let service = NotionService(apiKey: apiKey, databaseId: databaseId, props: .loadStored())
         do {
             try await service.createTranscriptionNote(
                 transcription: transcription.text,

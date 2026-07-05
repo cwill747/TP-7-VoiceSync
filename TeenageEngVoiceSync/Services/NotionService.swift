@@ -9,17 +9,12 @@
 //   1. Create an internal integration at https://www.notion.so/my-integrations
 //      and copy its "Internal Integration Secret" (starts with `ntn_` or `secret_`).
 //   2. Share your target database with that integration (••• → Connections).
-//   3. The database must contain these properties (types matter, names are
-//      configurable below via NotionService.PropertyNames):
-//        - Name       (title)      -> page title
-//        - Date       (date)       -> recordedAt, so views can sort by date
-//        - Filename   (rich text)  -> TP-7 device filename
-//        - Duration   (rich text)  -> mm:ss
-//        - Language   (rich text)  -> detected language
-//        - Audio      (url)        -> playback/download link (S3 or file://)
-//        - Summary    (rich text)  -> optional LLM summary
-//      The full transcript is written into the page BODY (not a property),
-//      chunked to respect Notion's 2000-char-per-rich-text limit.
+//   3. Call provisionDatabase(apiKey:databaseId:) — it adds any of the
+//      properties below that are missing (Date, Filename, Duration,
+//      Language, Audio, Summary) and adopts whatever the database's
+//      existing title column is called. The full transcript is written
+//      into the page BODY (not a property), chunked to respect Notion's
+//      2000-char-per-rich-text limit.
 //
 
 import Foundation
@@ -28,7 +23,12 @@ actor NotionService {
 
     /// Property names in the target database. Change these if your DB uses
     /// different column names. `title` must be the DB's title property.
-    struct PropertyNames {
+    ///
+    /// `provisionDatabase` resolves the real names to use for a given
+    /// database (adapting to an existing title column, renaming around
+    /// collisions) and the result is persisted via `store()`/`loadStored()`
+    /// so `SyncService` uses the same mapping later.
+    struct PropertyNames: Codable {
         var title = "Name"
         var date = "Date"
         var filename = "Filename"
@@ -38,6 +38,29 @@ actor NotionService {
         var summary = "Summary"
 
         static let `default` = PropertyNames()
+
+        private static let storageKey = "notion.propertyNames"
+
+        static func loadStored() -> PropertyNames {
+            guard let data = UserDefaults.standard.data(forKey: storageKey),
+                  let decoded = try? JSONDecoder().decode(PropertyNames.self, from: data) else {
+                return .default
+            }
+            return decoded
+        }
+
+        func store() {
+            guard let data = try? JSONEncoder().encode(self) else { return }
+            UserDefaults.standard.set(data, forKey: Self.storageKey)
+        }
+    }
+
+    /// Result of `provisionDatabase`: the property names to actually use
+    /// (which may differ from the requested defaults) plus any warnings
+    /// about pre-existing columns that couldn't be reused.
+    struct ProvisionResult {
+        let props: PropertyNames
+        let warnings: [String]
     }
 
     enum NotionError: LocalizedError {
@@ -73,22 +96,92 @@ actor NotionService {
         self.session = URLSession(configuration: config)
     }
 
-    /// Lightweight validation: fetch the database to confirm token + ID + access.
-    static func validate(apiKey: String, databaseId: String) async throws {
+    /// Ensures the target database has every property this app needs,
+    /// creating whichever ones are missing. Adapts to the database's
+    /// existing title column (Notion allows only one) and, if a required
+    /// column name already exists with an incompatible type, creates an
+    /// alternate "TP7 <Name>" column instead of touching the existing one.
+    ///
+    /// Never modifies or deletes existing properties/values — it only adds
+    /// new columns via `PATCH /v1/databases/{id}`.
+    static func provisionDatabase(
+        apiKey: String,
+        databaseId: String,
+        desired: PropertyNames = .default
+    ) async throws -> ProvisionResult {
         guard !apiKey.isEmpty, !databaseId.isEmpty else {
             throw NotionError.notConfigured
         }
         let cleanId = databaseId.replacingOccurrences(of: "-", with: "")
-        var request = URLRequest(url: URL(string: "https://api.notion.com/v1/databases/\(cleanId)")!)
-        request.httpMethod = "GET"
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        request.setValue("2022-06-28", forHTTPHeaderField: "Notion-Version")
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        var getRequest = URLRequest(url: URL(string: "https://api.notion.com/v1/databases/\(cleanId)")!)
+        getRequest.httpMethod = "GET"
+        getRequest.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        getRequest.setValue("2022-06-28", forHTTPHeaderField: "Notion-Version")
+
+        let (data, response) = try await URLSession.shared.data(for: getRequest)
         guard let http = response as? HTTPURLResponse else { throw NotionError.invalidResponse }
         guard http.statusCode == 200 else {
             throw NotionError.apiError(statusCode: http.statusCode, message: Self.message(from: data))
         }
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let existingProps = json["properties"] as? [String: [String: Any]] else {
+            throw NotionError.invalidResponse
+        }
+
+        var resultProps = desired
+        var warnings: [String] = []
+        var toCreate: [String: Any] = [:]
+
+        // Every Notion database has exactly one title property; it may not
+        // be named "Name", so adopt whatever it's actually called.
+        if let titleEntry = existingProps.first(where: { ($0.value["type"] as? String) == "title" }) {
+            resultProps.title = titleEntry.key
+        }
+
+        // (keyPath, desired name, Notion property type, creation schema)
+        let required: [(WritableKeyPath<PropertyNames, String>, String, String, [String: Any])] = [
+            (\.date, desired.date, "date", ["date": [String: Any]()]),
+            (\.filename, desired.filename, "rich_text", ["rich_text": [String: Any]()]),
+            (\.duration, desired.duration, "rich_text", ["rich_text": [String: Any]()]),
+            (\.language, desired.language, "rich_text", ["rich_text": [String: Any]()]),
+            (\.audio, desired.audio, "url", ["url": [String: Any]()]),
+            (\.summary, desired.summary, "rich_text", ["rich_text": [String: Any]()])
+        ]
+
+        for (keyPath, name, type, schema) in required {
+            if let existing = existingProps[name] {
+                let existingType = existing["type"] as? String
+                if existingType == type {
+                    continue  // Already the right shape, reuse it as-is.
+                }
+                let altName = "TP7 \(name)"
+                warnings.append("\"\(name)\" already exists as \(existingType ?? "unknown") — using \"\(altName)\" instead.")
+                resultProps[keyPath: keyPath] = altName
+                if existingProps[altName] == nil {
+                    toCreate[altName] = schema
+                }
+            } else {
+                toCreate[name] = schema
+            }
+        }
+
+        if !toCreate.isEmpty {
+            var patchRequest = URLRequest(url: URL(string: "https://api.notion.com/v1/databases/\(cleanId)")!)
+            patchRequest.httpMethod = "PATCH"
+            patchRequest.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+            patchRequest.setValue("2022-06-28", forHTTPHeaderField: "Notion-Version")
+            patchRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            patchRequest.httpBody = try JSONSerialization.data(withJSONObject: ["properties": toCreate])
+
+            let (patchData, patchResponse) = try await URLSession.shared.data(for: patchRequest)
+            guard let patchHttp = patchResponse as? HTTPURLResponse else { throw NotionError.invalidResponse }
+            guard (200...299).contains(patchHttp.statusCode) else {
+                throw NotionError.apiError(statusCode: patchHttp.statusCode, message: Self.message(from: patchData))
+            }
+        }
+
+        return ProvisionResult(props: resultProps, warnings: warnings)
     }
 
     /// Creates a Notion page for a transcription. Signature parallels

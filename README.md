@@ -129,6 +129,7 @@ The wizard guides you through:
 - **Storage (choose one)**: S3 (optional) or a local folder on your Mac
 - **AI Titles (optional)**: OpenRouter
 - **Notes (optional)**: Apple Notes, or local Markdown files if you skip Notes
+- **Notion (optional)**: point it at a database and it provisions any missing properties for you
 
 After setup, **watching/syncing TP-7 recordings is enabled by default** (you can toggle it in **Settings > General**). If you run into weird syncing behavior right after initial setup or a permissions prompt, try **quitting the app and launching it again**.
 
@@ -181,6 +182,29 @@ OpenRouter provides LLM access for generating intelligent titles and summaries.
 2. Enable "Send to Apple Notes"
 3. Set your preferred folder name (default: "TP-7 Transcripts")
 4. Choose the link expiry duration for audio playback links
+
+### Step 6: Configure Notion (Optional)
+
+The app provisions the database for you — point it at any database (even a blank one) and it adds whatever properties are missing.
+
+1. Create an internal integration at [notion.so/my-integrations](https://www.notion.so/my-integrations) and copy its "Internal Integration Secret" (starts with `ntn_` or `secret_`)
+2. Share your target database with that integration: open the database, click **••• > Connections**, and add the integration
+3. Copy the database ID from its URL — the 32-character hex string right before `?v=`
+4. In the Setup Wizard (or **Settings > Transcription**), enter the Integration Secret and Database ID, then click "Provision & Connect"
+
+The app adds any of these properties that don't already exist — it never modifies or deletes existing columns or data:
+
+| Property   | Type      | Used for                                                   |
+| ---------- | --------- | ----------------------------------------------------------- |
+| *(title)*  | Title     | Page title — reuses whatever your title column is called   |
+| `Date`     | Date      | Recording date, so views can sort by date                  |
+| `Filename` | Rich text | TP-7 device filename                                        |
+| `Duration` | Rich text | Recording length (mm:ss)                                    |
+| `Language` | Rich text | Detected language                                            |
+| `Audio`    | URL       | Playback/download link (only set if S3 is enabled)          |
+| `Summary`  | Rich text | LLM-generated summary (only set if OpenRouter is enabled)   |
+
+The full transcript is written into the page body, not a property. If a property name already exists with an incompatible type (e.g. you already have a `Duration` number column), the app creates an alternate `TP7 Duration` column instead and shows a warning.
 
 ## Permissions & Privacy
 
