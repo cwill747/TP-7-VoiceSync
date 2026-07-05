@@ -8,6 +8,7 @@
 
 import SwiftUI
 import SwiftData
+import os
 
 @main
 struct TeenageEngVoiceSyncApp: App {
@@ -25,7 +26,9 @@ struct TeenageEngVoiceSyncApp: App {
         do {
             let schema = Schema([
                 Recording.self,
-                Device.self
+                Device.self,
+                Person.self,
+                VoiceSample.self
             ])
 
             let appSupportURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -63,6 +66,7 @@ struct TeenageEngVoiceSyncApp: App {
                     menuBarManager.initializeMenuBar()
 
                     await appState.initialize(modelContext: modelContainer.mainContext)
+                    migrateEnrolledSpeakerIfNeeded(context: modelContainer.mainContext)
 
                     if !hasCompletedOnboarding {
                         openWindow(id: "onboarding")
@@ -87,5 +91,28 @@ struct TeenageEngVoiceSyncApp: App {
         }
         .windowResizability(.contentSize)
         .defaultPosition(.center)
+    }
+
+    /// One-time migration: if the old single-user EnrolledSpeakerProfile exists in UserDefaults,
+    /// create a Person(isSelf: true) from it and clear the blob so we don't migrate twice.
+    private func migrateEnrolledSpeakerIfNeeded(context: ModelContext) {
+        guard let profile = ParakeetService.EnrolledSpeakerProfile.loadStored() else { return }
+
+        let descriptor = FetchDescriptor<Person>(predicate: #Predicate { $0.isSelf == true })
+        let existing = try? context.fetch(descriptor)
+        guard existing?.isEmpty != false else {
+            // Already migrated — just clear the UserDefaults blob
+            ParakeetService.EnrolledSpeakerProfile.clearStored()
+            return
+        }
+
+        let person = Person(name: profile.name, isSelf: true, embedding: profile.embedding)
+        let sample = VoiceSample(startTime: 0, endTime: 0, embedding: profile.embedding)
+        sample.person = person
+        context.insert(person)
+        context.insert(sample)
+        try? context.save()
+        ParakeetService.EnrolledSpeakerProfile.clearStored()
+        AppLogger.app.info("Migrated enrolled speaker \"\(profile.name, privacy: .private)\" to Person model")
     }
 }

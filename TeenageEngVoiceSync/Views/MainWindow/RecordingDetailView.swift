@@ -14,6 +14,7 @@ struct RecordingDetailView: View {
     let recording: Recording
     @Binding var selectedRecording: Recording?
     @Environment(AppState.self) private var appState
+    @Environment(\.modelContext) private var modelContext
     @State private var isRetranscribing = false
     @State private var isDeleting = false
     @State private var showDeleteConfirmation = false
@@ -175,20 +176,25 @@ struct RecordingDetailView: View {
             }
 
         case .completed:
-            if let text = recording.transcriptionText {
+            if let _ = recording.transcriptionText {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text(text)
-                        .textSelection(.enabled)
+                    // Show diarized correction view if segment data is available
+                    if let segData = recording.speakerSegmentsData,
+                       let segments = try? JSONDecoder().decode([StoredSpeakerSegment].self, from: segData),
+                       !segments.isEmpty {
+                        DiarizedTranscriptView(
+                            recording: recording,
+                            segments: segments
+                        )
+                    } else {
+                        PlainTranscriptView(
+                            text: recording.transcriptionText ?? "",
+                            language: recording.transcriptionLanguage
+                        )
+                    }
 
                     HStack {
-                        if let language = recording.transcriptionLanguage {
-                            Text("Language: \(language)")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-
                         Spacer()
-
                         Button {
                             sendToNotes()
                         } label: {
@@ -215,8 +221,6 @@ struct RecordingDetailView: View {
                         }
                     }
                 }
-                .padding()
-                .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
             }
 
         case .failed:
@@ -287,6 +291,244 @@ struct RecordingDetailView: View {
         }
     }
 }
+
+// MARK: - Plain transcript (no diarization)
+
+struct PlainTranscriptView: View {
+    let text: String
+    let language: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let lang = language {
+                Text("Language: \(lang)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Text(text)
+                .textSelection(.enabled)
+        }
+        .padding()
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+// MARK: - Diarized transcript with speaker correction
+
+struct DiarizedTranscriptView: View {
+    let recording: Recording
+    let segments: [StoredSpeakerSegment]
+
+    @Environment(\.modelContext) private var modelContext
+    @Environment(AppState.self) private var appState
+    @Query(sort: \Person.createdAt) private var persons: [Person]
+
+    @State private var localSegments: [StoredSpeakerSegment]
+
+    init(recording: Recording, segments: [StoredSpeakerSegment]) {
+        self.recording = recording
+        self.segments = segments
+        self._localSegments = State(initialValue: segments)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("Speakers")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                if !persons.isEmpty {
+                    Text("Tap a label to reassign")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .padding(.bottom, 6)
+
+            ForEach($localSegments) { $segment in
+                SpeakerSegmentView(
+                    segment: $segment,
+                    persons: persons,
+                    onReassign: { personId, personName in
+                        reassign(segment: &segment, personId: personId, personName: personName)
+                    },
+                    onNewPerson: { name in
+                        createAndAssign(segment: &segment, name: name)
+                    }
+                )
+            }
+        }
+        .padding()
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func reassign(segment: inout StoredSpeakerSegment, personId: String, personName: String) {
+        segment.assignedPersonName = personName
+        segment.assignedPersonId = personId
+
+        // Add this segment's audio as a VoiceSample for the chosen Person
+        if !segment.embedding.isEmpty, let person = persons.first(where: { $0.id == personId }) {
+            let sample = VoiceSample(
+                recordingFilename: recording.filename,
+                startTime: segment.startTime,
+                endTime: segment.endTime,
+                embedding: segment.embedding
+            )
+            sample.person = person
+            modelContext.insert(sample)
+            person.recomputeEmbedding()
+            try? modelContext.save()
+            Task { await appState.syncService?.refreshKnownSpeakers() }
+        }
+
+        persistSegments()
+    }
+
+    private func createAndAssign(segment: inout StoredSpeakerSegment, name: String) {
+        let person = Person(name: name)
+        modelContext.insert(person)
+
+        if !segment.embedding.isEmpty {
+            let sample = VoiceSample(
+                recordingFilename: recording.filename,
+                startTime: segment.startTime,
+                endTime: segment.endTime,
+                embedding: segment.embedding
+            )
+            sample.person = person
+            modelContext.insert(sample)
+            person.recomputeEmbedding()
+        }
+
+        try? modelContext.save()
+
+        segment.assignedPersonName = person.name
+        segment.assignedPersonId = person.id
+        persistSegments()
+        Task { await appState.syncService?.refreshKnownSpeakers() }
+    }
+
+    private func persistSegments() {
+        recording.speakerSegmentsData = try? JSONEncoder().encode(localSegments)
+        recording.transcriptionText = localSegments
+            .map { seg in
+                let label = seg.assignedPersonName ?? seg.rawSpeakerId
+                return "\(label): \(seg.text)"
+            }
+            .joined(separator: "\n\n")
+        recording.updatedAt = Date()
+        try? modelContext.save()
+    }
+}
+
+struct SpeakerSegmentView: View {
+    @Binding var segment: StoredSpeakerSegment
+    let persons: [Person]
+    let onReassign: (String, String) -> Void
+    let onNewPerson: (String) -> Void
+
+    @State private var showNewPersonPrompt = false
+    @State private var newPersonName = ""
+
+    private var displayLabel: String {
+        segment.assignedPersonName ?? segment.rawSpeakerId
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Menu {
+                    if !persons.isEmpty {
+                        Section("Assign to person") {
+                            ForEach(persons) { person in
+                                Button(person.name) {
+                                    onReassign(person.id, person.name)
+                                }
+                            }
+                        }
+                        Divider()
+                    }
+                    Button("New person…") {
+                        showNewPersonPrompt = true
+                    }
+                } label: {
+                    HStack(spacing: 3) {
+                        Text(displayLabel)
+                            .font(.subheadline.bold())
+                            .foregroundStyle(segment.assignedPersonName != nil ? .primary : .secondary)
+                        Image(systemName: "chevron.down")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+
+                Text(":")
+                    .font(.subheadline.bold())
+                    .foregroundStyle(.secondary)
+            }
+
+            Text(segment.text)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.vertical, 8)
+        .overlay(alignment: .bottom) {
+            Divider().padding(.top, 8)
+        }
+        .sheet(isPresented: $showNewPersonPrompt) {
+            NewPersonPrompt(
+                isPresented: $showNewPersonPrompt,
+                initialName: newPersonName,
+                onConfirm: { name in
+                    onNewPerson(name)
+                }
+            )
+        }
+    }
+}
+
+struct NewPersonPrompt: View {
+    @Binding var isPresented: Bool
+    let initialName: String
+    let onConfirm: (String) -> Void
+
+    @State private var name: String
+
+    init(isPresented: Binding<Bool>, initialName: String, onConfirm: @escaping (String) -> Void) {
+        self._isPresented = isPresented
+        self.initialName = initialName
+        self.onConfirm = onConfirm
+        self._name = State(initialValue: initialName)
+    }
+
+    var body: some View {
+        VStack(spacing: 20) {
+            Text("New Person")
+                .font(.headline)
+            TextField("Name", text: $name)
+                .textFieldStyle(.roundedBorder)
+            HStack {
+                Button("Cancel") { isPresented = false }
+                    .keyboardShortcut(.escape)
+                Spacer()
+                Button("Add") {
+                    onConfirm(name.trimmingCharacters(in: .whitespaces))
+                    isPresented = false
+                }
+                .keyboardShortcut(.return)
+                .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        .padding(24)
+        .frame(width: 300)
+    }
+}
+
+// MARK: - Audio player
 
 struct AudioPlayerView: View {
     let url: URL
@@ -397,5 +639,5 @@ struct AudioPlayerView: View {
         ),
         selectedRecording: $selected
     )
-    .modelContainer(for: Recording.self, inMemory: true)
+    .modelContainer(for: [Recording.self, Person.self, VoiceSample.self], inMemory: true)
 }

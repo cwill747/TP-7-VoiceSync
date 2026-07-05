@@ -44,6 +44,9 @@ final class Recording {
     // Notion integration
     var notionPageCreatedAt: Date?
 
+    // Diarization output — JSON-encoded [StoredSpeakerSegment]
+    var speakerSegmentsData: Data?
+
     // Metadata
     var createdAt: Date
     var updatedAt: Date
@@ -88,4 +91,42 @@ enum TranscriptionStatus: String, Codable {
     case processing
     case completed
     case failed
+}
+
+/// One speaker turn extracted during diarization, stored on the recording so
+/// labels can be corrected and the transcript re-derived without re-running ASR.
+struct StoredSpeakerSegment: Codable, Identifiable, Sendable {
+    var id: UUID
+    var startTime: TimeInterval
+    var endTime: TimeInterval
+    /// Raw speaker ID from the diarizer (opaque string, stable within a recording).
+    var rawSpeakerId: String
+    /// The words attributed to this segment.
+    var text: String
+    /// Speaker embedding extracted during diarization — used to add this segment
+    /// as a VoiceSample when the user corrects a label.
+    var embedding: [Float]
+    /// User-assigned person name (overrides the auto-resolved label).
+    var assignedPersonName: String?
+    /// Stable person ID so renaming a person doesn't lose the correction.
+    var assignedPersonId: String?
+
+    init(
+        startTime: TimeInterval,
+        endTime: TimeInterval,
+        rawSpeakerId: String,
+        text: String,
+        embedding: [Float],
+        assignedPersonName: String? = nil,
+        assignedPersonId: String? = nil
+    ) {
+        self.id = UUID()
+        self.startTime = startTime
+        self.endTime = endTime
+        self.rawSpeakerId = rawSpeakerId
+        self.text = text
+        self.embedding = embedding
+        self.assignedPersonName = assignedPersonName
+        self.assignedPersonId = assignedPersonId
+    }
 }

@@ -142,6 +142,9 @@ final class SyncService {
             recording.transcriptionStatus = .completed
             recording.transcribedAt = Date()
             recording.updatedAt = Date()
+            if let segs = result.speakerSegments, !segs.isEmpty {
+                recording.speakerSegmentsData = try? JSONEncoder().encode(segs)
+            }
 
             // Reset note tracking to allow new note creation after retranscription
             recording.appleNoteCreatedAt = nil
@@ -257,11 +260,33 @@ final class SyncService {
                 case .parakeet:
                     let modelVersion = UserDefaults.standard.string(forKey: ParakeetService.modelKey) ?? ParakeetModelVariant.v2.rawValue
                     let diarizationEnabled = UserDefaults.standard.bool(forKey: ParakeetService.diarizationEnabledKey)
-                    transcriptionProvider = ParakeetService(modelVersion: modelVersion, diarizationEnabled: diarizationEnabled)
+                    let profiles = fetchKnownPersonProfiles()
+                    transcriptionProvider = ParakeetService(
+                        modelVersion: modelVersion,
+                        diarizationEnabled: diarizationEnabled,
+                        knownPersonProfiles: profiles
+                    )
                 }
             }
         } catch {
             lastError = "Failed to load credentials: \(error.localizedDescription)"
+        }
+    }
+
+    /// Refreshes the known speaker roster in the active ParakeetService.
+    /// Call this after adding, removing, or re-enrolling a Person.
+    func refreshKnownSpeakers() async {
+        guard let parakeet = transcriptionProvider as? ParakeetService else { return }
+        let profiles = fetchKnownPersonProfiles()
+        await parakeet.updateKnownSpeakers(profiles)
+    }
+
+    private func fetchKnownPersonProfiles() -> [KnownPersonProfile] {
+        let descriptor = FetchDescriptor<Person>()
+        guard let persons = try? modelContext.fetch(descriptor) else { return [] }
+        return persons.compactMap { person in
+            guard !person.embedding.isEmpty else { return nil }
+            return KnownPersonProfile(personId: person.id, name: person.name, embedding: person.embedding)
         }
     }
 
@@ -564,6 +589,9 @@ final class SyncService {
             recording.transcriptionStatus = .completed
             recording.transcribedAt = Date()
             recording.updatedAt = Date()
+            if let segs = result.speakerSegments, !segs.isEmpty {
+                recording.speakerSegmentsData = try? JSONEncoder().encode(segs)
+            }
             try? modelContext.save()
             return result
         } catch {

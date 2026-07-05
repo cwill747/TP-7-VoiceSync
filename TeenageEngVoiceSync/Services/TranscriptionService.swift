@@ -178,6 +178,9 @@ struct TranscriptionResult: Codable, Sendable {
     let languageProbability: Double?
     let transcriptionId: String?
     let words: [TranscriptionWord]?
+    /// Populated only by `ParakeetService` when diarization is enabled.
+    /// Not decoded from API responses — synthesized locally.
+    var speakerSegments: [StoredSpeakerSegment]?
 }
 
 struct TranscriptionWord: Codable, Sendable {
