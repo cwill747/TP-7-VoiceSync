@@ -37,6 +37,9 @@ jobs:
         with:
           xcode-version: '26'
 
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+
       - name: Import signing certificate
         env:
           CERTIFICATE_BASE64: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_P12_BASE64 }}
@@ -94,6 +97,9 @@ jobs:
             exit 1
           fi
           echo "Using signing identity: $SIGNING_IDENTITY"
+
+          echo "Building libtp7mtp.dylib from source..."
+          CODESIGN_IDENTITY="$SIGNING_IDENTITY" nix develop --command ./scripts/build-tp7mtp.sh
 
           echo "Building archive..."
           xcodebuild -project "$PROJECT_NAME.xcodeproj" \

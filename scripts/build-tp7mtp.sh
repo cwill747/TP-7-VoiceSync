@@ -16,6 +16,7 @@ fi
 
 # Clear stale build cache if Go version changed since last build
 CACHE_VERSION_FILE="${GOPATH:-$HOME/go}/.tp7mtp-go-version"
+mkdir -p "$(dirname "$CACHE_VERSION_FILE")"
 CURRENT_GO="$(go version)"
 if [ -f "$CACHE_VERSION_FILE" ] && [ "$(cat "$CACHE_VERSION_FILE")" != "$CURRENT_GO" ]; then
     echo "Go version changed, clearing build cache..."
@@ -29,6 +30,21 @@ VENDOR_DIR="$REPO_ROOT/Vendor/TP7MTP"
 
 # Team identity for signing - set via env or default to ad-hoc
 CODESIGN_IDENTITY="${CODESIGN_IDENTITY:--}"
+
+echo "Copying libusb-1.0.0.dylib from the Nix store..."
+NIX_LIBUSB="$(pkg-config --variable=libdir libusb-1.0)/libusb-1.0.0.dylib"
+if [ ! -f "$NIX_LIBUSB" ]; then
+    echo "ERROR: libusb-1.0.0.dylib not found at $NIX_LIBUSB." >&2
+    exit 1
+fi
+cp "$NIX_LIBUSB" "$VENDOR_DIR/libusb-1.0.0.dylib"
+chmod +w "$VENDOR_DIR/libusb-1.0.0.dylib"
+
+# The Nix store copy's own install name is the absolute /nix/store path, not
+# @rpath - fix it so the dylib is relocatable outside the Nix store.
+install_name_tool -id \
+    "@rpath/libusb-1.0.0.dylib" \
+    "$VENDOR_DIR/libusb-1.0.0.dylib"
 
 echo "Building libtp7mtp.dylib..."
 cd "$NATIVE_DIR"
@@ -58,16 +74,10 @@ codesign --force --sign "$CODESIGN_IDENTITY" \
     --options runtime \
     "$VENDOR_DIR/libtp7mtp.dylib"
 
-# Also sign libusb if present and ad-hoc
-if [ -f "$VENDOR_DIR/libusb-1.0.0.dylib" ]; then
-    LIBUSB_SIG=$(codesign -d --verbose=2 "$VENDOR_DIR/libusb-1.0.0.dylib" 2>&1 || true)
-    if echo "$LIBUSB_SIG" | grep -q "adhoc"; then
-        echo "Signing libusb-1.0.0.dylib..."
-        codesign --force --sign "$CODESIGN_IDENTITY" \
-            --options runtime \
-            "$VENDOR_DIR/libusb-1.0.0.dylib"
-    fi
-fi
+echo "Signing libusb-1.0.0.dylib..."
+codesign --force --sign "$CODESIGN_IDENTITY" \
+    --options runtime \
+    "$VENDOR_DIR/libusb-1.0.0.dylib"
 
 echo "Verifying signatures..."
 codesign -dvv "$VENDOR_DIR/libtp7mtp.dylib" 2>&1 | grep -E "Authority|TeamIdentifier|Signature"
