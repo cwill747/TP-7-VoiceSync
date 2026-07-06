@@ -95,11 +95,17 @@ final class SyncService {
         await loadServices()
         AppLogger.sync.info("Services loaded (s3=\(self.s3Service != nil), transcription=\(self.transcriptionProvider != nil), provider=\(self.transcriptionProviderKind?.shortName ?? "none"))")
 
-        // Recover recordings from remote sources before starting device watch
-        await recoverFromRemoteSources()
-
-        // Begin connectivity monitoring and complete any deferred remote work.
+        // Start connectivity monitoring before recovery so the Work Offline
+        // override (forceOffline, persisted in UserDefaults) is respected.
         reachability.start()
+
+        // Recover recordings from remote sources before starting device watch.
+        // Skip when the user has forced offline mode — they explicitly asked
+        // for no network activity.
+        if reachability.isOnline {
+            await recoverFromRemoteSources()
+        }
+
         await refreshPendingCount()
         if reachability.isOnline {
             await reconcilePendingWork()
@@ -840,9 +846,11 @@ final class SyncService {
             }
         } else {
             // Cloud transcription (or storage-first) needs the network. When
-            // offline, defer the whole thing: mark pending so reconciliation
-            // resumes transcription + delivery once we're back online.
-            guard reachability.isOnline else {
+            // offline, preserve a local copy first (if configured) so the
+            // archival file is written regardless, then defer the rest until
+            // reconciliation brings us back online.
+            if !reachability.isOnline {
+                _ = await storeRecording(recording, allowS3Upload: false)
                 recording.transcriptionStatus = (transcriptionProvider != nil) ? .pending : .none
                 recording.updatedAt = Date()
                 try? modelContext.save()
@@ -1485,7 +1493,11 @@ extension SyncService {
         }
 
         let notesEnabled = defaults.bool(forKey: "markdown.enabled") || defaults.bool(forKey: "applenotes.enabled")
-        if notesEnabled, recording.appleNoteCreatedAt == nil {
+        // createAppleNote requires an s3Key or a persisted local copy to build
+        // the audio URL; without one it returns immediately and the step can
+        // never be satisfied.
+        let hasAudioForNote = recording.s3Key != nil || recording.localCopyPath != nil
+        if notesEnabled, hasAudioForNote, recording.appleNoteCreatedAt == nil {
             steps.append(.note)
         }
 
