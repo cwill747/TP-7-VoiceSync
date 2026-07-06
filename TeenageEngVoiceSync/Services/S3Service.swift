@@ -198,9 +198,80 @@ actor S3Service {
 
     /// Generate a presigned URL with Content-Disposition for download
     nonisolated func generateDownloadURL(s3Key: String, filename: String, expiry: TimeInterval = 3600) throws -> URL {
-        // For simplicity, using the same presigned URL
-        // In production, would add response-content-disposition parameter
-        try generatePresignedURL(s3Key: s3Key, expiry: expiry)
+        let expires = Int(expiry)
+        let date = Date()
+        let dateFormatter = ISO8601DateFormatter()
+        dateFormatter.formatOptions = [.withFullDate, .withDashSeparatorInDate]
+        let dateStamp = dateFormatter.string(from: date).replacingOccurrences(of: "-", with: "")
+
+        let amzDate = amzDateString(from: date)
+
+        let host = "\(bucket).\(endpointHost)"
+        let canonicalURI = "/" + s3Key.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed)!
+
+        let disposition = "attachment; filename=\"\(filename)\""
+
+        // Canonical query string
+        let credential = "\(accessKeyId)/\(dateStamp)/\(region)/s3/aws4_request"
+        let queryParams = [
+            "X-Amz-Algorithm": "AWS4-HMAC-SHA256",
+            "X-Amz-Credential": credential,
+            "X-Amz-Date": amzDate,
+            "X-Amz-Expires": "\(expires)",
+            "X-Amz-SignedHeaders": "host",
+            "response-content-disposition": disposition
+        ]
+
+        let canonicalQueryString = queryParams
+            .sorted { $0.key < $1.key }
+            .map { key, value in
+                let encodedValue = value.addingPercentEncoding(withAllowedCharacters: Self.awsQueryAllowed)!
+                return "\(key)=\(encodedValue)"
+            }
+            .joined(separator: "&")
+
+        // Canonical headers
+        let canonicalHeaders = "host:\(host)\n"
+        let signedHeaders = "host"
+
+        // Canonical request
+        let canonicalRequest = [
+            "GET",
+            canonicalURI,
+            canonicalQueryString,
+            canonicalHeaders,
+            signedHeaders,
+            "UNSIGNED-PAYLOAD"
+        ].joined(separator: "\n")
+
+        // String to sign
+        let scope = "\(dateStamp)/\(region)/s3/aws4_request"
+        let hashedRequest = SHA256.hash(data: canonicalRequest.data(using: .utf8)!)
+            .compactMap { String(format: "%02x", $0) }
+            .joined()
+
+        let stringToSign = [
+            "AWS4-HMAC-SHA256",
+            amzDate,
+            scope,
+            hashedRequest
+        ].joined(separator: "\n")
+
+        // Calculate signature
+        let signature = calculateSignature(
+            stringToSign: stringToSign,
+            dateStamp: dateStamp,
+            region: region,
+            service: "s3"
+        )
+
+        // Build final URL
+        let urlString = "https://\(host)\(canonicalURI)?\(canonicalQueryString)&X-Amz-Signature=\(signature)"
+        guard let url = URL(string: urlString) else {
+            throw S3Error.invalidURL
+        }
+
+        return url
     }
 
     /// Delete an object from S3
@@ -382,6 +453,8 @@ actor S3Service {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyyMMdd'T'HHmmss'Z'"
         formatter.timeZone = TimeZone(identifier: "UTC")
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
         return formatter.string(from: date)
     }
 
@@ -389,6 +462,8 @@ actor S3Service {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyyMMdd"
         formatter.timeZone = TimeZone(identifier: "UTC")
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
         return formatter.string(from: date)
     }
 }
