@@ -28,6 +28,9 @@ final class Recording {
     var duration: TimeInterval?
     var sampleRate: Int?
     var fileSize: Int64
+    /// Number of TP-7 tracks packed into this file (2 channels per track,
+    /// dual-mono pairs). 1 for plain single-track recordings.
+    var trackCount: Int = 1
 
     // Upload status
     var s3Key: String?

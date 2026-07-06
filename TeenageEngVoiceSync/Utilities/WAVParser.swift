@@ -13,6 +13,10 @@ struct WAVMetadata {
     let sampleRate: Int
     let channels: Int
     let bitDepth: Int
+
+    /// TP-7 multi-track files pack track *i* as a dual-mono channel pair
+    /// `[2i, 2i+1]`; a plain single-track file is 1 or 2 (dual-mono) channels.
+    var trackCount: Int { channels >= 2 ? channels / 2 : 1 }
 }
 
 enum WAVParser {
