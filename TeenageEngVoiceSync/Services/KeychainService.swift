@@ -89,7 +89,8 @@ actor KeychainService {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrAccount as String: key.rawValue,
-            kSecAttrService as String: "TeenageEngVoiceSync"
+            kSecAttrService as String: "TeenageEngVoiceSync",
+            kSecUseDataProtectionKeychain as String: true
         ]
 
         let attributes: [String: Any] = [
@@ -127,6 +128,7 @@ actor KeychainService {
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrAccount as String: key.rawValue,
             kSecAttrService as String: "TeenageEngVoiceSync",
+            kSecUseDataProtectionKeychain as String: true,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
@@ -135,7 +137,7 @@ actor KeychainService {
         let status = SecItemCopyMatching(query as CFDictionary, &result)
 
         if status == errSecItemNotFound {
-            return nil
+            return try migrateFromLegacyKeychainIfNeeded(for: key)
         }
 
         guard status == errSecSuccess else {
@@ -151,11 +153,45 @@ actor KeychainService {
         return value
     }
 
+    // Migrate a per-key item from the legacy file-based keychain (saved before this
+    // app adopted the data-protection keychain) into the data-protection keychain.
+    private func migrateFromLegacyKeychainIfNeeded(for key: Key) throws -> String? {
+        let legacyQuery: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: key.rawValue,
+            kSecAttrService as String: "TeenageEngVoiceSync",
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+
+        var result: AnyObject?
+        let status = SecItemCopyMatching(legacyQuery as CFDictionary, &result)
+
+        guard status == errSecSuccess,
+              let data = result as? Data,
+              let value = String(data: data, encoding: .utf8) else {
+            return nil
+        }
+
+        try save(value, for: key)
+
+        let deleteQuery: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: key.rawValue,
+            kSecAttrService as String: "TeenageEngVoiceSync"
+        ]
+        SecItemDelete(deleteQuery as CFDictionary)
+        AppLogger.keychain.info("Migrated key \(key.rawValue, privacy: .public) to data-protection keychain")
+
+        return value
+    }
+
     func delete(for key: Key) throws {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrAccount as String: key.rawValue,
-            kSecAttrService as String: "TeenageEngVoiceSync"
+            kSecAttrService as String: "TeenageEngVoiceSync",
+            kSecUseDataProtectionKeychain as String: true
         ]
 
         let status = SecItemDelete(query as CFDictionary)
@@ -163,6 +199,15 @@ actor KeychainService {
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw KeychainError.deleteFailed(status)
         }
+
+        // Best-effort cleanup of an unmigrated legacy copy so hasValue/delete behave
+        // identically regardless of whether this key was ever read (and thus migrated).
+        let legacyQuery: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: key.rawValue,
+            kSecAttrService as String: "TeenageEngVoiceSync"
+        ]
+        SecItemDelete(legacyQuery as CFDictionary)
     }
 
     func hasValue(for key: Key) throws -> Bool {
