@@ -503,6 +503,11 @@ final class SyncService {
             } else {
                 recording.speakerSegmentsData = nil
             }
+            if let notes = result.overdubNotes, !notes.isEmpty {
+                recording.overdubNotesData = try? JSONEncoder().encode(notes)
+            } else {
+                recording.overdubNotesData = nil
+            }
 
             // Reset note + summary tracking so retranscription regenerates them
             // from the new transcript.
@@ -868,6 +873,8 @@ final class SyncService {
                 recording.transcriptionLanguage = existing.transcriptionLanguage
                 recording.transcriptionStatus = existing.transcriptionStatus
                 recording.transcribedAt = existing.transcribedAt
+                recording.speakerSegmentsData = existing.speakerSegmentsData
+                recording.overdubNotesData = existing.overdubNotesData
                 recording.updatedAt = Date()
                 try? modelContext.save()
                 return
@@ -1039,19 +1046,50 @@ final class SyncService {
         recording.sourceFolder == .memo
     }
 
+    /// Whether a recording is an overdubbed /memo (multiple tracks captured while
+    /// the primary user recorded over their own base memo) rather than a plain
+    /// single-track memo or a /recordings multi-speaker capture.
+    nonisolated static func hasMemoOverdubTracks(for recording: Recording) -> Bool {
+        recording.trackCount > 1 && recording.sourceFolder == .memo
+    }
+
+    /// Recordings recovered from S3/Notion never had `WAVParser` run against them
+    /// (no local audio existed yet at recovery time), so `trackCount` is stuck at
+    /// the model default of 1. Only re-parses when it looks unset, so a normal
+    /// device-ingested recording (already correct from `createRecording`) doesn't
+    /// pay for a redundant parse on every transcription.
+    private func refreshTrackCountIfNeeded(for recording: Recording, path: String) async {
+        guard recording.trackCount <= 1,
+              let metadata = try? await WAVParser.parse(url: URL(fileURLWithPath: path)) else { return }
+        recording.trackCount = metadata.trackCount
+    }
+
     /// Runs a local (WhisperKit/Parakeet) transcription.
     private func transcribeLocal(_ transcriber: any TranscriptionProvider, path: String, recording: Recording) async throws -> TranscriptionResult {
         guard let parakeet = transcriber as? ParakeetService else {
             return try await transcriber.transcribe(localPath: path)
         }
 
+        // Rows recovered from S3/Notion have no local audio at recovery time, so
+        // `trackCount` is stuck at the model default of 1 until now — the first
+        // point a real file is on disk. Re-derive it so a recovered multi-track
+        // memo/recording doesn't silently fall through to the flat single-track
+        // path below.
+        await refreshTrackCountIfNeeded(for: recording, path: path)
+
         // A TP-7 /recordings file with 2+ tracks captures distinct speakers on
         // separate channels — split and transcribe each independently instead
         // of handing a naive downmix (which would sum the speakers together)
-        // to the transcriber. /memo multi-track (overdubs) is handled
-        // elsewhere and still goes through the single-track path here.
+        // to the transcriber.
         if recording.trackCount > 1, recording.sourceFolder == .recordings {
             return try await transcribeMultiTrackRecording(parakeet, path: path)
+        }
+
+        // A TP-7 /memo file with 2+ tracks is an overdub: track 0 is the base
+        // memo, tracks 1+ are a second pass over the same recording captured
+        // as `OverdubNote`s rather than merged into the transcript.
+        if Self.hasMemoOverdubTracks(for: recording) {
+            return try await transcribeMemoOverdub(parakeet, sourcePath: path)
         }
 
         return try await parakeet.transcribe(localPath: path, forceSingleSpeaker: Self.forceSingleSpeaker(for: recording))
@@ -1073,6 +1111,30 @@ final class SyncService {
             }
         }
         return try await parakeet.transcribeMultiTrack(trackPaths: tracks.map(\.path))
+    }
+
+    /// Splits an overdubbed /memo recording (`trackCount > 1`) into its base track
+    /// (track 0 — rendered as the normal single-speaker transcript) and overdub
+    /// tracks (1+ — captured as `OverdubNote`s rather than merged into the transcript,
+    /// since they're a second pass over the same recording, not new speech in line).
+    private func transcribeMemoOverdub(_ parakeet: ParakeetService, sourcePath: String) async throws -> TranscriptionResult {
+        let trackURLs = try MultiTrackAudio.extractTracks(from: URL(fileURLWithPath: sourcePath))
+        defer {
+            for url in trackURLs where url.path != sourcePath {
+                try? FileManager.default.removeItem(at: url)
+            }
+        }
+
+        var result = try await parakeet.transcribe(localPath: trackURLs[0].path, forceSingleSpeaker: true)
+
+        var notes: [OverdubNote] = []
+        for (index, trackURL) in trackURLs.enumerated() where index > 0 {
+            let overdub = try await parakeet.transcribeOverdubTrack(localPath: trackURL.path)
+            guard !overdub.text.isEmpty else { continue }
+            notes.append(OverdubNote(trackIndex: index, startTime: overdub.startTime, text: overdub.text))
+        }
+        result.overdubNotes = notes.isEmpty ? nil : notes
+        return result
     }
 
     private func transcribeRecording(_ recording: Recording, provider: TranscriptionProviderKind) async -> TranscriptionResult? {
@@ -1120,6 +1182,11 @@ final class SyncService {
                 recording.speakerSegmentsData = try? JSONEncoder().encode(segs)
             } else {
                 recording.speakerSegmentsData = nil
+            }
+            if let notes = result.overdubNotes, !notes.isEmpty {
+                recording.overdubNotesData = try? JSONEncoder().encode(notes)
+            } else {
+                recording.overdubNotesData = nil
             }
             try? modelContext.save()
             return result

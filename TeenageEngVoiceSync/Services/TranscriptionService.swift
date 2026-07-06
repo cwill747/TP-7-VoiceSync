@@ -181,6 +181,9 @@ struct TranscriptionResult: Codable, Sendable {
     /// Populated only by `ParakeetService` when diarization is enabled.
     /// Not decoded from API responses — synthesized locally.
     var speakerSegments: [StoredSpeakerSegment]?
+    /// Populated only for TP-7 /memo recordings with overdub tracks (`trackCount > 1`).
+    /// Not decoded from API responses — synthesized locally in `SyncService`.
+    var overdubNotes: [OverdubNote]?
 }
 
 struct TranscriptionWord: Codable, Sendable {

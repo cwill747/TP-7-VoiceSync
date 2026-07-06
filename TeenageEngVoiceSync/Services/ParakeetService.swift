@@ -586,6 +586,25 @@ actor ParakeetService: TranscriptionProvider {
         )
     }
 
+    /// Transcribes one overdub track from a split /memo recording (track 0 = base,
+    /// handled by the normal `transcribe` path). No diarization — an overdub layer is
+    /// the same speaker as the base track — but ASR word timings are still needed to
+    /// place the note on the base memo's timeline, since every track shares that
+    /// timeline (all tracks in the source file are the same length).
+    func transcribeOverdubTrack(localPath: String) async throws -> (text: String, startTime: TimeInterval) {
+        let manager = try await loadManager()
+        let url = URL(fileURLWithPath: localPath)
+        var decoderState = TdtDecoderState.make()
+        let language: Language? = variant == .v2 ? .english : nil
+
+        let result = try await manager.transcribe(url, decoderState: &decoderState, language: language)
+        let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return ("", 0) }
+
+        let startTime = result.tokenTimings.flatMap { Self.buildWordSpans(from: $0).first?.startTime } ?? 0
+        return (text, startTime)
+    }
+
     func transcribe(cloudStorageURL: String) async throws -> TranscriptionResult {
         guard let url = URL(string: cloudStorageURL) else {
             throw ParakeetServiceError.invalidURL
