@@ -537,12 +537,17 @@ actor NotionService {
         ["object": "block", "type": "bookmark", "bookmark": ["url": url]]
     }
 
+    /// A single callout block whose text is split into multiple rich_text
+    /// entries (each under Notion's 2000-char-per-rich-text limit) rather than
+    /// truncated, so a long overdub note isn't silently cut short — mirrors
+    /// how `paragraphBlocks` chunks rather than truncates.
     private func calloutBlock(_ text: String) -> [String: Any] {
-        [
+        let chunks = text.chunked(into: 1900)
+        return [
             "object": "block",
             "type": "callout",
             "callout": [
-                "rich_text": [["type": "text", "text": ["content": String(text.prefix(1900))]]],
+                "rich_text": chunks.map { ["type": "text", "text": ["content": $0]] },
                 "icon": ["type": "emoji", "emoji": "💡"]
             ]
         ]
