@@ -44,12 +44,12 @@ final class SyncService {
     private let openRouterService = OpenRouterService()
     private let localAudioService = LocalAudioService()
 
-    /// The device folder a not-yet-processed cache file came from, keyed by its
-    /// local path. Populated when a device download is queued (the debouncer
-    /// only tracks paths); consumed and removed once `createRecording` runs.
-    /// Internal (not private) so tests can seed it directly, mirroring
-    /// `createRecording`'s own access level.
-    var pendingRecordingSources: [String: RecordingSource] = [:]
+    /// A not-yet-processed cache file's device origin, keyed by its local path.
+    /// Populated when a device download is queued (the debouncer only tracks
+    /// paths); consumed and removed once `createRecording` runs. Internal (not
+    /// private) so tests can seed it directly, mirroring `createRecording`'s
+    /// own access level.
+    var pendingRecordingOrigins: [String: PendingRecordingOrigin] = [:]
 
     init(modelContext: ModelContext) {
         self.modelContext = modelContext
@@ -507,7 +507,11 @@ final class SyncService {
             // stored value; they all predate the /memo split, so /recordings is
             // the correct fallback.
             let folder = (recording.sourceFolder ?? .recordings).rawValue
-            switch await deviceWatch.deleteFromDevice(filename: recording.filename, folder: folder) {
+            // `deviceFilename` holds the literal on-device name; `filename` may be
+            // locally qualified (e.g. "memo-0001.wav") to keep the app-wide identity
+            // collision-free with /recordings, so it isn't safe to send to the device.
+            let deviceFilename = recording.deviceFilename ?? recording.filename
+            switch await deviceWatch.deleteFromDevice(filename: deviceFilename, folder: folder) {
             case .success:
                 AppLogger.sync.info("Removed recording from device: \(recording.filename, privacy: .private)")
             case .failure(let error):
@@ -706,7 +710,7 @@ final class SyncService {
             }
 
             // Add to debouncer
-            pendingRecordingSources[url.path] = download.source
+            pendingRecordingOrigins[url.path] = PendingRecordingOrigin(source: download.source, deviceFilename: download.deviceFilename)
             await debouncer.recordEvent(for: url.path)
         }
 
@@ -791,8 +795,9 @@ final class SyncService {
 
         // Set device serial
         recording.deviceSerial = deviceWatch.currentDeviceSerial
-        if let source = pendingRecordingSources.removeValue(forKey: url.path) {
-            recording.sourceFolder = source
+        if let origin = pendingRecordingOrigins.removeValue(forKey: url.path) {
+            recording.sourceFolder = origin.source
+            recording.deviceFilename = origin.deviceFilename
         }
         recording.updatedAt = Date()
 
@@ -1565,4 +1570,10 @@ private enum SyncTranscriptionError: LocalizedError {
     var errorDescription: String? {
         "No audio available to transcribe — the recording has no local file or S3 copy."
     }
+}
+
+/// A queued device download's origin, recorded before it reaches `createRecording`.
+struct PendingRecordingOrigin: Equatable {
+    let source: RecordingSource
+    let deviceFilename: String
 }

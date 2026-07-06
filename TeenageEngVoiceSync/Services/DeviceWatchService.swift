@@ -21,6 +21,9 @@ import Observation
 struct DownloadedRecording {
     let url: URL
     let source: RecordingSource
+    /// The literal on-device filename (before local disambiguation - see
+    /// `DeviceWatchService.localFilename`), needed for MTP delete calls.
+    let deviceFilename: String
 }
 
 @Observable
@@ -129,7 +132,7 @@ final class DeviceWatchService {
 
             if FileManager.default.fileExists(atPath: destination.path) {
                 knownFilenames.insert(key)
-                downloaded.append(DownloadedRecording(url: destination, source: source))
+                downloaded.append(DownloadedRecording(url: destination, source: source, deviceFilename: file.name))
                 continue
             }
 
@@ -140,7 +143,7 @@ final class DeviceWatchService {
             switch downloadResult {
             case .success:
                 knownFilenames.insert(key)
-                downloaded.append(DownloadedRecording(url: destination, source: source))
+                downloaded.append(DownloadedRecording(url: destination, source: source, deviceFilename: file.name))
             case .failure(let error):
                 // Do not mark as known: a transient MTP failure here should be
                 // retried on the next poll cycle rather than skipped forever.
@@ -195,6 +198,20 @@ final class DeviceWatchService {
         }.value
     }
 
+    /// The device-reported filename is only guaranteed unique *within* its own
+    /// folder, not across /recordings and /memo (both can auto-number from
+    /// "0001.wav"). This name becomes the local cache filename and, downstream,
+    /// `Recording.filename` - the identity SyncService uses for the SwiftData
+    /// uniqueness constraint, the S3 object key, and Notion/local-folder
+    /// matching - so a cross-folder collision there would silently drop or
+    /// overwrite one of the two recordings. Qualifying /memo names with a
+    /// prefix makes that identity collision-free while leaving /recordings
+    /// (the only folder that existed before this feature) untouched, so
+    /// already-synced recordings keep matching their existing S3/Notion state.
+    static func localFilename(forDeviceFilename safeName: String, folder: String) -> String {
+        folder == RecordingSource.memo.rawValue ? "memo-\(safeName)" : safeName
+    }
+
     private static func cacheDestination(for filename: String, folder: String, serial: String) -> URL? {
         // Defense in depth: never trust the device-reported name as a path.
         // Only its last path component is used, so a malicious "../../foo.wav"
@@ -208,8 +225,8 @@ final class DeviceWatchService {
         guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
             return nil
         }
-        // Nested by folder so /memo and /recordings can't collide on identically
-        // named files (both e.g. auto-numbered "0001.wav").
+        // Also nested by folder for on-disk organization, in addition to the
+        // filename qualification above.
         let dir = appSupport
             .appendingPathComponent("TP-7 VoiceSync", isDirectory: true)
             .appendingPathComponent("DeviceDownloads", isDirectory: true)
@@ -218,6 +235,6 @@ final class DeviceWatchService {
 
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
 
-        return dir.appendingPathComponent(safeName)
+        return dir.appendingPathComponent(Self.localFilename(forDeviceFilename: safeName, folder: folder))
     }
 }

@@ -17,6 +17,11 @@ final class Recording {
     /// Which on-device TP-7 folder this recording came from, when known.
     /// Nil for recordings recovered from S3/Notion/local storage with no device origin.
     var sourceFolder: RecordingSource?
+    /// The literal on-device filename, needed for MTP delete calls. Differs from
+    /// `filename` for /memo recordings, whose app-wide identity is qualified with
+    /// a prefix to stay collision-free against /recordings (see
+    /// `DeviceWatchService.localFilename`). Nil for non-device recordings.
+    var deviceFilename: String?
 
     // Audio metadata
     var recordedAt: Date

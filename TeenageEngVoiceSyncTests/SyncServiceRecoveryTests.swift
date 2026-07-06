@@ -139,14 +139,18 @@ final class SyncServiceRecoveryTests: XCTestCase {
         let context = try makeContext()
         let sync = SyncService(modelContext: context)
 
-        let deviceFileURL = writeDeviceFile(named: "memo01.wav")
-        sync.pendingRecordingSources[deviceFileURL.path] = .memo
+        // The local filename is already the disambiguated one DeviceWatchService
+        // would have produced (see DeviceWatchServiceTests) - createRecording
+        // itself just needs to tag the row with the origin it's told about.
+        let deviceFileURL = writeDeviceFile(named: "memo-0001.wav")
+        sync.pendingRecordingOrigins[deviceFileURL.path] = PendingRecordingOrigin(source: .memo, deviceFilename: "0001.wav")
 
         let result = try await sync.createRecording(from: deviceFileURL)
 
         XCTAssertEqual(result.sourceFolder, .memo)
+        XCTAssertEqual(result.deviceFilename, "0001.wav")
         // Consumed, not left behind for a later unrelated call to pick up.
-        XCTAssertNil(sync.pendingRecordingSources[deviceFileURL.path])
+        XCTAssertNil(sync.pendingRecordingOrigins[deviceFileURL.path])
     }
 
     @MainActor
@@ -158,6 +162,37 @@ final class SyncServiceRecoveryTests: XCTestCase {
         let result = try await sync.createRecording(from: deviceFileURL)
 
         XCTAssertNil(result.sourceFolder)
+        XCTAssertNil(result.deviceFilename)
+    }
+
+    /// The TP-7 auto-numbers recordings independently per folder, so /recordings
+    /// and /memo can both report "0001.wav". DeviceWatchService disambiguates the
+    /// /memo copy's local filename before it ever reaches createRecording (see
+    /// DeviceWatchServiceTests) - this confirms createRecording then treats them
+    /// as two distinct rows instead of one silently shadowing the other via the
+    /// unique `filename` attribute.
+    @MainActor
+    func testCreateRecordingKeepsBothFoldersDistinctOnNameCollision() async throws {
+        let context = try makeContext()
+        let sync = SyncService(modelContext: context)
+
+        let recordingsFileURL = writeDeviceFile(named: "0001.wav")
+        sync.pendingRecordingOrigins[recordingsFileURL.path] = PendingRecordingOrigin(source: .recordings, deviceFilename: "0001.wav")
+        let recordingsResult = try await sync.createRecording(from: recordingsFileURL)
+
+        let memoFileURL = writeDeviceFile(named: "memo-0001.wav")
+        sync.pendingRecordingOrigins[memoFileURL.path] = PendingRecordingOrigin(source: .memo, deviceFilename: "0001.wav")
+        let memoResult = try await sync.createRecording(from: memoFileURL)
+
+        let allRecordings = try context.fetch(FetchDescriptor<Recording>())
+        XCTAssertEqual(allRecordings.count, 2)
+
+        XCTAssertEqual(recordingsResult.sourceFolder, .recordings)
+        XCTAssertEqual(recordingsResult.deviceFilename, "0001.wav")
+        XCTAssertEqual(memoResult.sourceFolder, .memo)
+        XCTAssertEqual(memoResult.deviceFilename, "0001.wav")
+        // Both report the same literal on-device name, but distinct app identities.
+        XCTAssertNotEqual(recordingsResult.filename, memoResult.filename)
     }
 
     @MainActor
