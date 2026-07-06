@@ -71,6 +71,13 @@ func errResponse(format string, args ...interface{}) response {
 type session struct {
 	dev       *mtp.Device
 	storageID uint32
+
+	// Guards every device I/O call made through this session. The TP-7's MTP
+	// firmware does not tolerate two USB conversations interleaving on one
+	// connection (session churn crashes it out of MTP mode), so list/
+	// download/delete calls - which may be invoked from concurrent Swift
+	// Task.detached closures - must be serialized here.
+	ioMu sync.Mutex
 }
 
 var (
@@ -154,7 +161,20 @@ func withSession(handle int, fn func(dev *mtp.Device, storageID uint32) error) e
 	if !ok {
 		return fmt.Errorf("invalid or closed session handle %d", handle)
 	}
+	s.ioMu.Lock()
+	defer s.ioMu.Unlock()
 	return fn(s.dev, s.storageID)
+}
+
+// isSafeRecordingName reports whether name is safe to join onto recordingsDir
+// or a local destination directory: no path separators, and not a "." or
+// ".." traversal segment. The TP-7 only ever reports flat filenames under
+// /recordings, so anything else is either a firmware bug or a hostile device.
+func isSafeRecordingName(name string) bool {
+	if name == "" || name == "." || name == ".." {
+		return false
+	}
+	return name == filepath.Base(name)
 }
 
 //export tp7mtp_open
@@ -212,7 +232,11 @@ func tp7mtp_close(handle int) {
 	sessionsMu.Unlock()
 
 	if ok {
+		// Wait for any in-flight list/download/delete call on this session to
+		// finish before tearing down the device.
+		s.ioMu.Lock()
 		disposeDevice(s.dev)
+		s.ioMu.Unlock()
 	}
 }
 
@@ -231,6 +255,10 @@ func tp7mtp_list_recordings(handle int) *C.char {
 				}
 				name := fi.Name
 				if strings.HasPrefix(name, ".") || !strings.HasSuffix(strings.ToLower(name), ".wav") {
+					return nil
+				}
+				if !isSafeRecordingName(name) {
+					fmt.Fprintf(os.Stderr, "tp7mtp: skipping recording with unsafe filename %q\n", name)
 					return nil
 				}
 				files = append(files, fileEntry{
@@ -253,6 +281,9 @@ func tp7mtp_list_recordings(handle int) *C.char {
 func tp7mtp_download_recording(handle int, cFilename *C.char, cDestPath *C.char) *C.char {
 	filename := C.GoString(cFilename)
 	destPath := C.GoString(cDestPath)
+	if !isSafeRecordingName(filename) {
+		return toCString(errResponse("unsafe filename %q", filename))
+	}
 	sourcePath := recordingsDir + "/" + filename
 
 	err := withSession(handle, func(dev *mtp.Device, storageID uint32) error {
@@ -288,6 +319,9 @@ func tp7mtp_download_recording(handle int, cFilename *C.char, cDestPath *C.char)
 //export tp7mtp_delete_recording
 func tp7mtp_delete_recording(handle int, cFilename *C.char) *C.char {
 	filename := C.GoString(cFilename)
+	if !isSafeRecordingName(filename) {
+		return toCString(errResponse("unsafe filename %q", filename))
+	}
 	fullPath := recordingsDir + "/" + filename
 
 	err := withSession(handle, func(dev *mtp.Device, storageID uint32) error {
