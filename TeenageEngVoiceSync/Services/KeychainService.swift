@@ -253,16 +253,19 @@ actor KeychainService {
             throw KeychainError.deleteFailed(status)
         }
 
-        // Best-effort cleanup of an unmigrated legacy copy so hasValue/delete behave
-        // identically regardless of whether this key was ever read (and thus migrated).
-        // Only meaningful when the DP keychain is actually a distinct store from the query above.
+        // Clean up an unmigrated legacy copy so hasValue/delete behave identically
+        // regardless of whether this key was ever read (and thus migrated). Only
+        // meaningful when the DP keychain is actually a distinct store from the query above.
         if dpAvailable {
             let legacyQuery: [String: Any] = [
                 kSecClass as String: kSecClassGenericPassword,
                 kSecAttrAccount as String: key.rawValue,
                 kSecAttrService as String: "TeenageEngVoiceSync"
             ]
-            SecItemDelete(legacyQuery as CFDictionary)
+            let legacyStatus = SecItemDelete(legacyQuery as CFDictionary)
+            guard legacyStatus == errSecSuccess || legacyStatus == errSecItemNotFound else {
+                throw KeychainError.deleteFailed(legacyStatus)
+            }
         }
     }
 
