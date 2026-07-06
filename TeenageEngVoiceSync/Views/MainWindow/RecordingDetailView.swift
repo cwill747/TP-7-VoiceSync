@@ -240,6 +240,12 @@ struct RecordingDetailView: View {
                         )
                     }
 
+                    if let notesData = recording.overdubNotesData,
+                       let overdubNotes = try? JSONDecoder().decode([OverdubNote].self, from: notesData),
+                       !overdubNotes.isEmpty {
+                        OverdubNotesView(notes: overdubNotes)
+                    }
+
                     HStack {
                         Spacer()
                         Button {
@@ -358,6 +364,39 @@ struct PlainTranscriptView: View {
         .padding()
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+// MARK: - Overdub notes (memo tracks 1+)
+
+struct OverdubNotesView: View {
+    let notes: [OverdubNote]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Overdubbed notes")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            ForEach(notes.sorted(by: { $0.startTime < $1.startTime })) { note in
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(formatTime(note.startTime))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                    Text(note.text)
+                        .textSelection(.enabled)
+                }
+            }
+        }
+        .padding()
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func formatTime(_ time: TimeInterval) -> String {
+        let minutes = Int(time) / 60
+        let seconds = Int(time) % 60
+        return String(format: "%d:%02d", minutes, seconds)
     }
 }
 

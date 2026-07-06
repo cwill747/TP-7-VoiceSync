@@ -197,7 +197,8 @@ actor NotionService {
         playURL: String,
         downloadURL: String,
         customTitle: String? = nil,
-        summary: String? = nil
+        summary: String? = nil,
+        overdubNotes: [OverdubNote]? = nil
     ) async throws {
         guard !apiKey.isEmpty, !databaseId.isEmpty else {
             throw NotionError.notConfigured
@@ -246,6 +247,13 @@ actor NotionService {
 
         children.append(headingBlock("Transcript"))
         children.append(contentsOf: paragraphBlocks(transcription))
+
+        if let overdubNotes, !overdubNotes.isEmpty {
+            children.append(headingBlock("Overdubbed notes"))
+            for note in overdubNotes.sorted(by: { $0.startTime < $1.startTime }) {
+                children.append(calloutBlock("\(formatTimestamp(note.startTime)) — \(note.text)"))
+            }
+        }
 
         children.append(dividerBlock())
         children.append(headingBlock("Details"))
@@ -529,10 +537,27 @@ actor NotionService {
         ["object": "block", "type": "bookmark", "bookmark": ["url": url]]
     }
 
+    private func calloutBlock(_ text: String) -> [String: Any] {
+        [
+            "object": "block",
+            "type": "callout",
+            "callout": [
+                "rich_text": [["type": "text", "text": ["content": String(text.prefix(1900))]]],
+                "icon": ["type": "emoji", "emoji": "💡"]
+            ]
+        ]
+    }
+
     private func formatDuration(_ duration: TimeInterval?) -> String {
         guard let duration else { return "--:--" }
         let minutes = Int(duration) / 60
         let seconds = Int(duration) % 60
+        return String(format: "%d:%02d", minutes, seconds)
+    }
+
+    private func formatTimestamp(_ time: TimeInterval) -> String {
+        let minutes = Int(time) / 60
+        let seconds = Int(time) % 60
         return String(format: "%d:%02d", minutes, seconds)
     }
 
