@@ -275,6 +275,144 @@ actor ParakeetService: TranscriptionProvider {
         )
     }
 
+    /// Transcribes N single-speaker track files split from a TP-7 multi-track
+    /// /recordings WAV (see `MultiTrackAudio.extractTracks`) — each track is a
+    /// clean isolated source, so speaker separation is exact rather than
+    /// acoustic. Produces the same `(text, speakerSegments)` shape the
+    /// diarizer produces so Notion/Notes rendering and the speaker-editing UI
+    /// work unchanged.
+    func transcribeMultiTrack(trackPaths: [String]) async throws -> TranscriptionResult {
+        let manager = try await loadManager()
+        let language: Language? = variant == .v2 ? .english : nil
+
+        var perTrackWords: [[WordSpan]] = []
+        var perTrackEmbeddings: [[Float]] = []
+
+        for path in trackPaths {
+            var decoderState = TdtDecoderState.make()
+            let result = try await manager.transcribe(URL(fileURLWithPath: path), decoderState: &decoderState, language: language)
+            perTrackWords.append(Self.buildWordSpans(from: result.tokenTimings ?? []))
+            perTrackEmbeddings.append((try? await Self.extractEmbedding(from: path)) ?? [])
+        }
+
+        let labels = Self.resolveTrackLabels(embeddings: perTrackEmbeddings, knownPersonProfiles: knownPersonProfiles)
+
+        struct TimedParagraph {
+            let startTime: TimeInterval
+            let paragraph: String
+            let segment: StoredSpeakerSegment
+        }
+
+        var timedParagraphs: [TimedParagraph] = []
+        for (index, words) in perTrackWords.enumerated() {
+            let turns = Self.buildTurns(from: words)
+            guard !turns.isEmpty else { continue }
+
+            let (label, personId) = labels[index]
+            // `rawSpeakerId` doubles as the display fallback when nothing is
+            // assigned (see `DiarizedTranscriptView`'s `assignedPersonName ??
+            // rawSpeakerId`) — use the generated label itself rather than the
+            // internal "track-N" index so an anonymous "Speaker N" survives
+            // into the speaker-editing UI and re-persisted transcript instead
+            // of regressing to a raw track identifier.
+            let rawSpeakerId = label
+            let embedding = perTrackEmbeddings[index]
+
+            for turn in turns {
+                let segment = StoredSpeakerSegment(
+                    startTime: turn.startTime,
+                    endTime: turn.endTime,
+                    rawSpeakerId: rawSpeakerId,
+                    text: turn.text,
+                    embedding: embedding,
+                    assignedPersonName: label.hasPrefix("Speaker ") ? nil : label,
+                    assignedPersonId: personId
+                )
+                timedParagraphs.append(TimedParagraph(
+                    startTime: turn.startTime,
+                    paragraph: "\(label): \(turn.text)",
+                    segment: segment
+                ))
+            }
+        }
+
+        guard !timedParagraphs.isEmpty else {
+            throw ParakeetServiceError.emptyResult
+        }
+
+        // Interleave every track's turns by absolute start time so the
+        // rendered transcript reads as a single back-and-forth conversation.
+        timedParagraphs.sort { $0.startTime < $1.startTime }
+
+        return TranscriptionResult(
+            text: timedParagraphs.map(\.paragraph).joined(separator: "\n\n"),
+            languageCode: variant == .v2 ? "en" : "auto",
+            languageProbability: nil,
+            transcriptionId: nil,
+            words: nil,
+            speakerSegments: timedParagraphs.map(\.segment)
+        )
+    }
+
+    /// A labeled speech turn: a run of a track's words uninterrupted by a
+    /// pause longer than `turnGapThreshold`.
+    private struct TrackTurn {
+        let text: String
+        let startTime: TimeInterval
+        let endTime: TimeInterval
+    }
+
+    /// Pause length that splits a track's words into separate turns — mirrors
+    /// the paragraph breaks a diarizer's segment boundaries would produce.
+    private static let turnGapThreshold: TimeInterval = 1.0
+
+    private static func buildTurns(from words: [WordSpan]) -> [TrackTurn] {
+        guard let first = words.first else { return [] }
+
+        var turns: [TrackTurn] = []
+        var currentWords = [first.word]
+        var currentStart = first.startTime
+        var currentEnd = first.endTime
+
+        for word in words.dropFirst() {
+            if word.startTime - currentEnd > turnGapThreshold {
+                turns.append(TrackTurn(text: currentWords.joined(separator: " "), startTime: currentStart, endTime: currentEnd))
+                currentWords = []
+                currentStart = word.startTime
+            }
+            currentWords.append(word.word)
+            currentEnd = word.endTime
+        }
+        turns.append(TrackTurn(text: currentWords.joined(separator: " "), startTime: currentStart, endTime: currentEnd))
+        return turns
+    }
+
+    /// Resolves each track's speaker label the same way `buildDiarizedOutput`
+    /// resolves a diarizer segment: cosine match against known persons above
+    /// the 0.75 threshold, else an anonymous "Speaker N" (numbered in track order).
+    private static func resolveTrackLabels(
+        embeddings: [[Float]],
+        knownPersonProfiles: [KnownPersonProfile]
+    ) -> [(label: String, personId: String?)] {
+        var anonymousCount = 0
+        return embeddings.map { embedding -> (label: String, personId: String?) in
+            if !knownPersonProfiles.isEmpty, !embedding.isEmpty {
+                var best: (profile: KnownPersonProfile, similarity: Float)?
+                for profile in knownPersonProfiles where profile.embedding.count == embedding.count {
+                    let sim = cosineSimilarity(profile.embedding, embedding)
+                    if sim > 0.75, best == nil || sim > best!.similarity {
+                        best = (profile, sim)
+                    }
+                }
+                if let match = best {
+                    return (match.profile.name, match.profile.personId)
+                }
+            }
+            anonymousCount += 1
+            return ("Speaker \(anonymousCount)", nil)
+        }
+    }
+
     /// Word span aggregated from sub-word `TokenTiming`s. FluidAudio 0.15.4 exposes the
     /// boundary-detection primitives publicly but not its internal `buildWordTimings`
     /// aggregator, so this reimplements just the aggregation step on top of those helpers.

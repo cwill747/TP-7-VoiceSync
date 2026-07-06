@@ -1044,7 +1044,35 @@ final class SyncService {
         guard let parakeet = transcriber as? ParakeetService else {
             return try await transcriber.transcribe(localPath: path)
         }
+
+        // A TP-7 /recordings file with 2+ tracks captures distinct speakers on
+        // separate channels — split and transcribe each independently instead
+        // of handing a naive downmix (which would sum the speakers together)
+        // to the transcriber. /memo multi-track (overdubs) is handled
+        // elsewhere and still goes through the single-track path here.
+        if recording.trackCount > 1, recording.sourceFolder == .recordings {
+            return try await transcribeMultiTrackRecording(parakeet, path: path)
+        }
+
         return try await parakeet.transcribe(localPath: path, forceSingleSpeaker: Self.forceSingleSpeaker(for: recording))
+    }
+
+    /// Splits a multi-track /recordings WAV into its N per-speaker tracks and
+    /// transcribes each independently. Falls back to the normal single-track
+    /// path if extraction doesn't actually yield multiple tracks (e.g. stale
+    /// `trackCount` from before the file changed) rather than deleting the
+    /// original audio.
+    private func transcribeMultiTrackRecording(_ parakeet: ParakeetService, path: String) async throws -> TranscriptionResult {
+        let tracks = try MultiTrackAudio.extractTracks(from: URL(fileURLWithPath: path))
+        guard tracks.count > 1 else {
+            return try await parakeet.transcribe(localPath: path, forceSingleSpeaker: false)
+        }
+        defer {
+            for track in tracks {
+                try? FileManager.default.removeItem(at: track)
+            }
+        }
+        return try await parakeet.transcribeMultiTrack(trackPaths: tracks.map(\.path))
     }
 
     private func transcribeRecording(_ recording: Recording, provider: TranscriptionProviderKind) async -> TranscriptionResult? {
