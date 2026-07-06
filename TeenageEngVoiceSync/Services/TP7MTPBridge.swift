@@ -33,6 +33,8 @@ struct TP7MTPDeviceInfo: Decodable {
 
 struct TP7MTPFileEntry: Decodable {
     let name: String
+    /// Which on-device folder this file lives in ("recordings" or "memo").
+    let folder: String
     let size: Int64
     let modTime: Int64
 }
@@ -74,26 +76,32 @@ final class TP7MTPSession: @unchecked Sendable {
         tp7mtp_close(handle)
     }
 
-    /// Lists *.wav files under /recordings on the device. Blocking; call off the main thread.
+    /// Lists *.wav files under /recordings and /memo on the device. Blocking; call off the main thread.
     func listRecordings() -> Result<[TP7MTPFileEntry], TP7MTPError> {
         let json = call { tp7mtp_list_recordings(handle) }
         return Self.decode(json).map { $0.files ?? [] }
     }
 
-    /// Downloads a recording to `destination`. Blocking; call off the main thread.
-    func download(filename: String, to destination: URL) -> Result<Void, TP7MTPError> {
-        let json = filename.withCString { cFilename in
-            destination.path.withCString { cDestPath in
-                call { tp7mtp_download_recording(handle, UnsafeMutablePointer(mutating: cFilename), UnsafeMutablePointer(mutating: cDestPath)) }
+    /// Downloads a recording to `destination`. `folder` must be the value reported by
+    /// `listRecordings()` for this file ("recordings" or "memo"). Blocking; call off the main thread.
+    func download(filename: String, folder: String, to destination: URL) -> Result<Void, TP7MTPError> {
+        let json = folder.withCString { cFolder in
+            filename.withCString { cFilename in
+                destination.path.withCString { cDestPath in
+                    call { tp7mtp_download_recording(handle, UnsafeMutablePointer(mutating: cFolder), UnsafeMutablePointer(mutating: cFilename), UnsafeMutablePointer(mutating: cDestPath)) }
+                }
             }
         }
         return Self.decode(json).map { _ in () }
     }
 
-    /// Deletes a recording from the device. Blocking; call off the main thread.
-    func deleteRecording(filename: String) -> Result<Void, TP7MTPError> {
-        let json = filename.withCString { cFilename in
-            call { tp7mtp_delete_recording(handle, UnsafeMutablePointer(mutating: cFilename)) }
+    /// Deletes a recording from the device. `folder` must be "recordings" or "memo".
+    /// Blocking; call off the main thread.
+    func deleteRecording(filename: String, folder: String) -> Result<Void, TP7MTPError> {
+        let json = folder.withCString { cFolder in
+            filename.withCString { cFilename in
+                call { tp7mtp_delete_recording(handle, UnsafeMutablePointer(mutating: cFolder), UnsafeMutablePointer(mutating: cFilename)) }
+            }
         }
         return Self.decode(json).map { _ in () }
     }

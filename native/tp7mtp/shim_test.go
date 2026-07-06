@@ -46,3 +46,38 @@ func TestLocalizeWallClock(t *testing.T) {
 		}
 	})
 }
+
+func TestRecordingDirs(t *testing.T) {
+	// download/delete build device paths as recordingDirs[folder] + "/" + name,
+	// so every folder label the Swift side can send must resolve to a distinct,
+	// absolute device directory.
+	if got := recordingDirs[folderRecordings]; got != "/recordings" {
+		t.Fatalf("expected /recordings, got %q", got)
+	}
+	if got := recordingDirs[folderMemo]; got != "/memo" {
+		t.Fatalf("expected /memo, got %q", got)
+	}
+	if recordingDirs[folderRecordings] == recordingDirs[folderMemo] {
+		t.Fatalf("recordings and memo must map to distinct device directories")
+	}
+	if _, ok := recordingDirs["bogus"]; ok {
+		t.Fatalf("expected no entry for an unknown folder label")
+	}
+}
+
+func TestIsSafeRecordingName(t *testing.T) {
+	cases := map[string]bool{
+		"0001.wav":      true,
+		"memo-01.wav":   true,
+		"":              false,
+		".":             false,
+		"..":            false,
+		"../escape.wav": false,
+		"sub/dir.wav":   false,
+	}
+	for name, want := range cases {
+		if got := isSafeRecordingName(name); got != want {
+			t.Errorf("isSafeRecordingName(%q) = %v, want %v", name, got, want)
+		}
+	}
+}

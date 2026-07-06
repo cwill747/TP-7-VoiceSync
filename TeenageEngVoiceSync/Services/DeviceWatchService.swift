@@ -3,7 +3,8 @@
 //  TeenageEngVoiceSync
 //
 //  Watches for a TP-7 over MTP (via the vendored libtp7mtp backend) and
-//  downloads new recordings to a local cache directory.
+//  downloads new recordings from both the /recordings and /memo device
+//  folders to a local cache directory.
 //
 //  A single MTP session is held open for the entire time the device is
 //  connected, and reused for every list/download/delete call - the TP-7's
@@ -15,6 +16,16 @@ import Foundation
 import os
 import Observation
 
+/// A device file freshly downloaded to the local cache, tagged with the
+/// on-device folder it came from.
+struct DownloadedRecording {
+    let url: URL
+    let source: RecordingSource
+    /// The literal on-device filename (before local disambiguation - see
+    /// `DeviceWatchService.localFilename`), needed for MTP delete calls.
+    let deviceFilename: String
+}
+
 @Observable
 final class DeviceWatchService {
     private(set) var isConnected = false
@@ -23,12 +34,14 @@ final class DeviceWatchService {
 
     private var watchTask: Task<Void, Never>?
     private var session: TP7MTPSession?
+    /// Keyed by "<folder>/<filename>" so identically-named files in /memo and
+    /// /recordings are tracked independently.
     private var knownFilenames: Set<String> = []
 
     // Callbacks
     var onDeviceConnected: ((String) -> Void)?
     var onDeviceDisconnected: ((String) -> Void)?
-    var onNewRecordings: (([URL], String) -> Void)?
+    var onNewRecordings: (([DownloadedRecording], String) -> Void)?
 
     /// Start watching for TP-7 devices
     func startWatching() {
@@ -73,7 +86,7 @@ final class DeviceWatchService {
         session = newSession
         isConnected = true
         currentDeviceSerial = newSession.device.serial
-        recordingsPath = "/recordings"
+        recordingsPath = "/recordings, /memo"
         knownFilenames = []
 
         AppLogger.device.info("Device connected (serial=\(newSession.device.serial, privacy: .private))")
@@ -104,28 +117,33 @@ final class DeviceWatchService {
 
         guard case .success(let files) = listResult else { return false }
 
-        let newFiles = files.filter { !knownFilenames.contains($0.name) }
+        let newFiles = files.filter { !knownFilenames.contains(Self.trackingKey(for: $0)) }
         guard !newFiles.isEmpty else { return true }
 
-        var downloadedURLs: [URL] = []
+        var downloaded: [DownloadedRecording] = []
 
         for file in newFiles {
-            guard let destination = Self.cacheDestination(for: file.name, serial: serial) else { continue }
+            let key = Self.trackingKey(for: file)
+            guard let source = RecordingSource(rawValue: file.folder) else {
+                AppLogger.device.error("Skipping recording with unknown folder \(file.folder, privacy: .public)")
+                continue
+            }
+            guard let destination = Self.cacheDestination(for: file.name, folder: file.folder, serial: serial) else { continue }
 
             if FileManager.default.fileExists(atPath: destination.path) {
-                knownFilenames.insert(file.name)
-                downloadedURLs.append(destination)
+                knownFilenames.insert(key)
+                downloaded.append(DownloadedRecording(url: destination, source: source, deviceFilename: file.name))
                 continue
             }
 
             let downloadResult = await Task.detached(priority: .utility) {
-                session.download(filename: file.name, to: destination)
+                session.download(filename: file.name, folder: file.folder, to: destination)
             }.value
 
             switch downloadResult {
             case .success:
-                knownFilenames.insert(file.name)
-                downloadedURLs.append(destination)
+                knownFilenames.insert(key)
+                downloaded.append(DownloadedRecording(url: destination, source: source, deviceFilename: file.name))
             case .failure(let error):
                 // Do not mark as known: a transient MTP failure here should be
                 // retried on the next poll cycle rather than skipped forever.
@@ -133,11 +151,15 @@ final class DeviceWatchService {
             }
         }
 
-        if !downloadedURLs.isEmpty {
-            onNewRecordings?(downloadedURLs, serial)
+        if !downloaded.isEmpty {
+            onNewRecordings?(downloaded, serial)
         }
 
         return true
+    }
+
+    private static func trackingKey(for file: TP7MTPFileEntry) -> String {
+        "\(file.folder)/\(file.name)"
     }
 
     private func handleDisconnected() {
@@ -165,17 +187,75 @@ final class DeviceWatchService {
     }
 
     /// Deletes a recording from the currently connected device over MTP.
-    /// Blocking; call off the main thread. No-op if no device is connected.
-    func deleteFromDevice(filename: String) async -> Result<Void, TP7MTPError> {
+    /// `folder` must be "recordings" or "memo". Blocking; call off the main
+    /// thread. No-op if no device is connected.
+    func deleteFromDevice(filename: String, folder: String) async -> Result<Void, TP7MTPError> {
         guard let session else {
             return .failure(.device("No device connected"))
         }
         return await Task.detached(priority: .utility) {
-            session.deleteRecording(filename: filename)
+            session.deleteRecording(filename: filename, folder: folder)
         }.value
     }
 
-    private static func cacheDestination(for filename: String, serial: String) -> URL? {
+    /// Prefix applied to every /memo device filename (see `localFilename`) so
+    /// they can't collide with /recordings names once they become the
+    /// app-wide `Recording.filename` identity. Shared with `inferDeviceOrigin`,
+    /// which reverses the mapping for recordings whose origin fields were lost.
+    private static let memoFilenamePrefix = "memo-"
+
+    /// Prefix applied to a /recordings device filename only in the rare case it
+    /// would otherwise collide with the /memo mapping above (i.e. it already
+    /// starts with `memoFilenamePrefix`, or with this prefix itself). Distinct
+    /// from `memoFilenamePrefix` so escaped /recordings names can never overlap
+    /// with genuine /memo names, however they're nested: `localFilename` only
+    /// ever emits `memoFilenamePrefix + X` for /memo (for any X), and this
+    /// prefix never starts with `memoFilenamePrefix`, so the two output spaces
+    /// are disjoint by construction, not just for the common case.
+    private static let recordingsEscapePrefix = "recordings-escaped-"
+
+    /// The device-reported filename is only guaranteed unique *within* its own
+    /// folder, not across /recordings and /memo (both can auto-number from
+    /// "0001.wav"). This name becomes the local cache filename and, downstream,
+    /// `Recording.filename` - the identity SyncService uses for the SwiftData
+    /// uniqueness constraint, the S3 object key, and Notion/local-folder
+    /// matching - so a cross-folder collision there would silently drop or
+    /// overwrite one of the two recordings. Qualifying /memo names with a
+    /// prefix makes that identity collision-free while leaving /recordings
+    /// unqualified in the overwhelmingly common case (the only folder that
+    /// existed before this feature), so already-synced recordings keep
+    /// matching their existing S3/Notion state. The rare /recordings name that
+    /// would otherwise collide (it already looks like a qualified/escaped
+    /// name) gets its own, disjoint escape prefix instead of being left as-is.
+    static func localFilename(forDeviceFilename safeName: String, folder: String) -> String {
+        if folder == RecordingSource.memo.rawValue {
+            return "\(memoFilenamePrefix)\(safeName)"
+        }
+        if safeName.hasPrefix(memoFilenamePrefix) || safeName.hasPrefix(recordingsEscapePrefix) {
+            return "\(recordingsEscapePrefix)\(safeName)"
+        }
+        return safeName
+    }
+
+    /// Reverses `localFilename` for a persisted `Recording.filename` whose
+    /// `sourceFolder`/`deviceFilename` were never captured. Recordings
+    /// recovered from S3/Notion/local folder only ever persist `filename` -
+    /// none of those stores know about device folders - but that name
+    /// round-trips both the /memo prefix and the /recordings escape prefix
+    /// unchanged, so origin can be recovered from here. Returns nil for a
+    /// plain, unqualified name (an ordinary /recordings-origin, or
+    /// pre-/memo-feature, recording).
+    static func inferDeviceOrigin(fromPersistedFilename filename: String) -> (source: RecordingSource, deviceFilename: String)? {
+        if filename.hasPrefix(memoFilenamePrefix) {
+            return (.memo, String(filename.dropFirst(memoFilenamePrefix.count)))
+        }
+        if filename.hasPrefix(recordingsEscapePrefix) {
+            return (.recordings, String(filename.dropFirst(recordingsEscapePrefix.count)))
+        }
+        return nil
+    }
+
+    private static func cacheDestination(for filename: String, folder: String, serial: String) -> URL? {
         // Defense in depth: never trust the device-reported name as a path.
         // Only its last path component is used, so a malicious "../../foo.wav"
         // can't write outside the cache directory.
@@ -188,13 +268,16 @@ final class DeviceWatchService {
         guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
             return nil
         }
+        // Also nested by folder for on-disk organization, in addition to the
+        // filename qualification above.
         let dir = appSupport
             .appendingPathComponent("TP-7 VoiceSync", isDirectory: true)
             .appendingPathComponent("DeviceDownloads", isDirectory: true)
             .appendingPathComponent(serial, isDirectory: true)
+            .appendingPathComponent(folder, isDirectory: true)
 
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
 
-        return dir.appendingPathComponent(safeName)
+        return dir.appendingPathComponent(Self.localFilename(forDeviceFilename: safeName, folder: folder))
     }
 }
