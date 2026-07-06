@@ -37,6 +37,30 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
         statusItem.isEnabled = false
         menu.addItem(statusItem)
 
+        menu.addItem(.separator())
+
+        // Work Offline toggle
+        let offlineItem = NSMenuItem(
+            title: "Work Offline",
+            action: #selector(toggleWorkOffline),
+            keyEquivalent: ""
+        )
+        offlineItem.target = self
+        offlineItem.state = (appState?.isWorkOfflineForced ?? false) ? .on : .off
+        menu.addItem(offlineItem)
+
+        // Retry now (only when there's deferred work and we're online)
+        if let count = appState?.pendingRemoteCount, count > 0 {
+            let retryItem = NSMenuItem(
+                title: "Retry Upload (\(count))",
+                action: #selector(retryPending),
+                keyEquivalent: ""
+            )
+            retryItem.target = self
+            retryItem.isEnabled = !(appState?.isOffline ?? false)
+            menu.addItem(retryItem)
+        }
+
         let recent = fetchRecent()
         if !recent.isEmpty {
             menu.addItem(.separator())
@@ -94,6 +118,15 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
     @objc private func openPrefs() {
         NSApp.activate(ignoringOtherApps: true)
         openSettings?()
+    }
+
+    @objc private func toggleWorkOffline() {
+        guard let appState else { return }
+        appState.setWorkOffline(!appState.isWorkOfflineForced)
+    }
+
+    @objc private func retryPending() {
+        appState?.retryPendingWork()
     }
 
     // MARK: - Private

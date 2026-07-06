@@ -119,9 +119,15 @@ struct StatusToolbarItem: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Circle()
-                .fill(statusColor)
-                .frame(width: 8, height: 8)
+            if appState.isOffline {
+                Image(systemName: "wifi.slash")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                Circle()
+                    .fill(statusColor)
+                    .frame(width: 8, height: 8)
+            }
 
             Text(appState.statusText)
                 .font(.caption)
@@ -131,6 +137,7 @@ struct StatusToolbarItem: View {
 
     private var statusColor: Color {
         if appState.isSyncing { return .orange }
+        else if appState.pendingRemoteCount > 0 { return .yellow }
         else if appState.isDeviceConnected { return .green }
         else { return .gray }
     }

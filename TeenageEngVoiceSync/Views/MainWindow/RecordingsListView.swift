@@ -72,6 +72,11 @@ struct RecordingRow: View {
         if recording.transcriptionStatus == .processing {
             ProgressView()
                 .scaleEffect(0.6)
+        } else if SyncService.hasPendingRemoteWork(recording) {
+            Image(systemName: "icloud.slash")
+                .foregroundStyle(.orange)
+                .font(.caption)
+                .help("Waiting for connection to finish uploading")
         } else if recording.isTranscribed {
             Image(systemName: "text.bubble.fill")
                 .foregroundStyle(.green)

@@ -39,6 +39,20 @@ final class AppState {
         syncService?.pendingCount ?? 0
     }
 
+    // Forward offline state from sync service
+    var isOffline: Bool {
+        syncService?.isOffline ?? false
+    }
+
+    var pendingRemoteCount: Int {
+        syncService?.pendingRemoteCount ?? 0
+    }
+
+    /// Whether the user has manually forced offline mode ("Work Offline").
+    var isWorkOfflineForced: Bool {
+        syncService?.reachability.forceOffline ?? false
+    }
+
     // Services configured state
     var isS3Configured: Bool {
         UserDefaults.standard.string(forKey: "s3.bucket")?.isEmpty == false
@@ -62,8 +76,12 @@ final class AppState {
             // Truncate error message for menu bar
             let truncated = error.count > 50 ? String(error.prefix(47)) + "..." : error
             return "Error: \(truncated)"
+        } else if isOffline {
+            return pendingRemoteCount > 0 ? "Offline — \(pendingRemoteCount) waiting" : "Offline"
         } else if isSyncing {
             return "Syncing..."
+        } else if pendingRemoteCount > 0 {
+            return "\(pendingRemoteCount) waiting to upload"
         } else if !isDeviceWatchEnabled {
             return "Watching disabled"
         } else if isDeviceConnected {
@@ -95,6 +113,19 @@ final class AppState {
     func clearError() {
         lastError = nil
         showError = false
+    }
+
+    /// Toggle the manual "Work Offline" override.
+    func setWorkOffline(_ on: Bool) {
+        syncService?.reachability.setForceOffline(on)
+    }
+
+    /// Manually retry deferred remote work now.
+    func retryPendingWork() {
+        guard let syncService else { return }
+        Task { @MainActor in
+            await syncService.reconcilePendingWork()
+        }
     }
 
     func setDeviceWatchEnabled(_ enabled: Bool) {
