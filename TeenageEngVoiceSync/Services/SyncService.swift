@@ -262,8 +262,6 @@ final class SyncService {
                     fileSize: 0,
                     recordedAt: page.recordedAt ?? Date()
                 )
-                recording.transcriptionStatus = .completed
-                recording.transcribedAt = Date()
                 recording.notionPageCreatedAt = Date()
 
                 if let title = page.title {
@@ -276,9 +274,15 @@ final class SyncService {
                     recording.transcriptionLanguage = lang
                 }
 
-                // Fetch the transcript from the page body
-                if let transcript = try? await service.fetchPageTranscript(pageId: page.pageId) {
+                // Only mark the recording completed once we actually have a
+                // transcript. If the page body has no parseable transcript (or the
+                // fetch failed), leave the status at `.none` rather than showing an
+                // empty "completed" transcript that can never be retried.
+                if let transcript = try? await service.fetchPageTranscript(pageId: page.pageId),
+                   !transcript.isEmpty {
                     recording.transcriptionText = transcript
+                    recording.transcriptionStatus = .completed
+                    recording.transcribedAt = Date()
                 }
 
                 modelContext.insert(recording)
