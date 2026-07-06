@@ -78,32 +78,32 @@ actor S3Service {
         self.session = URLSession(configuration: config)
     }
 
-    /// Upload a file to S3
+    /// Upload a file to S3. Streams the file from disk rather than loading it
+    /// into memory — recordings are 24-bit/96kHz WAV and can be hundreds of MB.
+    /// Uses UNSIGNED-PAYLOAD (as presigned GETs already do) so signing doesn't
+    /// require hashing the whole file up front; integrity is covered elsewhere
+    /// by `FileHasher`-based dedup.
     func upload(fileURL: URL) async throws -> S3UploadResult {
         let filename = fileURL.lastPathComponent
         let s3Key = prefix + filename
         let contentType = "audio/wav"
 
-        // Read file data
-        let data = try Data(contentsOf: fileURL)
-
         // Get file attributes
         let attributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
-        let fileSize = attributes[.size] as? Int64 ?? Int64(data.count)
+        let fileSize = attributes[.size] as? Int64 ?? 0
 
         // Create request
         let url = URL(string: "https://\(bucket).\(endpointHost)/\(s3Key)")!
         var request = URLRequest(url: url)
         request.httpMethod = "PUT"
-        request.httpBody = data
         request.setValue(contentType, forHTTPHeaderField: "Content-Type")
-        request.setValue("\(data.count)", forHTTPHeaderField: "Content-Length")
+        request.setValue("\(fileSize)", forHTTPHeaderField: "Content-Length")
 
         // Sign request
-        let signedRequest = try signRequest(request, body: data)
+        let signedRequest = try signRequest(request, body: nil, unsignedPayload: true)
 
-        // Execute
-        let (_, response) = try await session.data(for: signedRequest)
+        // Execute — streams from disk instead of buffering the file in memory.
+        let (_, response) = try await session.upload(for: signedRequest, fromFile: fileURL)
 
         guard let httpResponse = response as? HTTPURLResponse else {
             throw S3Error.invalidResponse
@@ -324,15 +324,17 @@ actor S3Service {
         return results
     }
 
-    /// Download an object's bytes by key. Used to re-transcribe recordings that
-    /// were restored by startup recovery and have no local audio copy.
-    func download(s3Key: String) async throws -> Data {
+    /// Download an object by key straight to `destinationURL`, without buffering
+    /// the whole file in memory. Used to re-transcribe recordings that were
+    /// restored by startup recovery and have no local audio copy.
+    func download(s3Key: String, to destinationURL: URL) async throws {
         let presignedURL = try generatePresignedURL(s3Key: s3Key, expiry: 3600)
-        let (data, response) = try await session.data(from: presignedURL)
+        let (tempLocation, response) = try await session.download(from: presignedURL)
         guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            try? FileManager.default.removeItem(at: tempLocation)
             throw S3Error.invalidResponse
         }
-        return data
+        try FileManager.default.moveItem(at: tempLocation, to: destinationURL)
     }
 
     /// Validate bucket access
@@ -353,7 +355,7 @@ actor S3Service {
 
     // MARK: - AWS Signature V4
 
-    private func signRequest(_ request: URLRequest, body: Data) throws -> URLRequest {
+    private func signRequest(_ request: URLRequest, body: Data?, unsignedPayload: Bool = false) throws -> URLRequest {
         var signedRequest = request
         let date = Date()
         let amzDate = amzDateString(from: date)
@@ -363,10 +365,16 @@ actor S3Service {
         signedRequest.setValue(host, forHTTPHeaderField: "Host")
         signedRequest.setValue(amzDate, forHTTPHeaderField: "X-Amz-Date")
 
-        // Content hash
-        let payloadHash = SHA256.hash(data: body)
-            .compactMap { String(format: "%02x", $0) }
-            .joined()
+        // Content hash. UNSIGNED-PAYLOAD avoids hashing the whole body up front,
+        // which matters for large file uploads streamed from disk.
+        let payloadHash: String
+        if unsignedPayload {
+            payloadHash = "UNSIGNED-PAYLOAD"
+        } else {
+            payloadHash = SHA256.hash(data: body ?? Data())
+                .compactMap { String(format: "%02x", $0) }
+                .joined()
+        }
         signedRequest.setValue(payloadHash, forHTTPHeaderField: "X-Amz-Content-Sha256")
 
         // Canonical request
