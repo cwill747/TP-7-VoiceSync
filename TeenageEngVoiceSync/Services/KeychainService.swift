@@ -209,8 +209,16 @@ actor KeychainService {
         var result: AnyObject?
         let status = SecItemCopyMatching(legacyQuery as CFDictionary, &result)
 
-        guard status == errSecSuccess,
-              let data = result as? Data,
+        if status == errSecItemNotFound {
+            return nil
+        }
+
+        guard status == errSecSuccess else {
+            AppLogger.keychain.error("Legacy retrieve failed for \(key.rawValue, privacy: .public): status \(status, privacy: .public)")
+            throw KeychainError.retrieveFailed(status)
+        }
+
+        guard let data = result as? Data,
               let value = String(data: data, encoding: .utf8) else {
             return nil
         }
