@@ -15,6 +15,16 @@
 		E8C0521153BBC298A4A89675 /* WhisperKit in Frameworks */ = {isa = PBXBuildFile; productRef = 6671A7855FACA8A9417F95BE /* WhisperKit */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		9E6DCDB9E06EFFA31EFC1C03 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 8ECCCD622F15E24600FFB286 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 8ECCCD692F15E24600FFB286;
+			remoteInfo = TeenageEngVoiceSync;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXCopyFilesBuildPhase section */
 		C1A1E20D9F1E4A2B8C6D0F0D /* Embed Vendored Libraries */ = {
 			isa = PBXCopyFilesBuildPhase;
@@ -35,12 +45,18 @@
 		C1A1E2059F1E4A2B8C6D0F05 /* libtp7mtp.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; path = libtp7mtp.dylib; sourceTree = "<group>"; };
 		C1A1E2079F1E4A2B8C6D0F07 /* libusb-1.0.0.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; path = "libusb-1.0.0.dylib"; sourceTree = "<group>"; };
 		C1A1E20A9F1E4A2B8C6D0F0A /* libtp7mtp.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = libtp7mtp.h; sourceTree = "<group>"; };
+		871EAC42C8610CB612B7F945 /* TeenageEngVoiceSyncTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TeenageEngVoiceSyncTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		8ECCCD6C2F15E24600FFB286 /* TeenageEngVoiceSync */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = TeenageEngVoiceSync;
+			sourceTree = "<group>";
+		};
+		E8CB9852B4DA780774B60555 /* TeenageEngVoiceSyncTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = TeenageEngVoiceSyncTests;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -57,6 +73,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		74968E4BA0A32B0FB65328D7 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -64,6 +87,7 @@
 			isa = PBXGroup;
 			children = (
 				8ECCCD6C2F15E24600FFB286 /* TeenageEngVoiceSync */,
+				E8CB9852B4DA780774B60555 /* TeenageEngVoiceSyncTests */,
 				C1A1E20B9F1E4A2B8C6D0F0B /* Vendor */,
 				8ECCCD6B2F15E24600FFB286 /* Products */,
 			);
@@ -73,6 +97,7 @@
 			isa = PBXGroup;
 			children = (
 				8ECCCD6A2F15E24600FFB286 /* TP-7 VoiceSync.app */,
+				871EAC42C8610CB612B7F945 /* TeenageEngVoiceSyncTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -123,6 +148,27 @@
 			productReference = 8ECCCD6A2F15E24600FFB286 /* TP-7 VoiceSync.app */;
 			productType = "com.apple.product-type.application";
 		};
+		F04C3E76D35C131892C5D9E4 /* TeenageEngVoiceSyncTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A94E20B46C3EBF755D6E5958 /* Build configuration list for PBXNativeTarget "TeenageEngVoiceSyncTests" */;
+			buildPhases = (
+				D2F0022DDD2A447782F39F9A /* Sources */,
+				74968E4BA0A32B0FB65328D7 /* Frameworks */,
+				D751137A23C589A367D8634C /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				793A9B84FE395007616B3073 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				E8CB9852B4DA780774B60555 /* TeenageEngVoiceSyncTests */,
+			);
+			name = TeenageEngVoiceSyncTests;
+			productName = TeenageEngVoiceSyncTests;
+			productReference = 871EAC42C8610CB612B7F945 /* TeenageEngVoiceSyncTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -135,6 +181,10 @@
 				TargetAttributes = {
 					8ECCCD692F15E24600FFB286 = {
 						CreatedOnToolsVersion = 26.0.1;
+					};
+					F04C3E76D35C131892C5D9E4 = {
+						CreatedOnToolsVersion = 26.0.1;
+						TestTargetID = 8ECCCD692F15E24600FFB286;
 					};
 				};
 			};
@@ -157,12 +207,20 @@
 			projectRoot = "";
 			targets = (
 				8ECCCD692F15E24600FFB286 /* TeenageEngVoiceSync */,
+				F04C3E76D35C131892C5D9E4 /* TeenageEngVoiceSyncTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		8ECCCD682F15E24600FFB286 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D751137A23C589A367D8634C /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -179,7 +237,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		D2F0022DDD2A447782F39F9A /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		793A9B84FE395007616B3073 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 8ECCCD692F15E24600FFB286 /* TeenageEngVoiceSync */;
+			targetProxy = 9E6DCDB9E06EFFA31EFC1C03 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		8ECCCD892F15E24800FFB286 /* Debug */ = {
@@ -404,6 +477,40 @@
 			};
 			name = Release;
 		};
+		0A9F07FB54124E6B1FDA051D /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = us.cwill.TeenageEngVoiceSyncTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/TP-7 VoiceSync.app/Contents/MacOS/TP-7 VoiceSync";
+			};
+			name = Debug;
+		};
+		3CAB6816E85B5910375730F5 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = us.cwill.TeenageEngVoiceSyncTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/TP-7 VoiceSync.app/Contents/MacOS/TP-7 VoiceSync";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -421,6 +528,15 @@
 			buildConfigurations = (
 				8ECCCD8C2F15E24800FFB286 /* Debug */,
 				8ECCCD8D2F15E24800FFB286 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A94E20B46C3EBF755D6E5958 /* Build configuration list for PBXNativeTarget "TeenageEngVoiceSyncTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				0A9F07FB54124E6B1FDA051D /* Debug */,
+				3CAB6816E85B5910375730F5 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

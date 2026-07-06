@@ -110,7 +110,7 @@ actor AppleNotesService {
         }
     }
 
-    private func escapeForAppleScript(_ string: String) -> String {
+    nonisolated func escapeForAppleScript(_ string: String) -> String {
         string
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
@@ -119,7 +119,7 @@ actor AppleNotesService {
             .replacingOccurrences(of: "\t", with: "\\t")
     }
 
-    private func escapeHTML(_ string: String) -> String {
+    nonisolated func escapeHTML(_ string: String) -> String {
         string
             .replacingOccurrences(of: "&", with: "&amp;")
             .replacingOccurrences(of: "<", with: "&lt;")

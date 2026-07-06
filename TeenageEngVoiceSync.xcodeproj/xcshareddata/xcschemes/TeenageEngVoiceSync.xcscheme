@@ -21,14 +21,39 @@
                ReferencedContainer = "container:TeenageEngVoiceSync.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "NO"
+            buildForProfiling = "NO"
+            buildForArchiving = "NO"
+            buildForAnalyzing = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "F04C3E76D35C131892C5D9E4"
+               BuildableName = "TeenageEngVoiceSyncTests.xctest"
+               BlueprintName = "TeenageEngVoiceSyncTests"
+               ReferencedContainer = "container:TeenageEngVoiceSync.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
       </BuildActionEntries>
    </BuildAction>
    <TestAction
       buildConfiguration = "Debug"
       selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB"
       selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
-      shouldUseLaunchSchemeArgsEnv = "YES"
-      shouldAutocreateTestPlan = "YES">
+      shouldUseLaunchSchemeArgsEnv = "YES">
+      <Testables>
+         <TestableReference
+            skipped = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "F04C3E76D35C131892C5D9E4"
+               BuildableName = "TeenageEngVoiceSyncTests.xctest"
+               BlueprintName = "TeenageEngVoiceSyncTests"
+               ReferencedContainer = "container:TeenageEngVoiceSync.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
+      </Testables>
    </TestAction>
    <LaunchAction
       buildConfiguration = "Debug"

@@ -122,9 +122,8 @@ actor S3Service {
     }
 
     /// Generate a presigned URL for downloading/playing a file
-    nonisolated func generatePresignedURL(s3Key: String, expiry: TimeInterval = 3600) throws -> URL {
+    nonisolated func generatePresignedURL(s3Key: String, expiry: TimeInterval = 3600, date: Date = Date()) throws -> URL {
         let expires = Int(expiry)
-        let date = Date()
         let dateFormatter = ISO8601DateFormatter()
         dateFormatter.formatOptions = [.withFullDate, .withDashSeparatorInDate]
         let dateStamp = dateFormatter.string(from: date).replacingOccurrences(of: "-", with: "")
@@ -197,9 +196,8 @@ actor S3Service {
     }
 
     /// Generate a presigned URL with Content-Disposition for download
-    nonisolated func generateDownloadURL(s3Key: String, filename: String, expiry: TimeInterval = 3600) throws -> URL {
+    nonisolated func generateDownloadURL(s3Key: String, filename: String, expiry: TimeInterval = 3600, date: Date = Date()) throws -> URL {
         let expires = Int(expiry)
-        let date = Date()
         let dateFormatter = ISO8601DateFormatter()
         dateFormatter.formatOptions = [.withFullDate, .withDashSeparatorInDate]
         let dateStamp = dateFormatter.string(from: date).replacingOccurrences(of: "-", with: "")
@@ -355,9 +353,8 @@ actor S3Service {
 
     // MARK: - AWS Signature V4
 
-    private func signRequest(_ request: URLRequest, body: Data?, unsignedPayload: Bool = false) throws -> URLRequest {
+    func signRequest(_ request: URLRequest, body: Data?, unsignedPayload: Bool = false, date: Date = Date()) throws -> URLRequest {
         var signedRequest = request
-        let date = Date()
         let amzDate = amzDateString(from: date)
         let dateStamp = dateStampString(from: date)
 
@@ -491,7 +488,7 @@ struct S3ObjectInfo {
     var filename: String { URL(fileURLWithPath: key).lastPathComponent }
 }
 
-private class S3ListParser: NSObject, XMLParserDelegate {
+class S3ListParser: NSObject, XMLParserDelegate {
     struct Result {
         var objects: [S3ObjectInfo] = []
         var isTruncated = false
