@@ -476,11 +476,9 @@ final class SyncService {
             recording.notionPageCreatedAt = nil
             recording.llmProcessedAt = nil
 
-            // Regenerate summary, then recreate the notes/pages.
-            await generateAndStoreSummary(for: recording, text: result.text)
-            await createNotionPage(for: recording, transcription: result)
-            await createAppleNote(for: recording, transcription: result)
-            await refreshPendingCount()
+            // Regenerate summary/notes via deliverRemote so the Work Offline
+            // guard is honoured; reconciliation finishes deferred steps later.
+            await deliverRemote(recording, transcription: result)
 
             // Notify
             if UserDefaults.standard.bool(forKey: "notify.onSync") {
@@ -1482,7 +1480,9 @@ extension SyncService {
 
         if needsS3Upload(recording) { steps.append(.s3) }
 
-        if defaults.bool(forKey: "openrouter.enabled"), recording.llmProcessedAt == nil {
+        let openRouterModel = defaults.string(forKey: "openrouter.model") ?? ""
+        if defaults.bool(forKey: "openrouter.enabled"), !openRouterModel.isEmpty,
+           recording.llmProcessedAt == nil {
             steps.append(.summary)
         }
 
