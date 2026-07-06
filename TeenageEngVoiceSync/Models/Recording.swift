@@ -58,6 +58,9 @@ final class Recording {
     // Diarization output — JSON-encoded [StoredSpeakerSegment]
     var speakerSegmentsData: Data?
 
+    // Overdub notes output (memo tracks 1+) — JSON-encoded [OverdubNote]
+    var overdubNotesData: Data?
+
     // Metadata
     var createdAt: Date
     var updatedAt: Date
@@ -156,5 +159,25 @@ struct StoredSpeakerSegment: Codable, Identifiable, Sendable {
         self.embedding = embedding
         self.assignedPersonName = assignedPersonName
         self.assignedPersonId = assignedPersonId
+    }
+}
+
+/// A transcribed overdub layer on top of a TP-7 /memo recording's base track.
+/// Memo overdubs are the same speaker as the base track (no diarization needed) —
+/// this just records the note text and where it falls on the base memo's timeline,
+/// since every track in an overdubbed memo is the same length and shares that timeline.
+struct OverdubNote: Codable, Sendable, Identifiable {
+    var id: UUID
+    /// 1-based overdub layer (track 0 is the base memo and isn't represented here).
+    var trackIndex: Int
+    /// Time on the base memo's timeline where this note begins.
+    var startTime: TimeInterval
+    var text: String
+
+    init(trackIndex: Int, startTime: TimeInterval, text: String) {
+        self.id = UUID()
+        self.trackIndex = trackIndex
+        self.startTime = startTime
+        self.text = text
     }
 }

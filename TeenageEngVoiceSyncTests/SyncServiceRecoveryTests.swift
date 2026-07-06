@@ -87,6 +87,31 @@ final class SyncServiceRecoveryTests: XCTestCase {
         XCTAssertFalse(SyncService.forceSingleSpeaker(for: recording))
     }
 
+    // MARK: - hasMemoOverdubTracks
+
+    func testHasMemoOverdubTracksTrueForMultiTrackMemo() {
+        let recording = Recording(filename: "memo.wav", localPath: "", fileSize: 0, recordedAt: .now)
+        recording.sourceFolder = .memo
+        recording.trackCount = 2
+        XCTAssertTrue(SyncService.hasMemoOverdubTracks(for: recording))
+    }
+
+    func testHasMemoOverdubTracksFalseForSingleTrackMemo() {
+        let recording = Recording(filename: "memo.wav", localPath: "", fileSize: 0, recordedAt: .now)
+        recording.sourceFolder = .memo
+        recording.trackCount = 1
+        XCTAssertFalse(SyncService.hasMemoOverdubTracks(for: recording))
+    }
+
+    func testHasMemoOverdubTracksFalseForMultiTrackRecordingsFolder() {
+        // /recordings multi-track files are distinct speakers (handled separately),
+        // not overdub notes.
+        let recording = Recording(filename: "session.wav", localPath: "", fileSize: 0, recordedAt: .now)
+        recording.sourceFolder = .recordings
+        recording.trackCount = 2
+        XCTAssertFalse(SyncService.hasMemoOverdubTracks(for: recording))
+    }
+
     // MARK: - inferRecoveredDeviceOrigin
 
     @MainActor
