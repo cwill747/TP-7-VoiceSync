@@ -7,75 +7,65 @@
 
 # TP-7 VoiceSync
 
-A macOS menu bar app that automatically syncs, transcribes, and organizes your Teenage Engineering TP-7 voice recordings. Supports **fully local transcription** via [WhisperKit](https://github.com/argmaxinc/WhisperKit).
-
-| Main Interface | Menu Bar Popover | Apple Notes Integration |
-| :-----------------------------------------------------------: | :-------------------------------------: | :-------------------------------------: |
-| ![Main Interface](Images/Recordings.png) | ![Menu Bar Popover](Images/MenuBar.png) | ![Apple Notes](Images/AppleNote.png) |
-| _Recordings are automatically transcribed_ | _Menu Bar Popover_ | _Transcriptions synced to Apple Notes_ |
-
+A macOS menu bar app that automatically syncs, transcribes, and organizes your Teenage Engineering TP-7 voice recordings. Defaults to **fully local transcription** via **Parakeet** ([FluidAudio](https://github.com/FluidInference/FluidAudio), Apple Neural Engine), with optional on-device **speaker diarization** and a **People** manager that learns who's who. Outputs to **Notion**, Apple Notes, or local Markdown, and talks to the TP-7 directly over MTP.
 
 ## Features
 
-- **Automatic Device Detection** — Detects when your TP-7 connects over MTP
-- **Local Transcription via WhisperKit** — Transcribe entirely on-device with no API key or internet required (after model download)
-- **Cloud Transcription via ElevenLabs** — Alternative cloud-based transcription if you prefer
+- **Automatic Device Detection** — Detects when your TP-7 connects over MTP (no FieldKit required)
+- **Local Transcription via Parakeet** — On-device Parakeet TDT via FluidAudio, running on the Apple Neural Engine, with no API key or internet required (after the model auto-downloads)
+- **Also Supports WhisperKit & ElevenLabs** — WhisperKit as an alternative local engine, or ElevenLabs for cloud transcription
+- **Speaker Diarization** — Optionally split transcripts into per-speaker turns entirely on-device (Parakeet only)
+- **People Manager** — Enroll voices, reassign speaker turns to named people, and let the app auto-label known speakers in future recordings
+- **Notion Output** — One database page per recording, sorted by date; the app provisions any missing properties for you
 - **Cloud Backup to S3 (Optional)** — Upload recordings to AWS S3 with SHA256 deduplication
 - **Local Storage (Optional)** — Copy recordings to a folder on your Mac when skipping S3
-- **Smart Titles & Summaries** — Generates meaningful titles using LLM via OpenRouter (optional)
-- **Apple Notes Integration** — Creates notes with transcriptions, metadata, and playable audio links
+- **Smart Titles & Summaries** — Generates meaningful titles using an LLM via OpenRouter (optional)
+- **Apple Notes / Markdown Output** — Creates notes with transcriptions, metadata, and playable audio links, or writes local Markdown files
 - **Menu Bar Interface** — Quick access to recent recordings and sync status
 - **Soft Delete** — Prevents re-syncing of recordings you've deleted
+- **Startup Recovery** — Rebuilds the local library from S3, your local audio folder, and Notion if local state is lost (reinstall, container reset)
 
 > [!CAUTION]
 > This app is 1000% vibe-coded using Claude Code while I was waiting for builds to pass on another project. It is definitely not reviewed seriously for security concerns or major bugs that could crash your computer. Install with caution.
 
-## WhisperKit Integration
+## Local Transcription
 
-TP-7 VoiceSync includes [WhisperKit](https://github.com/argmaxinc/WhisperKit) by [Argmax](https://www.argmaxinc.com/) for fully local, on-device transcription. This means you can transcribe your recordings **without sending audio to any cloud service** and **without an API key**.
+Both local engines transcribe **without sending audio to any cloud service** and **without an API key**. Models auto-download from Hugging Face on first use and are cached locally, so no network is required afterward.
 
-### How It Works
+### Parakeet (default, Apple Neural Engine)
 
-1. **Choose WhisperKit** as your transcription provider in the Setup Wizard or Settings > Transcription
-2. **Select a model** from the available options (see table below)
-3. **Download the model** — click "Download Model" and the app will automatically fetch the model from Hugging Face
-4. **Transcribe offline** — once downloaded, transcription runs entirely on your Mac using Apple's CoreML
+Parakeet is the recommended engine. It runs [Parakeet TDT](https://huggingface.co/FluidInference) on the Apple Neural Engine via [FluidAudio](https://github.com/FluidInference/FluidAudio), so it's fast and battery-friendly.
 
-The model is downloaded once and cached locally. Future transcriptions use the cached model with no network required.
+- **Choose Parakeet (Local, ANE)** in the Setup Wizard or **Settings > Transcription**
+- **Pick a model variant:**
+  - **v2** — English-only, highest recall (default)
+  - **v3** — multilingual (25 European languages plus Japanese and Chinese)
+- **Download the model** — click "Download Model" and it fetches automatically, caching under `~/.cache/fluidaudio`
+- **Speaker diarization (optional)** — enable it to split transcripts into per-speaker turns entirely on-device. This downloads a separate, small diarization model. See [Speakers & People](#speakers--people).
 
-### Automatic Model Download
+### WhisperKit (alternative local engine)
 
-When you select WhisperKit and click "Download Model" in the Setup Wizard or Settings, the app:
+[WhisperKit](https://github.com/argmaxinc/WhisperKit) by [Argmax](https://www.argmaxinc.com/) is also supported if you prefer Whisper models.
 
-1. Downloads the selected model variant from [argmaxinc/whisperkit-coreml](https://huggingface.co/argmaxinc/whisperkit-coreml) on Hugging Face
-2. Shows download progress in the UI
-3. Caches the model locally for future use
-4. Marks the model as ready once complete
+1. **Choose WhisperKit (Local)** in the Setup Wizard or **Settings > Transcription**
+2. **Select a model** (Base or Distil Large v3 recommended)
+3. **Download the model** — it fetches from [argmaxinc/whisperkit-coreml](https://huggingface.co/argmaxinc/whisperkit-coreml) and runs on-device via CoreML
 
-If you switch models later, you can download the new model the same way. Each model is cached independently.
+Each model is cached independently, so you can switch models and download the new one the same way.
+
+## Speakers & People
+
+When speaker diarization is enabled (Parakeet only), each transcript is broken into "Speaker N" turns. The **People** manager lets you turn those anonymous labels into named people — and teaches the app to recognize them automatically next time.
+
+- **Add people** in the People screen. Mark yourself with "This is me" if you like.
+- **Reassign a turn** in a recording's detail view: tap a speaker label and pick a person (or create one on the spot). The audio for that turn is enrolled as a voice sample and folded into that person's voice embedding.
+- **Auto-labeling** — as you correct turns, the roster of known voices grows. Future recordings match segments against enrolled people and label them automatically, so the corrections you make compound over time.
+
+All voice embeddings and samples live locally in the app's database; nothing is uploaded.
 
 ### Future: Local LLM for Titles & Summaries
 
-Currently, AI-generated titles and summaries require OpenRouter (a cloud LLM API). I'm planning to add support for **local LLM inference** as well, so the entire pipeline — transcription, title generation, and summarization — can run completely offline on your Mac.
-
-This would likely use a small, efficient model optimized for Apple Silicon (similar to how WhisperKit uses CoreML). If you're interested in contributing to this or have suggestions for local LLM frameworks, feel free to open an issue.
-
-## Why I Built This
-
-I own a [TP-7](https://teenage.engineering/products/tp-7) and I love recording memos with it. While some may say this is a $1,400 toy for nerds masquerading as audiophiles, I find it to be an extremely pleasurable device for taking notes. Sure, I could use the Voice Memo app on my iPhone, which already has great transcription capabilities. I want to keep a device in my pocket that I can easily lose to take voice notes for ideas about side projects that I'll never complete.
-
-The TP-7 is the Ferrari of audio recorders. It has a beautiful feel and a physical rotating recording wheel that makes me feel like I'm Don Draper leaving drunken recordings for my secretary to transcribe.
-
-| Recording Workflow | Rewind Button Demo |
-| :-----------------------------------------: | :--------------------------------------------: |
-| ![Recording workflow](Images/Recording.gif) | ![Rewind button demo](Images/RewindButton.gif) |
-| _Recording a memo on the TP-7_ | _The motorized tape reel in action_ |
-
-I love taking memos with this thing, but I didn't know what to do with these recordings. Teenage Engineering has an iPhone app and Mac app that allows you to interface with the device that is primarily designed for recording music or used with the mixer and field mic that they sell, but I really only use it for voice memos.
-
-After futzing around for a few days, I decided to make a little macOS app that allowed me to plug it in and automatically download the voice memos. 15 hours later, I ended up with a macOS app that transcribes the audio recordings and sends them to your Notes app.
-
-If you have a [TP-7](https://teenage.engineering/products/tp-7) and use it to record memos, then I encourage you to download and take a look.
+AI-generated titles and summaries currently require OpenRouter (a cloud LLM API). Local LLM inference — so titles and summaries can also run fully offline on Apple Silicon — is a possible future addition. Suggestions and contributions are welcome via an issue.
 
 ## About the TP-7
 
@@ -96,13 +86,15 @@ The [Teenage Engineering TP-7](https://teenage.engineering/products/tp-7) is a p
 
 ## Requirements
 
-- **macOS 14.0 (Sonoma)** or later
+- **macOS 14.0 (Sonoma)** or later (Apple Silicon recommended for Parakeet)
 - **Transcription** (pick one):
+  - **Parakeet** (local, free, ANE) — download a model once, then transcribe offline (recommended)
   - **WhisperKit** (local, free) — download a model once, then transcribe offline
   - **ElevenLabs API key** (cloud) — pay-per-use cloud transcription
 - **Storage** (pick one):
   - **AWS S3 bucket** with access credentials (optional, enables playback links in notes)
   - **Local folder** on your Mac (required if you skip S3)
+- **Output** (optional, any combination): **Notion**, **Apple Notes**, or **local Markdown files**
 - **OpenRouter API key** (optional) for AI-generated titles and summaries
 
 ## Installation
@@ -118,14 +110,9 @@ The [Teenage Engineering TP-7](https://teenage.engineering/products/tp-7) is a p
 
 On first launch, TP-7 VoiceSync opens a Setup Wizard to walk you through configuration. You can also re-run it anytime via **Settings > General > Run Setup Wizard Again**.
 
-| Setup Wizard |
-| :----------: |
-| ![Setup Wizard](Images/Wizzard.png) |
-| _The Setup Wizard guides you through transcription, storage, and optional integrations._ |
-
 The wizard guides you through:
 
-- **Transcription (required)**: WhisperKit (local) or ElevenLabs (cloud)
+- **Transcription (required)**: Parakeet (local, ANE) — or WhisperKit (local) or ElevenLabs (cloud)
 - **Storage (choose one)**: S3 (optional) or a local folder on your Mac
 - **AI Titles (optional)**: OpenRouter
 - **Notes (optional)**: Apple Notes, or local Markdown files if you skip Notes
@@ -141,14 +128,22 @@ After setup, **watching/syncing TP-7 recordings is enabled by default** (you can
 
 ### Step 2: Configure Transcription
 
-**Option A: WhisperKit (Local — Recommended)**
+**Option A: Parakeet (Local, ANE — Recommended)**
+
+1. In the Setup Wizard or **Settings > Transcription**, select "Parakeet (Local, ANE)"
+2. Choose a model variant (v2 for English, v3 for multilingual)
+3. Click "Download Model" and wait for the download to complete
+4. (Optional) Enable **Speaker diarization** to split transcripts by speaker — see [Speakers & People](#speakers--people)
+5. Enable "Enable automatic transcription"
+
+**Option B: WhisperKit (Local)**
 
 1. In the Setup Wizard or **Settings > Transcription**, select "WhisperKit (Local)"
 2. Choose a model (Base or Distil Large v3 recommended)
 3. Click "Download Model" and wait for the download to complete
 4. Enable "Enable automatic transcription"
 
-**Option B: ElevenLabs (Cloud)**
+**Option C: ElevenLabs (Cloud)**
 
 1. Sign up at [elevenlabs.io](https://elevenlabs.io)
 2. Go to your profile and copy your API key
@@ -206,6 +201,16 @@ The app adds any of these properties that don't already exist — it never modif
 
 The full transcript is written into the page body, not a property. If a property name already exists with an incompatible type (e.g. you already have a `Duration` number column), the app creates an alternate `TP7 Duration` column instead and shows a warning.
 
+## Startup Recovery
+
+The local recording database lives in a SwiftData store on your Mac. If that store is lost — you reinstall the app, reset the container, or move to a new machine — the app rebuilds it on launch by scanning whatever sources you have configured, in this order:
+
+1. **S3** — lists every `.wav` under your configured bucket/prefix and re-creates any recording that isn't already tracked (restoring size, S3 key, and recorded date).
+2. **Local audio folder** — scans for `.wav`/`.mp3`/`.m4a` files not already tracked and re-parses WAV metadata (duration, sample rate).
+3. **Notion** — reads back every page in your database, restores recordings that only exist there (title, summary, language, and the transcript from the page body), and enriches recordings recovered from S3/local that are still missing a transcription.
+
+Recovery is idempotent — recordings are matched by filename, so re-running it never creates duplicates. It runs automatically at startup before device watching begins; no action is required. Sources you haven't configured are skipped.
+
 ## Permissions & Privacy
 
 TP-7 VoiceSync runs locally by default, and only uses network services if you enable them (S3, ElevenLabs, OpenRouter). Credentials are stored in your Mac's Keychain.
@@ -222,8 +227,8 @@ API keys and cloud credentials are stored securely in the macOS Keychain (not in
 
 ### Local vs Cloud Processing
 
-- **WhisperKit (Local)**: transcription runs on-device after you download a model. No audio is sent anywhere.
-- **ElevenLabs / OpenRouter / S3**: audio and/or text is sent to those services when enabled.
+- **Parakeet / WhisperKit (Local)**: transcription, and speaker diarization/voice enrollment, run on-device after you download a model. No audio is sent anywhere.
+- **ElevenLabs / OpenRouter / S3 / Notion**: audio and/or text is sent to those services when enabled.
 
 ### Apple Notes Automation
 
@@ -235,7 +240,7 @@ The app can notify you when your TP-7 connects and when recordings are synced. Y
 
 ### Network Access
 
-The app needs network access to upload to S3 and communicate with the ElevenLabs and OpenRouter APIs. This is handled automatically by macOS. If you use WhisperKit with local storage, no network access is required after the initial model download.
+The app needs network access to upload to S3, sync to Notion, and communicate with the ElevenLabs and OpenRouter APIs. This is handled automatically by macOS. If you use Parakeet (or WhisperKit) with local storage and local Markdown output, no network access is required after the initial model download.
 
 ## Usage
 
@@ -243,14 +248,15 @@ The app needs network access to upload to S3 and communicate with the ElevenLabs
 2. **New recordings automatically sync** — the app detects new WAV files and processes them (watching is enabled by default)
 3. **View recent recordings** in the menu bar popover
 4. **Access all recordings** via "Open Recordings" in the menu
-5. **Find transcriptions** in Apple Notes in your configured folder
+5. **Find transcriptions** in whichever outputs you enabled — Notion, Apple Notes, and/or local Markdown
+6. **Correct speakers** in a recording's detail view when diarization is on — reassigning turns to people trains auto-labeling for future recordings
 
-Each note includes:
+Each transcript includes:
 
-- Full transcription text
+- Full transcription text (split into per-speaker turns when diarization is enabled)
 - AI-generated title and summary (if enabled)
 - Recording metadata (date, filename, duration, file size, language)
-- Play and download links for the audio
+- Play and download links for the audio (when S3 is enabled)
 
 ## Troubleshooting
 
@@ -271,22 +277,34 @@ Each note includes:
 
 ### Transcription Fails
 
-- **WhisperKit**: Make sure the model is downloaded (check Settings > Transcription for status)
+- **Parakeet / WhisperKit**: Make sure the model is downloaded (check **Settings > Transcription** for status)
 - **ElevenLabs**: Verify your API key in **Settings > API Keys** and check your account balance
 - Ensure the recording uploaded successfully to S3 first (if using ElevenLabs)
 
-### WhisperKit Model Won't Download
+### Model Won't Download
 
 - Check your internet connection
-- Ensure you have enough disk space (models range from 75 MB to 3 GB)
-- Try a smaller model first (Tiny or Base)
+- Ensure you have enough disk space (WhisperKit models range from 75 MB to 3 GB; Parakeet and the diarization model are smaller)
+- For WhisperKit, try a smaller model first (Tiny or Base)
 - Check Console.app for detailed error messages
+
+### Speakers Not Being Labeled
+
+- Speaker diarization is Parakeet-only — confirm Parakeet is selected and **Speaker diarization** is enabled in **Settings > Transcription**
+- Make sure the diarization model finished downloading
+- Auto-labeling only kicks in once you've enrolled voices by reassigning turns to people; the first recording of a new speaker will show generic "Speaker N" labels
 
 ### Notes Not Appearing
 
 - Check that Apple Notes integration is enabled in **Settings > Transcription**
 - Verify the app has permission to control Notes (System Settings > Privacy & Security > Automation)
 - Make sure the Notes app is installed and signed in
+
+### Notion Pages Not Appearing
+
+- Confirm the integration is shared with your database (**••• > Connections** on the database)
+- Re-check the Integration Secret and Database ID in **Settings > Transcription**, then click "Provision & Connect"
+- Look for a type-conflict warning — if a property already exists with an incompatible type, the app writes to an alternate `TP7 …` column instead
 
 ## Contributing
 

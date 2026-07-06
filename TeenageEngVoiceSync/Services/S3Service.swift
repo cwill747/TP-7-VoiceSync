@@ -49,12 +49,13 @@ actor S3Service {
     private let secretAccessKey: String
     private let session: URLSession
 
-    // Character set for AWS query parameter encoding (excludes / and + which must be encoded)
-    private static let awsQueryAllowed: CharacterSet = {
-        var allowed = CharacterSet.urlQueryAllowed
-        allowed.remove(charactersIn: "/+")
-        return allowed
-    }()
+    // SigV4 canonical query encoding: percent-encode every character except the
+    // RFC 3986 unreserved set. `.urlQueryAllowed` leaves reserved characters like
+    // `=`, `&`, `+`, and `/` unescaped, which breaks signing for opaque values such
+    // as S3 continuation tokens (which routinely contain `=` and `/`).
+    private static let awsQueryAllowed = CharacterSet(
+        charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.~"
+    )
 
     init(
         bucket: String,
@@ -217,6 +218,52 @@ actor S3Service {
         }
     }
 
+    /// List objects under the configured prefix. Returns keys and metadata
+    /// for all objects (paginates automatically).
+    func listObjects() async throws -> [S3ObjectInfo] {
+        var results: [S3ObjectInfo] = []
+        var continuationToken: String?
+
+        repeat {
+            var components = URLComponents(string: "https://\(bucket).\(endpointHost)/")!
+            var pairs = [("list-type", "2"), ("prefix", prefix)]
+            if let token = continuationToken {
+                pairs.append(("continuation-token", token))
+            }
+            // Percent-encode values ourselves (a continuation token can contain
+            // `+`, `/`, or `=`) so the transmitted query matches what we sign.
+            components.percentEncodedQuery = pairs
+                .map { "\($0.0)=\($0.1.addingPercentEncoding(withAllowedCharacters: Self.awsQueryAllowed) ?? $0.1)" }
+                .joined(separator: "&")
+
+            var request = URLRequest(url: components.url!)
+            request.httpMethod = "GET"
+            let signedRequest = try signRequest(request, body: Data())
+
+            let (data, response) = try await session.data(for: signedRequest)
+            guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+                throw S3Error.invalidResponse
+            }
+
+            let parsed = try S3ListParser.parse(data)
+            results.append(contentsOf: parsed.objects)
+            continuationToken = parsed.isTruncated ? parsed.nextContinuationToken : nil
+        } while continuationToken != nil
+
+        return results
+    }
+
+    /// Download an object's bytes by key. Used to re-transcribe recordings that
+    /// were restored by startup recovery and have no local audio copy.
+    func download(s3Key: String) async throws -> Data {
+        let presignedURL = try generatePresignedURL(s3Key: s3Key, expiry: 3600)
+        let (data, response) = try await session.data(from: presignedURL)
+        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            throw S3Error.invalidResponse
+        }
+        return data
+    }
+
     /// Validate bucket access
     func validateBucket() async throws {
         let url = URL(string: "https://\(bucket).\(endpointHost)/")!
@@ -254,7 +301,21 @@ actor S3Service {
         // Canonical request
         let method = request.httpMethod ?? "GET"
         let canonicalURI = request.url!.path.isEmpty ? "/" : request.url!.path
-        let canonicalQueryString = request.url!.query ?? ""
+
+        // Canonicalize the query per SigV4: percent-encode each name/value
+        // (so `/` in a prefix becomes %2F), then sort by encoded name. Signing
+        // `url.query` verbatim would leave it unsorted and unencoded, which the
+        // server rejects with a 403.
+        let queryItems = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        var encodedPairs: [(name: String, value: String)] = []
+        for item in queryItems {
+            let rawValue = item.value ?? ""
+            let name = item.name.addingPercentEncoding(withAllowedCharacters: Self.awsQueryAllowed) ?? item.name
+            let value = rawValue.addingPercentEncoding(withAllowedCharacters: Self.awsQueryAllowed) ?? rawValue
+            encodedPairs.append((name: name, value: value))
+        }
+        encodedPairs.sort { $0.name == $1.name ? $0.value < $1.value : $0.name < $1.name }
+        let canonicalQueryString = encodedPairs.map { "\($0.name)=\($0.value)" }.joined(separator: "&")
 
         let headers = signedRequest.allHTTPHeaderFields ?? [:]
         let sortedHeaders = headers.keys.sorted { $0.lowercased() < $1.lowercased() }
@@ -337,6 +398,79 @@ struct S3UploadResult {
     let s3Key: String
     let size: Int64
     let uploadedAt: Date
+}
+
+struct S3ObjectInfo {
+    let key: String
+    let size: Int64
+    let lastModified: Date
+
+    var filename: String { URL(fileURLWithPath: key).lastPathComponent }
+}
+
+private class S3ListParser: NSObject, XMLParserDelegate {
+    struct Result {
+        var objects: [S3ObjectInfo] = []
+        var isTruncated = false
+        var nextContinuationToken: String?
+    }
+
+    private var result = Result()
+    private var currentElement = ""
+    private var currentText = ""
+    private var currentKey = ""
+    private var currentSize: Int64 = 0
+    private var currentLastModified = Date()
+    private var inContents = false
+
+    private static let dateFormatter: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+
+    static func parse(_ data: Data) throws -> Result {
+        let parser = S3ListParser()
+        let xmlParser = XMLParser(data: data)
+        xmlParser.delegate = parser
+        xmlParser.parse()
+        return parser.result
+    }
+
+    func parser(_ parser: XMLParser, didStartElement element: String, namespaceURI: String?, qualifiedName: String?, attributes: [String: String] = [:]) {
+        currentElement = element
+        currentText = ""
+        if element == "Contents" { inContents = true }
+    }
+
+    func parser(_ parser: XMLParser, foundCharacters string: String) {
+        currentText += string
+    }
+
+    func parser(_ parser: XMLParser, didEndElement element: String, namespaceURI: String?, qualifiedName: String?) {
+        let text = currentText.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch element {
+        case "Key" where inContents:
+            currentKey = text
+        case "Size" where inContents:
+            currentSize = Int64(text) ?? 0
+        case "LastModified" where inContents:
+            currentLastModified = Self.dateFormatter.date(from: text) ?? Date()
+        case "Contents":
+            if !currentKey.isEmpty && currentKey != "" {
+                result.objects.append(S3ObjectInfo(key: currentKey, size: currentSize, lastModified: currentLastModified))
+            }
+            inContents = false
+            currentKey = ""
+            currentSize = 0
+        case "IsTruncated":
+            result.isTruncated = text.lowercased() == "true"
+        case "NextContinuationToken":
+            result.nextContinuationToken = text
+        default:
+            break
+        }
+    }
 }
 
 enum S3Error: LocalizedError {

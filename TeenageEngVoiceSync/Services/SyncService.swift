@@ -72,6 +72,9 @@ final class SyncService {
         await loadServices()
         AppLogger.sync.info("Services loaded (s3=\(self.s3Service != nil), transcription=\(self.transcriptionProvider != nil), provider=\(self.transcriptionProviderKind?.shortName ?? "none"))")
 
+        // Recover recordings from remote sources before starting device watch
+        await recoverFromRemoteSources()
+
         let shouldWatch = UserDefaults.standard.bool(forKey: deviceWatchEnabledKey)
         await updateDeviceWatch(enabled: shouldWatch)
     }
@@ -98,6 +101,265 @@ final class SyncService {
         AppLogger.sync.info("Services reloaded (s3=\(self.s3Service != nil), transcription=\(self.transcriptionProvider != nil), provider=\(self.transcriptionProviderKind?.shortName ?? "none"))")
     }
 
+    // MARK: - Startup Recovery
+
+    /// Scans all configured remote/local sources for recordings not present in
+    /// the local database and re-creates their entries. This handles the case
+    /// where local SwiftData state was lost (app reinstall, container reset, etc).
+    private func recoverFromRemoteSources() async {
+        AppLogger.sync.info("Starting recovery scan from remote sources")
+
+        let existingFilenames = fetchAllKnownFilenames()
+        var recovered = 0
+
+        // 1. S3 — richest source of truth for audio files
+        if let s3 = s3Service {
+            do {
+                let objects = try await s3.listObjects()
+                let wavObjects = objects.filter { $0.filename.hasSuffix(".wav") || $0.filename.hasSuffix(".WAV") }
+                AppLogger.sync.info("S3: found \(wavObjects.count) audio files, \(existingFilenames.count) already tracked")
+
+                for obj in wavObjects where !existingFilenames.contains(obj.filename) {
+                    let recording = Recording(
+                        filename: obj.filename,
+                        localPath: "",
+                        fileSize: obj.size,
+                        recordedAt: obj.lastModified
+                    )
+                    recording.s3Key = obj.key
+                    recording.s3UploadedAt = obj.lastModified
+                    modelContext.insert(recording)
+                    recovered += 1
+                }
+
+                if recovered > 0 {
+                    try? modelContext.save()
+                    AppLogger.sync.info("S3: recovered \(recovered) recordings")
+                }
+            } catch {
+                AppLogger.sync.error("S3 recovery scan failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+
+        // 2. Local audio folder — scan for WAV files
+        let useLocalStorage = UserDefaults.standard.bool(forKey: "localaudio.enabled")
+        if useLocalStorage, LocalAudioService.isConfigured {
+            let localRecovered = await recoverFromLocalAudioFolder(existingFilenames: existingFilenames)
+            recovered += localRecovered
+        }
+
+        // 3. Notion — may have transcriptions for recordings we already found
+        //    from S3 or local, plus any recordings only in Notion.
+        let notionEnabled = UserDefaults.standard.bool(forKey: "notion.enabled")
+        let databaseId = UserDefaults.standard.string(forKey: "notion.databaseId") ?? ""
+        if notionEnabled && !databaseId.isEmpty {
+            let notionRecovered = await recoverFromNotion(databaseId: databaseId)
+            recovered += notionRecovered
+        }
+
+        if recovered > 0 {
+            AppLogger.sync.info("Recovery complete: \(recovered) recordings restored from remote sources")
+        } else {
+            AppLogger.sync.info("Recovery scan complete: all sources in sync")
+        }
+    }
+
+    private func fetchAllKnownFilenames() -> Set<String> {
+        let descriptor = FetchDescriptor<Recording>()
+        guard let recordings = try? modelContext.fetch(descriptor) else { return [] }
+        return Set(recordings.map(\.filename))
+    }
+
+    private func recoverFromLocalAudioFolder(existingFilenames: Set<String>) async -> Int {
+        let folderPath: URL?
+        if let url = SecurityScopedBookmark.resolve(key: "localaudio.folderPath") {
+            guard url.startAccessingSecurityScopedResource() else { return 0 }
+            folderPath = url
+        } else {
+            let path = UserDefaults.standard.string(forKey: "localaudio.folderPath") ?? ""
+            folderPath = path.isEmpty ? nil : URL(fileURLWithPath: path)
+        }
+
+        guard let folder = folderPath else { return 0 }
+        defer {
+            if SecurityScopedBookmark.resolve(key: "localaudio.folderPath") != nil {
+                folder.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        let fm = FileManager.default
+        guard let files = try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey]) else {
+            return 0
+        }
+
+        // Refresh known filenames (S3 recovery may have added some)
+        let currentFilenames = fetchAllKnownFilenames()
+
+        let audioFiles = files.filter {
+            let ext = $0.pathExtension.lowercased()
+            return ext == "wav" || ext == "mp3" || ext == "m4a"
+        }
+
+        AppLogger.sync.info("Local folder: found \(audioFiles.count) audio files")
+
+        var recovered = 0
+        for file in audioFiles {
+            let filename = file.lastPathComponent
+            guard !currentFilenames.contains(filename) else { continue }
+
+            let attrs = try? fm.attributesOfItem(atPath: file.path)
+            let size = attrs?[.size] as? Int64 ?? 0
+            let modDate = attrs?[.modificationDate] as? Date ?? Date()
+
+            // Store the archived file only as `localCopyPath`, not `localPath`.
+            // `deleteRecording` unconditionally removes `localPath` (the disposable
+            // device cache), so pointing it at the user's local-storage archive
+            // would delete their file when they delete a recovered recording.
+            let recording = Recording(
+                filename: filename,
+                localPath: "",
+                fileSize: size,
+                recordedAt: modDate
+            )
+            recording.localCopyPath = file.path
+
+            if let metadata = try? await WAVParser.parse(url: file) {
+                recording.duration = metadata.duration
+                recording.sampleRate = metadata.sampleRate
+            }
+
+            modelContext.insert(recording)
+            recovered += 1
+        }
+
+        if recovered > 0 {
+            try? modelContext.save()
+            AppLogger.sync.info("Local folder: recovered \(recovered) recordings")
+        }
+
+        return recovered
+    }
+
+    private func recoverFromNotion(databaseId: String) async -> Int {
+        guard let apiKey = try? await KeychainService.shared.retrieve(for: .notionAPIKey),
+              !apiKey.isEmpty else { return 0 }
+
+        let service = NotionService(apiKey: apiKey, databaseId: databaseId, props: .loadStored())
+
+        do {
+            let pages = try await service.queryAllPages()
+            AppLogger.sync.info("Notion: found \(pages.count) pages")
+
+            // Mutable so filenames inserted earlier in this loop are seen by later
+            // iterations — the Notion DB can contain multiple pages with the same
+            // filename (e.g. a retranscribe creates a second page), and a stale
+            // pre-loop snapshot would let every duplicate insert its own active row.
+            var seenFilenames = fetchAllKnownFilenames()
+            var recovered = 0
+
+            for page in pages {
+                guard !seenFilenames.contains(page.filename) else {
+                    // Recording already exists — enrich with Notion metadata if missing
+                    await enrichExistingRecording(filename: page.filename, from: page, service: service)
+                    continue
+                }
+
+                // A Notion-only recovery only makes sense if the page actually has
+                // transcript text to restore — the audio itself is gone. Fetch it
+                // first; if there's none (or the fetch failed/was truncated), skip
+                // the insert so a later device/S3 sync of the real file isn't
+                // permanently blocked by a filename-tracked placeholder that has
+                // neither transcript nor audio.
+                guard let transcript = try? await service.fetchPageTranscript(pageId: page.pageId),
+                      !transcript.isEmpty else {
+                    continue
+                }
+
+                let recording = Recording(
+                    filename: page.filename,
+                    localPath: "",
+                    fileSize: 0,
+                    recordedAt: page.recordedAt ?? Date()
+                )
+                recording.notionPageCreatedAt = Date()
+                recording.transcriptionText = transcript
+                recording.transcriptionStatus = .completed
+                recording.transcribedAt = Date()
+
+                if let title = page.title {
+                    recording.llmTitle = title
+                }
+                if let summary = page.summary, !summary.isEmpty {
+                    recording.llmSummary = summary
+                }
+                if let lang = page.language, !lang.isEmpty {
+                    recording.transcriptionLanguage = lang
+                }
+
+                modelContext.insert(recording)
+                seenFilenames.insert(page.filename)
+                recovered += 1
+            }
+
+            if recovered > 0 {
+                try? modelContext.save()
+                AppLogger.sync.info("Notion: recovered \(recovered) recordings")
+            }
+
+            return recovered
+        } catch {
+            AppLogger.sync.error("Notion recovery scan failed: \(error.localizedDescription, privacy: .public)")
+            return 0
+        }
+    }
+
+    /// Fills in gaps on an existing Recording with data from Notion (e.g. if
+    /// S3 recovery created the entry but it has no transcription yet).
+    private func enrichExistingRecording(filename: String, from page: NotionRecordingInfo, service: NotionService) async {
+        let descriptor = FetchDescriptor<Recording>(predicate: #Predicate { $0.filename == filename && $0.deletedAt == nil })
+        guard let recording = try? modelContext.fetch(descriptor).first else { return }
+
+        var changed = false
+
+        if recording.transcriptionText == nil || recording.transcriptionText?.isEmpty == true {
+            if let transcript = try? await service.fetchPageTranscript(pageId: page.pageId), !transcript.isEmpty {
+                recording.transcriptionText = transcript
+                recording.transcriptionStatus = .completed
+                recording.transcribedAt = Date()
+                changed = true
+            }
+        }
+
+        if recording.llmTitle == nil, let title = page.title {
+            recording.llmTitle = title
+            changed = true
+        }
+
+        if recording.llmSummary == nil, let summary = page.summary, !summary.isEmpty {
+            recording.llmSummary = summary
+            changed = true
+        }
+
+        if recording.notionPageCreatedAt == nil {
+            recording.notionPageCreatedAt = Date()
+            changed = true
+        }
+
+        // Notion holds the true recording date; S3/local recovery only had the
+        // object/file modification time. Prefer the Notion date so recovered rows
+        // sort and display by when they were actually recorded.
+        if let recordedAt = page.recordedAt, recording.recordedAt != recordedAt {
+            recording.recordedAt = recordedAt
+            changed = true
+        }
+
+        if changed {
+            recording.updatedAt = Date()
+            try? modelContext.save()
+            AppLogger.sync.debug("Enriched recording \(filename, privacy: .private) with Notion data")
+        }
+    }
+
     /// Enable or disable device watching and debounce processing.
     func setDeviceWatchEnabled(_ enabled: Bool) async {
         await updateDeviceWatch(enabled: enabled)
@@ -108,9 +370,31 @@ final class SyncService {
         await processRecording(recording)
     }
 
+    /// Whether the recording has audio we can (re)transcribe from: an S3 object,
+    /// an existing local copy, or an on-disk device cache file.
+    nonisolated static func hasAudioSource(_ recording: Recording) -> Bool {
+        if recording.s3Key != nil { return true }
+        let fm = FileManager.default
+        if let copy = recording.localCopyPath, fm.fileExists(atPath: copy) { return true }
+        if !recording.localPath.isEmpty, fm.fileExists(atPath: recording.localPath) { return true }
+        return false
+    }
+
+    private func hasAudioSource(_ recording: Recording) -> Bool {
+        Self.hasAudioSource(recording)
+    }
+
     /// Retranscribe a recording
     func retranscribe(_ recording: Recording) async {
         guard let transcriber = transcriptionProvider else {
+            return
+        }
+
+        // Don't wipe a recovered transcript: a Notion-only recovery has no audio
+        // source (empty localPath, no s3Key/localCopyPath), so retranscription
+        // would only fail and hide the restored transcript behind the failure UI.
+        guard hasAudioSource(recording) else {
+            AppLogger.sync.info("Skipping retranscribe for \(recording.filename, privacy: .private): no audio source")
             return
         }
 
@@ -129,12 +413,12 @@ final class SyncService {
                 } else {
                     result = try await transcriber.transcribe(localPath: recording.localPath)
                 }
-            case .whisperKit:
-                let sourcePath = recording.localCopyPath ?? recording.localPath
-                result = try await transcriber.transcribe(localPath: sourcePath)
-            case .parakeet:
-                let sourcePath = recording.localCopyPath ?? recording.localPath
-                result = try await transcriber.transcribe(localPath: sourcePath)
+            case .whisperKit, .parakeet:
+                guard let audio = await resolveLocalAudioPath(for: recording) else {
+                    throw SyncTranscriptionError.noAudioSource
+                }
+                defer { audio.tempURL.map { try? FileManager.default.removeItem(at: $0) } }
+                result = try await transcriber.transcribe(localPath: audio.path)
             }
 
             recording.transcriptionText = result.text
@@ -349,19 +633,25 @@ final class SyncService {
 
             // Check if already in database (excluding soft-deleted recordings)
             let descriptor = FetchDescriptor<Recording>(predicate: #Predicate { $0.filename == filename && $0.deletedAt == nil })
-            if (try? modelContext.fetch(descriptor).first) != nil {
-                AppLogger.sync.debug("Skipping already tracked recording \(filename, privacy: .private)")
-                continue // Already tracked
+            if let existing = try? modelContext.fetch(descriptor).first {
+                // Skip only if it already has audio. An audio-less recovered row
+                // (e.g. Notion-only) must NOT be skipped: let the device file flow
+                // through so createRecording can attach its audio — otherwise the
+                // recording stays unplayable/untranscribable forever.
+                if Self.hasAudioSource(existing) {
+                    AppLogger.sync.debug("Skipping already tracked recording \(filename, privacy: .private)")
+                    continue
+                }
+                AppLogger.sync.info("Attaching device audio to recovered recording \(filename, privacy: .private)")
+            } else {
+                // Not tracked at all — but skip if it exists as a soft-deleted row
+                let deletedDescriptor = FetchDescriptor<Recording>(predicate: #Predicate { $0.filename == filename && $0.deletedAt != nil })
+                if let deleted = try? modelContext.fetch(deletedDescriptor).first {
+                    AppLogger.sync.debug("Skipping soft-deleted recording \(filename, privacy: .private) (deletedAt=\(String(describing: deleted.deletedAt), privacy: .public))")
+                    continue // Skip soft-deleted recordings too
+                }
+                AppLogger.sync.info("New recording detected: \(filename, privacy: .private)")
             }
-
-            // Check if it exists but is deleted
-            let deletedDescriptor = FetchDescriptor<Recording>(predicate: #Predicate { $0.filename == filename && $0.deletedAt != nil })
-            if let deleted = try? modelContext.fetch(deletedDescriptor).first {
-                AppLogger.sync.debug("Skipping soft-deleted recording \(filename, privacy: .private) (deletedAt=\(String(describing: deleted.deletedAt), privacy: .public))")
-                continue // Skip soft-deleted recordings too
-            }
-
-            AppLogger.sync.info("New recording detected: \(filename, privacy: .private)")
 
             // Add to debouncer
             await debouncer.recordEvent(for: url.path)
@@ -386,11 +676,16 @@ final class SyncService {
             let url = URL(fileURLWithPath: path)
 
             do {
-                // Create recording record
+                // Create recording record (or adopt an audio-less recovered row)
                 let recording = try await createRecording(from: url)
 
-                // Process the recording
-                await processRecording(recording)
+                if recording.transcriptionStatus == .completed {
+                    // Adopted an already-transcribed recovered row: persist the
+                    // audio only — don't re-transcribe or recreate the Notion page.
+                    await attachDeviceAudio(to: recording)
+                } else {
+                    await processRecording(recording)
+                }
                 successCount += 1
             } catch {
                 lastError = error.localizedDescription
@@ -411,12 +706,26 @@ final class SyncService {
         let fileSize = attributes[.size] as? Int64 ?? 0
         let modDate = attributes[.modificationDate] as? Date ?? Date()
 
-        let recording = Recording(
+        // Adopt an existing audio-less recovered row (e.g. Notion-only) with the
+        // same filename instead of inserting a duplicate — this attaches the real
+        // device audio to the row that already holds the recovered transcript.
+        let existingDescriptor = FetchDescriptor<Recording>(predicate: #Predicate { $0.filename == filename && $0.deletedAt == nil })
+        let existing = try? modelContext.fetch(existingDescriptor).first
+        let isAdoption = existing != nil && !Self.hasAudioSource(existing!)
+
+        let recording = existing ?? Recording(
             filename: filename,
             localPath: url.path,
             fileSize: fileSize,
             recordedAt: modDate
         )
+
+        if isAdoption {
+            recording.localPath = url.path
+            recording.fileSize = fileSize
+            // Keep the recovered recordedAt (from Notion) — it's more accurate
+            // than the device file's modification time.
+        }
 
         // Parse WAV metadata
         if let metadata = try? await WAVParser.parse(url: url) {
@@ -429,12 +738,15 @@ final class SyncService {
 
         // Set device serial
         recording.deviceSerial = deviceWatch.currentDeviceSerial
+        recording.updatedAt = Date()
 
-        modelContext.insert(recording)
+        if !isAdoption {
+            modelContext.insert(recording)
+        }
         try modelContext.save()
 
-        // Update device recordings count
-        if let serial = recording.deviceSerial {
+        // Update device recordings count (only for genuinely new recordings)
+        if !isAdoption, let serial = recording.deviceSerial {
             let descriptor = FetchDescriptor<Device>(predicate: #Predicate { $0.serial == serial })
             if let device = try? modelContext.fetch(descriptor).first {
                 device.incrementRecordings()
@@ -504,6 +816,16 @@ final class SyncService {
         }
     }
 
+    /// Persists the audio for a recovered row we just attached a device file to,
+    /// without re-transcribing (the transcript was already restored from Notion).
+    private func attachDeviceAudio(to recording: Recording) async {
+        let provider = transcriptionProviderKind ?? .elevenLabs
+        let isLocalProvider = provider == .whisperKit || provider == .parakeet
+        let backupToS3 = UserDefaults.standard.bool(forKey: "s3.backupAfterTranscription")
+        let allowS3Upload = !isLocalProvider || backupToS3
+        _ = await storeRecording(recording, allowS3Upload: allowS3Upload)
+    }
+
     private func storeRecording(_ recording: Recording, allowS3Upload: Bool) async -> Bool {
         let sourceURL = URL(fileURLWithPath: recording.localPath)
 
@@ -551,6 +873,37 @@ final class SyncService {
         }
     }
 
+    /// Resolves an on-disk audio path for local transcription providers. Prefers
+    /// an existing local copy or device file; otherwise downloads the S3 object to
+    /// a temp file — this is what makes recordings restored by startup recovery
+    /// (which have an `s3Key` but no local audio) transcribable. When `tempURL` is
+    /// non-nil the caller must delete it after use.
+    private func resolveLocalAudioPath(for recording: Recording) async -> (path: String, tempURL: URL?)? {
+        let fm = FileManager.default
+
+        if let copy = recording.localCopyPath, fm.fileExists(atPath: copy) {
+            return (copy, nil)
+        }
+        if !recording.localPath.isEmpty, fm.fileExists(atPath: recording.localPath) {
+            return (recording.localPath, nil)
+        }
+
+        guard let s3Key = recording.s3Key, let s3 = s3Service else { return nil }
+        do {
+            let data = try await s3.download(s3Key: s3Key)
+            let ext = (recording.filename as NSString).pathExtension
+            let tmp = fm.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString)
+                .appendingPathExtension(ext.isEmpty ? "wav" : ext)
+            try data.write(to: tmp)
+            AppLogger.sync.info("Downloaded S3 audio for transcription: \(recording.filename, privacy: .private)")
+            return (tmp.path, tmp)
+        } catch {
+            AppLogger.sync.error("Failed to download S3 audio for \(recording.filename, privacy: .private): \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
+
     private func transcribeRecording(_ recording: Recording, provider: TranscriptionProviderKind) async -> TranscriptionResult? {
         guard let transcriber = transcriptionProvider else {
             AppLogger.sync.debug("Skipping transcription (transcription provider not configured)")
@@ -576,14 +929,13 @@ final class SyncService {
                     result = try await transcriber.transcribe(localPath: recording.localPath)
                     AppLogger.sync.debug("Transcribed via device file")
                 }
-            case .whisperKit:
-                let sourcePath = recording.localCopyPath ?? recording.localPath
-                result = try await transcriber.transcribe(localPath: sourcePath)
-                AppLogger.sync.debug("Transcribed locally with WhisperKit")
-            case .parakeet:
-                let sourcePath = recording.localCopyPath ?? recording.localPath
-                result = try await transcriber.transcribe(localPath: sourcePath)
-                AppLogger.sync.debug("Transcribed locally with Parakeet")
+            case .whisperKit, .parakeet:
+                guard let audio = await resolveLocalAudioPath(for: recording) else {
+                    throw SyncTranscriptionError.noAudioSource
+                }
+                defer { audio.tempURL.map { try? FileManager.default.removeItem(at: $0) } }
+                result = try await transcriber.transcribe(localPath: audio.path)
+                AppLogger.sync.debug("Transcribed locally with \(provider.shortName)")
             }
 
             AppLogger.sync.info("Transcription complete for \(recording.filename, privacy: .private) (language=\(result.languageCode, privacy: .public), chars=\(result.text.count, privacy: .public))")
@@ -932,5 +1284,13 @@ final class SyncService {
         case "m": return number * 60
         default: return 7 * 24 * 3600
         }
+    }
+}
+
+private enum SyncTranscriptionError: LocalizedError {
+    case noAudioSource
+
+    var errorDescription: String? {
+        "No audio available to transcribe — the recording has no local file or S3 copy."
     }
 }
