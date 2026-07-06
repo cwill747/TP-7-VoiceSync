@@ -26,6 +26,19 @@ struct RecordingDetailView: View {
         case error(String)
     }
 
+    /// Local file to play, if any: prefers the device cache (`localPath`) but
+    /// falls back to a recovered local copy (`localCopyPath`).
+    private var localAudioURL: URL? {
+        let fm = FileManager.default
+        if !recording.localPath.isEmpty, fm.fileExists(atPath: recording.localPath) {
+            return URL(fileURLWithPath: recording.localPath)
+        }
+        if let copy = recording.localCopyPath, fm.fileExists(atPath: copy) {
+            return URL(fileURLWithPath: copy)
+        }
+        return nil
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
@@ -47,10 +60,14 @@ struct RecordingDetailView: View {
 
                 Divider()
 
-                // Audio player
-                AudioPlayerView(url: URL(fileURLWithPath: recording.localPath))
+                // Audio player — only when the audio exists locally. Recovered
+                // rows keep the file in localCopyPath (localPath may be empty), and
+                // S3/Notion-only rows have no local file to play at all.
+                if let audioURL = localAudioURL {
+                    AudioPlayerView(url: audioURL)
 
-                Divider()
+                    Divider()
+                }
 
                 // Transcription
                 VStack(alignment: .leading, spacing: 12) {
@@ -60,7 +77,10 @@ struct RecordingDetailView: View {
 
                         Spacer()
 
-                        if recording.isTranscribed {
+                        // Only offer retranscription when there's audio to work
+                        // from — Notion-only recoveries have no audio source, and
+                        // retranscribing would just fail and hide the transcript.
+                        if recording.isTranscribed, SyncService.hasAudioSource(recording) {
                             Button {
                                 retranscribe()
                             } label: {
@@ -173,7 +193,7 @@ struct RecordingDetailView: View {
 
                 // Recordings restored by startup recovery have audio (in S3 or a
                 // local copy) but no transcription yet — let the user kick it off.
-                if recording.s3Key != nil || recording.localCopyPath != nil {
+                if SyncService.hasAudioSource(recording) {
                     Button {
                         retranscribe()
                     } label: {

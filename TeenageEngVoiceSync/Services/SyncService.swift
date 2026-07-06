@@ -345,6 +345,14 @@ final class SyncService {
             changed = true
         }
 
+        // Notion holds the true recording date; S3/local recovery only had the
+        // object/file modification time. Prefer the Notion date so recovered rows
+        // sort and display by when they were actually recorded.
+        if let recordedAt = page.recordedAt, recording.recordedAt != recordedAt {
+            recording.recordedAt = recordedAt
+            changed = true
+        }
+
         if changed {
             recording.updatedAt = Date()
             try? modelContext.save()
@@ -362,9 +370,31 @@ final class SyncService {
         await processRecording(recording)
     }
 
+    /// Whether the recording has audio we can (re)transcribe from: an S3 object,
+    /// an existing local copy, or an on-disk device cache file.
+    nonisolated static func hasAudioSource(_ recording: Recording) -> Bool {
+        if recording.s3Key != nil { return true }
+        let fm = FileManager.default
+        if let copy = recording.localCopyPath, fm.fileExists(atPath: copy) { return true }
+        if !recording.localPath.isEmpty, fm.fileExists(atPath: recording.localPath) { return true }
+        return false
+    }
+
+    private func hasAudioSource(_ recording: Recording) -> Bool {
+        Self.hasAudioSource(recording)
+    }
+
     /// Retranscribe a recording
     func retranscribe(_ recording: Recording) async {
         guard let transcriber = transcriptionProvider else {
+            return
+        }
+
+        // Don't wipe a recovered transcript: a Notion-only recovery has no audio
+        // source (empty localPath, no s3Key/localCopyPath), so retranscription
+        // would only fail and hide the restored transcript behind the failure UI.
+        guard hasAudioSource(recording) else {
+            AppLogger.sync.info("Skipping retranscribe for \(recording.filename, privacy: .private): no audio source")
             return
         }
 
