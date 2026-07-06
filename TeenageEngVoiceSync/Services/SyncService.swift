@@ -1224,6 +1224,11 @@ final class SyncService {
 
         if Self.needsS3Upload(recording) {
             await uploadToS3IfPossible(recording)
+            guard !Self.needsS3Upload(recording) else {
+                AppLogger.sync.info("Deferring remote delivery until required S3 upload completes for \(recording.filename, privacy: .private)")
+                await refreshPendingCount()
+                return
+            }
         }
         await generateAndStoreSummary(for: recording, text: transcription.text)
         await createNotionPage(for: recording, transcription: transcription)

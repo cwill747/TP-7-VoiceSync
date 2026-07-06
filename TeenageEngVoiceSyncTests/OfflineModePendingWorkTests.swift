@@ -19,7 +19,7 @@ final class OfflineModePendingWorkTests: XCTestCase {
     private let keys = [
         "s3.enabled", "s3.bucket", "s3.backupAfterTranscription",
         "localaudio.enabled", "localaudio.folderPath",
-        "transcription.provider", "openrouter.enabled",
+        "transcription.provider", "openrouter.enabled", "openrouter.model",
         "notion.enabled", "notion.databaseId",
         "markdown.enabled", "applenotes.enabled",
     ]
@@ -112,11 +112,13 @@ final class OfflineModePendingWorkTests: XCTestCase {
         UserDefaults.standard.set("my-bucket", forKey: "s3.bucket")
         UserDefaults.standard.set("elevenLabs", forKey: "transcription.provider")
         UserDefaults.standard.set(true, forKey: "openrouter.enabled")
+        UserDefaults.standard.set("openai/gpt-4o-mini", forKey: "openrouter.model")
         UserDefaults.standard.set(true, forKey: "notion.enabled")
         UserDefaults.standard.set("db-123", forKey: "notion.databaseId")
         UserDefaults.standard.set(true, forKey: "markdown.enabled")
 
         let recording = try makeRecording()
+        recording.localCopyPath = "/tmp/REC001.wav"
         XCTAssertEqual(SyncService.remainingRemoteSteps(for: recording), [.s3, .summary, .notion, .note])
     }
 
