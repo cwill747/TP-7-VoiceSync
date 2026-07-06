@@ -633,19 +633,25 @@ final class SyncService {
 
             // Check if already in database (excluding soft-deleted recordings)
             let descriptor = FetchDescriptor<Recording>(predicate: #Predicate { $0.filename == filename && $0.deletedAt == nil })
-            if (try? modelContext.fetch(descriptor).first) != nil {
-                AppLogger.sync.debug("Skipping already tracked recording \(filename, privacy: .private)")
-                continue // Already tracked
+            if let existing = try? modelContext.fetch(descriptor).first {
+                // Skip only if it already has audio. An audio-less recovered row
+                // (e.g. Notion-only) must NOT be skipped: let the device file flow
+                // through so createRecording can attach its audio — otherwise the
+                // recording stays unplayable/untranscribable forever.
+                if Self.hasAudioSource(existing) {
+                    AppLogger.sync.debug("Skipping already tracked recording \(filename, privacy: .private)")
+                    continue
+                }
+                AppLogger.sync.info("Attaching device audio to recovered recording \(filename, privacy: .private)")
+            } else {
+                // Not tracked at all — but skip if it exists as a soft-deleted row
+                let deletedDescriptor = FetchDescriptor<Recording>(predicate: #Predicate { $0.filename == filename && $0.deletedAt != nil })
+                if let deleted = try? modelContext.fetch(deletedDescriptor).first {
+                    AppLogger.sync.debug("Skipping soft-deleted recording \(filename, privacy: .private) (deletedAt=\(String(describing: deleted.deletedAt), privacy: .public))")
+                    continue // Skip soft-deleted recordings too
+                }
+                AppLogger.sync.info("New recording detected: \(filename, privacy: .private)")
             }
-
-            // Check if it exists but is deleted
-            let deletedDescriptor = FetchDescriptor<Recording>(predicate: #Predicate { $0.filename == filename && $0.deletedAt != nil })
-            if let deleted = try? modelContext.fetch(deletedDescriptor).first {
-                AppLogger.sync.debug("Skipping soft-deleted recording \(filename, privacy: .private) (deletedAt=\(String(describing: deleted.deletedAt), privacy: .public))")
-                continue // Skip soft-deleted recordings too
-            }
-
-            AppLogger.sync.info("New recording detected: \(filename, privacy: .private)")
 
             // Add to debouncer
             await debouncer.recordEvent(for: url.path)
@@ -670,11 +676,16 @@ final class SyncService {
             let url = URL(fileURLWithPath: path)
 
             do {
-                // Create recording record
+                // Create recording record (or adopt an audio-less recovered row)
                 let recording = try await createRecording(from: url)
 
-                // Process the recording
-                await processRecording(recording)
+                if recording.transcriptionStatus == .completed {
+                    // Adopted an already-transcribed recovered row: persist the
+                    // audio only — don't re-transcribe or recreate the Notion page.
+                    await attachDeviceAudio(to: recording)
+                } else {
+                    await processRecording(recording)
+                }
                 successCount += 1
             } catch {
                 lastError = error.localizedDescription
@@ -695,12 +706,26 @@ final class SyncService {
         let fileSize = attributes[.size] as? Int64 ?? 0
         let modDate = attributes[.modificationDate] as? Date ?? Date()
 
-        let recording = Recording(
+        // Adopt an existing audio-less recovered row (e.g. Notion-only) with the
+        // same filename instead of inserting a duplicate — this attaches the real
+        // device audio to the row that already holds the recovered transcript.
+        let existingDescriptor = FetchDescriptor<Recording>(predicate: #Predicate { $0.filename == filename && $0.deletedAt == nil })
+        let existing = try? modelContext.fetch(existingDescriptor).first
+        let isAdoption = existing != nil && !Self.hasAudioSource(existing!)
+
+        let recording = existing ?? Recording(
             filename: filename,
             localPath: url.path,
             fileSize: fileSize,
             recordedAt: modDate
         )
+
+        if isAdoption {
+            recording.localPath = url.path
+            recording.fileSize = fileSize
+            // Keep the recovered recordedAt (from Notion) — it's more accurate
+            // than the device file's modification time.
+        }
 
         // Parse WAV metadata
         if let metadata = try? await WAVParser.parse(url: url) {
@@ -713,12 +738,15 @@ final class SyncService {
 
         // Set device serial
         recording.deviceSerial = deviceWatch.currentDeviceSerial
+        recording.updatedAt = Date()
 
-        modelContext.insert(recording)
+        if !isAdoption {
+            modelContext.insert(recording)
+        }
         try modelContext.save()
 
-        // Update device recordings count
-        if let serial = recording.deviceSerial {
+        // Update device recordings count (only for genuinely new recordings)
+        if !isAdoption, let serial = recording.deviceSerial {
             let descriptor = FetchDescriptor<Device>(predicate: #Predicate { $0.serial == serial })
             if let device = try? modelContext.fetch(descriptor).first {
                 device.incrementRecordings()
@@ -786,6 +814,16 @@ final class SyncService {
                 }
             }
         }
+    }
+
+    /// Persists the audio for a recovered row we just attached a device file to,
+    /// without re-transcribing (the transcript was already restored from Notion).
+    private func attachDeviceAudio(to recording: Recording) async {
+        let provider = transcriptionProviderKind ?? .elevenLabs
+        let isLocalProvider = provider == .whisperKit || provider == .parakeet
+        let backupToS3 = UserDefaults.standard.bool(forKey: "s3.backupAfterTranscription")
+        let allowS3Upload = !isLocalProvider || backupToS3
+        _ = await storeRecording(recording, allowS3Upload: allowS3Upload)
     }
 
     private func storeRecording(_ recording: Recording, allowS3Upload: Bool) async -> Bool {
