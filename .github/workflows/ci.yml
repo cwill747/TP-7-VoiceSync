@@ -22,6 +22,12 @@ jobs:
         with:
           xcode-version: '26'
 
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+
+      - name: Build libtp7mtp.dylib from source
+        run: nix develop --command ./scripts/build-tp7mtp.sh
+
       - name: Build (no code signing)
         run: |
           xcodebuild -project "TeenageEngVoiceSync.xcodeproj" \
