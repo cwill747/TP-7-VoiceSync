@@ -386,12 +386,20 @@ actor NotionService {
             request.setValue(notionVersion, forHTTPHeaderField: "Notion-Version")
 
             let (data, response) = try await session.data(for: request)
-            guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-                break
+            guard let http = response as? HTTPURLResponse else {
+                throw NotionError.invalidResponse
+            }
+            // Throw rather than break: breaking would return the transcript
+            // accumulated from earlier pages, so a transient 429/500 mid-pagination
+            // would be silently persisted as a truncated-but-"complete" transcript.
+            guard (200...299).contains(http.statusCode) else {
+                throw NotionError.apiError(statusCode: http.statusCode, message: Self.message(from: data))
             }
 
             guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let blocks = json["results"] as? [[String: Any]] else { break }
+                  let blocks = json["results"] as? [[String: Any]] else {
+                throw NotionError.invalidResponse
+            }
 
             for block in blocks {
                 let type = block["type"] as? String ?? ""

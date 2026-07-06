@@ -256,6 +256,17 @@ final class SyncService {
                     continue
                 }
 
+                // A Notion-only recovery only makes sense if the page actually has
+                // transcript text to restore — the audio itself is gone. Fetch it
+                // first; if there's none (or the fetch failed/was truncated), skip
+                // the insert so a later device/S3 sync of the real file isn't
+                // permanently blocked by a filename-tracked placeholder that has
+                // neither transcript nor audio.
+                guard let transcript = try? await service.fetchPageTranscript(pageId: page.pageId),
+                      !transcript.isEmpty else {
+                    continue
+                }
+
                 let recording = Recording(
                     filename: page.filename,
                     localPath: "",
@@ -263,6 +274,9 @@ final class SyncService {
                     recordedAt: page.recordedAt ?? Date()
                 )
                 recording.notionPageCreatedAt = Date()
+                recording.transcriptionText = transcript
+                recording.transcriptionStatus = .completed
+                recording.transcribedAt = Date()
 
                 if let title = page.title {
                     recording.llmTitle = title
@@ -272,17 +286,6 @@ final class SyncService {
                 }
                 if let lang = page.language, !lang.isEmpty {
                     recording.transcriptionLanguage = lang
-                }
-
-                // Only mark the recording completed once we actually have a
-                // transcript. If the page body has no parseable transcript (or the
-                // fetch failed), leave the status at `.none` rather than showing an
-                // empty "completed" transcript that can never be retried.
-                if let transcript = try? await service.fetchPageTranscript(pageId: page.pageId),
-                   !transcript.isEmpty {
-                    recording.transcriptionText = transcript
-                    recording.transcriptionStatus = .completed
-                    recording.transcribedAt = Date()
                 }
 
                 modelContext.insert(recording)
