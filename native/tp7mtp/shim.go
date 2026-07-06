@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 	"unsafe"
 
 	"github.com/ganeshrvel/go-mtpfs/mtp"
@@ -175,6 +176,21 @@ func withSession(handle int, fn func(dev *mtp.Device, storageID uint32) error) e
 	return fn(s.dev, s.storageID)
 }
 
+// localizeWallClock corrects timestamps for MTP devices (the TP-7 included)
+// that report object dates as bare wall-clock time with no UTC offset, e.g.
+// "20260706T080000". go-mtpfs's PTP date decoder (mtp/encoding.go decodeTime)
+// has no zone to work with in that case, and Go's time.Parse silently
+// defaults an unspecified zone to UTC - so a recording made at 8am local
+// comes back as 8am UTC, off by exactly the host's UTC offset. Devices that
+// do send an explicit numeric offset parse into a non-UTC Location already
+// and are left untouched here.
+func localizeWallClock(t time.Time) time.Time {
+	if t.IsZero() || t.Location() != time.UTC {
+		return t
+	}
+	return time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), time.Local)
+}
+
 // isSafeRecordingName reports whether name is safe to join onto recordingsDir
 // or a local destination directory: no path separators, and not a "." or
 // ".." traversal segment. The TP-7 only ever reports flat filenames under
@@ -277,7 +293,7 @@ func tp7mtp_list_recordings(handle int) *C.char {
 				files = append(files, fileEntry{
 					Name:    name,
 					Size:    fi.Size,
-					ModTime: fi.ModTime.Unix(),
+					ModTime: localizeWallClock(fi.ModTime).Unix(),
 				})
 				return nil
 			})
@@ -299,6 +315,8 @@ func tp7mtp_download_recording(handle int, cFilename *C.char, cDestPath *C.char)
 	}
 	sourcePath := recordingsDir + "/" + filename
 
+	var modTime time.Time
+
 	err := withSession(handle, func(dev *mtp.Device, storageID uint32) error {
 		destDir := filepath.Dir(destPath)
 		if err := os.MkdirAll(destDir, 0o755); err != nil {
@@ -313,14 +331,32 @@ func tp7mtp_download_recording(handle int, cFilename *C.char, cDestPath *C.char)
 
 		_, _, err = mtpx.DownloadFiles(dev, storageID, []string{sourcePath}, tmpDestDir, false,
 			func(fi *mtpx.FileInfo, err error) error { return err },
-			func(pi *mtpx.ProgressInfo, err error) error { return err },
+			func(pi *mtpx.ProgressInfo, err error) error {
+				if pi.FileInfo != nil {
+					modTime = pi.FileInfo.ModTime
+				}
+				return err
+			},
 		)
 		if err != nil {
 			return err
 		}
 
 		downloadedPath := filepath.Join(tmpDestDir, filename)
-		return os.Rename(downloadedPath, destPath)
+		if err := os.Rename(downloadedPath, destPath); err != nil {
+			return err
+		}
+
+		// mtpx stamped the file's mtime with the device-reported ModTime during
+		// DownloadFiles above (restoreLocalFileTimestamp), which for the TP-7
+		// is the wall-clock-mislabeled-as-UTC value described in
+		// localizeWallClock. SyncService reads this file's mtime as the
+		// recording's recordedAt, so re-stamp it with the corrected time.
+		if corrected := localizeWallClock(modTime); !corrected.IsZero() {
+			_ = os.Chtimes(destPath, corrected, corrected)
+		}
+
+		return nil
 	})
 
 	if err != nil {
