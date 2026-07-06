@@ -83,4 +83,28 @@ final class MultiTrackAudioTests: XCTestCase {
         try? FileManager.default.removeItem(at: tracks[0])
         try? FileManager.default.removeItem(at: tracks[1])
     }
+
+    func testChunkedReadProducesSameResultAsSingleChunk() throws {
+        let track0: [Int16] = (0..<200).map { Int16($0 % 100) }
+        let track1: [Int16] = (0..<200).map { Int16(($0 * 3) % 100) }
+        let data = makeMultiChannelWAVData(channelSamples: [track0, track0, track1, track1])
+        let url = write(data, name: "quad-chunked.wav")
+
+        // Forces ~7 chunk iterations over 200 frames to exercise chunk-boundary handling.
+        let tracks = try MultiTrackAudio.extractTracks(from: url, chunkFrameCount: 32)
+
+        XCTAssertEqual(tracks.count, 2)
+        let samples0 = try readFloatSamples(tracks[0])
+        let samples1 = try readFloatSamples(tracks[1])
+
+        XCTAssertEqual(samples0.count, 200)
+        XCTAssertEqual(samples1.count, 200)
+        for index in 0..<200 {
+            XCTAssertEqual(samples0[index], Float(track0[index]) / 32768.0, accuracy: 0.0001)
+            XCTAssertEqual(samples1[index], Float(track1[index]) / 32768.0, accuracy: 0.0001)
+        }
+
+        try? FileManager.default.removeItem(at: tracks[0])
+        try? FileManager.default.removeItem(at: tracks[1])
+    }
 }
