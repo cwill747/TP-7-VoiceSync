@@ -28,7 +28,18 @@ import (
 	"github.com/ganeshrvel/usb"
 )
 
-const recordingsDir = "/recordings"
+// The TP-7 can split recordings between two on-device folders depending on
+// how the user has it configured; ingest both, keyed by this label so
+// download/delete calls know which device directory a filename lives in.
+const (
+	folderRecordings = "recordings"
+	folderMemo       = "memo"
+)
+
+var recordingDirs = map[string]string{
+	folderRecordings: "/recordings",
+	folderMemo:       "/memo",
+}
 
 // Matches mtpx's internal devTimeout (milliseconds).
 const usbTimeoutMs = 15000
@@ -45,6 +56,7 @@ type deviceInfo struct {
 
 type fileEntry struct {
 	Name    string `json:"name"`
+	Folder  string `json:"folder"`
 	Size    int64  `json:"size"`
 	ModTime int64  `json:"modTime"`
 }
@@ -191,10 +203,11 @@ func localizeWallClock(t time.Time) time.Time {
 	return time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), time.Local)
 }
 
-// isSafeRecordingName reports whether name is safe to join onto recordingsDir
-// or a local destination directory: no path separators, and not a "." or
-// ".." traversal segment. The TP-7 only ever reports flat filenames under
-// /recordings, so anything else is either a firmware bug or a hostile device.
+// isSafeRecordingName reports whether name is safe to join onto a device
+// recording directory or a local destination directory: no path separators,
+// and not a "." or ".." traversal segment. The TP-7 only ever reports flat
+// filenames under /recordings or /memo, so anything else is either a
+// firmware bug or a hostile device.
 func isSafeRecordingName(name string) bool {
 	if name == "" || name == "." || name == ".." {
 		return false
@@ -274,30 +287,42 @@ func tp7mtp_list_recordings(handle int) *C.char {
 	var files []fileEntry
 
 	err := withSession(handle, func(dev *mtp.Device, storageID uint32) error {
-		_, _, _, err := mtpx.Walk(dev, storageID, recordingsDir, false, true, true,
-			func(objectID uint32, fi *mtpx.FileInfo, err error) error {
-				if err != nil {
-					return err
-				}
-				if fi.IsDir {
+		for _, folder := range []string{folderRecordings, folderMemo} {
+			dirPath := recordingDirs[folder]
+			_, _, _, err := mtpx.Walk(dev, storageID, dirPath, false, true, true,
+				func(objectID uint32, fi *mtpx.FileInfo, err error) error {
+					if err != nil {
+						return err
+					}
+					if fi.IsDir {
+						return nil
+					}
+					name := fi.Name
+					if strings.HasPrefix(name, ".") || !strings.HasSuffix(strings.ToLower(name), ".wav") {
+						return nil
+					}
+					if !isSafeRecordingName(name) {
+						fmt.Fprintf(os.Stderr, "tp7mtp: skipping recording with unsafe filename %q\n", name)
+						return nil
+					}
+					files = append(files, fileEntry{
+						Name:    name,
+						Folder:  folder,
+						Size:    fi.Size,
+						ModTime: localizeWallClock(fi.ModTime).Unix(),
+					})
 					return nil
-				}
-				name := fi.Name
-				if strings.HasPrefix(name, ".") || !strings.HasSuffix(strings.ToLower(name), ".wav") {
-					return nil
-				}
-				if !isSafeRecordingName(name) {
-					fmt.Fprintf(os.Stderr, "tp7mtp: skipping recording with unsafe filename %q\n", name)
-					return nil
-				}
-				files = append(files, fileEntry{
-					Name:    name,
-					Size:    fi.Size,
-					ModTime: localizeWallClock(fi.ModTime).Unix(),
 				})
-				return nil
-			})
-		return err
+			if err != nil {
+				// Not every device/firmware splits recordings into both
+				// folders - a missing one is not fatal, just empty.
+				if _, isMissingPath := err.(mtpx.InvalidPathError); isMissingPath {
+					continue
+				}
+				return fmt.Errorf("listing %s: %w", dirPath, err)
+			}
+		}
+		return nil
 	})
 
 	if err != nil {
@@ -307,13 +332,18 @@ func tp7mtp_list_recordings(handle int) *C.char {
 }
 
 //export tp7mtp_download_recording
-func tp7mtp_download_recording(handle int, cFilename *C.char, cDestPath *C.char) *C.char {
+func tp7mtp_download_recording(handle int, cFolder *C.char, cFilename *C.char, cDestPath *C.char) *C.char {
+	folder := C.GoString(cFolder)
 	filename := C.GoString(cFilename)
 	destPath := C.GoString(cDestPath)
+	dirPath, ok := recordingDirs[folder]
+	if !ok {
+		return toCString(errResponse("unknown recording folder %q", folder))
+	}
 	if !isSafeRecordingName(filename) {
 		return toCString(errResponse("unsafe filename %q", filename))
 	}
-	sourcePath := recordingsDir + "/" + filename
+	sourcePath := dirPath + "/" + filename
 
 	var modTime time.Time
 
@@ -366,12 +396,17 @@ func tp7mtp_download_recording(handle int, cFilename *C.char, cDestPath *C.char)
 }
 
 //export tp7mtp_delete_recording
-func tp7mtp_delete_recording(handle int, cFilename *C.char) *C.char {
+func tp7mtp_delete_recording(handle int, cFolder *C.char, cFilename *C.char) *C.char {
+	folder := C.GoString(cFolder)
 	filename := C.GoString(cFilename)
+	dirPath, ok := recordingDirs[folder]
+	if !ok {
+		return toCString(errResponse("unknown recording folder %q", folder))
+	}
 	if !isSafeRecordingName(filename) {
 		return toCString(errResponse("unsafe filename %q", filename))
 	}
-	fullPath := recordingsDir + "/" + filename
+	fullPath := dirPath + "/" + filename
 
 	err := withSession(handle, func(dev *mtp.Device, storageID uint32) error {
 		return mtpx.DeleteFile(dev, storageID, []mtpx.FileProp{{FullPath: fullPath}})

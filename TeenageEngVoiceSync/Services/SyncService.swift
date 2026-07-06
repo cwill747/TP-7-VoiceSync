@@ -44,6 +44,13 @@ final class SyncService {
     private let openRouterService = OpenRouterService()
     private let localAudioService = LocalAudioService()
 
+    /// The device folder a not-yet-processed cache file came from, keyed by its
+    /// local path. Populated when a device download is queued (the debouncer
+    /// only tracks paths); consumed and removed once `createRecording` runs.
+    /// Internal (not private) so tests can seed it directly, mirroring
+    /// `createRecording`'s own access level.
+    var pendingRecordingSources: [String: RecordingSource] = [:]
+
     init(modelContext: ModelContext) {
         self.modelContext = modelContext
         self.deviceWatch = DeviceWatchService()
@@ -74,9 +81,9 @@ final class SyncService {
             }
         }
 
-        deviceWatch.onNewRecordings = { [weak self] urls, serial in
+        deviceWatch.onNewRecordings = { [weak self] downloads, serial in
             Task { @MainActor in
-                await self?.handleNewRecordings(urls: urls, serial: serial)
+                await self?.handleNewRecordings(downloads: downloads, serial: serial)
             }
         }
     }
@@ -454,7 +461,7 @@ final class SyncService {
                     throw SyncTranscriptionError.noAudioSource
                 }
                 defer { audio.tempURL.map { try? FileManager.default.removeItem(at: $0) } }
-                result = try await transcriber.transcribe(localPath: audio.path)
+                result = try await transcribeLocal(transcriber, path: audio.path, recording: recording)
             }
 
             recording.transcriptionText = result.text
@@ -496,7 +503,11 @@ final class SyncService {
 
         // 1. Try device deletion over MTP (if connected)
         if deviceWatch.isConnected {
-            switch await deviceWatch.deleteFromDevice(filename: recording.filename) {
+            // Recordings synced before source-folder tracking was added have no
+            // stored value; they all predate the /memo split, so /recordings is
+            // the correct fallback.
+            let folder = (recording.sourceFolder ?? .recordings).rawValue
+            switch await deviceWatch.deleteFromDevice(filename: recording.filename, folder: folder) {
             case .success:
                 AppLogger.sync.info("Removed recording from device: \(recording.filename, privacy: .private)")
             case .failure(let error):
@@ -662,13 +673,14 @@ final class SyncService {
         }
     }
 
-    private func handleNewRecordings(urls: [URL], serial: String) async {
+    private func handleNewRecordings(downloads: [DownloadedRecording], serial: String) async {
         // Debug: Count total recordings in database
         let countDescriptor = FetchDescriptor<Recording>()
         let totalCount = (try? modelContext.fetch(countDescriptor).count) ?? 0
         AppLogger.sync.debug("Database has \(totalCount, privacy: .public) total recordings")
 
-        for url in urls {
+        for download in downloads {
+            let url = download.url
             let filename = url.lastPathComponent
 
             // Check if already in database (excluding soft-deleted recordings)
@@ -694,6 +706,7 @@ final class SyncService {
             }
 
             // Add to debouncer
+            pendingRecordingSources[url.path] = download.source
             await debouncer.recordEvent(for: url.path)
         }
 
@@ -778,6 +791,9 @@ final class SyncService {
 
         // Set device serial
         recording.deviceSerial = deviceWatch.currentDeviceSerial
+        if let source = pendingRecordingSources.removeValue(forKey: url.path) {
+            recording.sourceFolder = source
+        }
         recording.updatedAt = Date()
 
         if !isAdoption {
@@ -979,6 +995,24 @@ final class SyncService {
         }
     }
 
+    /// Whether diarization must be skipped for this recording regardless of the
+    /// diarization setting. True only for the TP-7's /memo folder, which only
+    /// ever captures the primary user's own voice — any "speaker" diarization
+    /// might detect there would be a misattribution, not a real second
+    /// speaker. /recordings has no such guarantee (it can capture interviews,
+    /// meetings, etc.), so diarization still runs there as normal.
+    nonisolated static func forceSingleSpeaker(for recording: Recording) -> Bool {
+        recording.sourceFolder == .memo
+    }
+
+    /// Runs a local (WhisperKit/Parakeet) transcription.
+    private func transcribeLocal(_ transcriber: any TranscriptionProvider, path: String, recording: Recording) async throws -> TranscriptionResult {
+        guard let parakeet = transcriber as? ParakeetService else {
+            return try await transcriber.transcribe(localPath: path)
+        }
+        return try await parakeet.transcribe(localPath: path, forceSingleSpeaker: Self.forceSingleSpeaker(for: recording))
+    }
+
     private func transcribeRecording(_ recording: Recording, provider: TranscriptionProviderKind) async -> TranscriptionResult? {
         guard let transcriber = transcriptionProvider else {
             AppLogger.sync.debug("Skipping transcription (transcription provider not configured)")
@@ -1009,7 +1043,7 @@ final class SyncService {
                     throw SyncTranscriptionError.noAudioSource
                 }
                 defer { audio.tempURL.map { try? FileManager.default.removeItem(at: $0) } }
-                result = try await transcriber.transcribe(localPath: audio.path)
+                result = try await transcribeLocal(transcriber, path: audio.path, recording: recording)
                 AppLogger.sync.debug("Transcribed locally with \(provider.shortName)")
             }
 

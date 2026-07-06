@@ -14,6 +14,9 @@ final class Recording {
     @Attribute(.unique) var filename: String
     var localPath: String
     var deviceSerial: String?
+    /// Which on-device TP-7 folder this recording came from, when known.
+    /// Nil for recordings recovered from S3/Notion/local storage with no device origin.
+    var sourceFolder: RecordingSource?
 
     // Audio metadata
     var recordedAt: Date
@@ -91,6 +94,23 @@ enum TranscriptionStatus: String, Codable {
     case processing
     case completed
     case failed
+}
+
+/// Which on-device TP-7 folder a recording was ingested from. The TP-7 can be
+/// configured to split recordings between these two MTP folders. Only /memo
+/// is guaranteed to be the primary user's voice alone (used to skip
+/// diarization); /recordings can capture other speakers (interviews,
+/// meetings, etc.) and goes through diarization as normal.
+enum RecordingSource: String, Codable, CaseIterable {
+    case recordings
+    case memo
+
+    var displayName: String {
+        switch self {
+        case .recordings: return "Recording"
+        case .memo: return "Memo"
+        }
+    }
 }
 
 /// One speaker turn extracted during diarization, stored on the recording so

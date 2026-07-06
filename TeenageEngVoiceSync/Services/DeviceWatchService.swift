@@ -3,7 +3,8 @@
 //  TeenageEngVoiceSync
 //
 //  Watches for a TP-7 over MTP (via the vendored libtp7mtp backend) and
-//  downloads new recordings to a local cache directory.
+//  downloads new recordings from both the /recordings and /memo device
+//  folders to a local cache directory.
 //
 //  A single MTP session is held open for the entire time the device is
 //  connected, and reused for every list/download/delete call - the TP-7's
@@ -15,6 +16,13 @@ import Foundation
 import os
 import Observation
 
+/// A device file freshly downloaded to the local cache, tagged with the
+/// on-device folder it came from.
+struct DownloadedRecording {
+    let url: URL
+    let source: RecordingSource
+}
+
 @Observable
 final class DeviceWatchService {
     private(set) var isConnected = false
@@ -23,12 +31,14 @@ final class DeviceWatchService {
 
     private var watchTask: Task<Void, Never>?
     private var session: TP7MTPSession?
+    /// Keyed by "<folder>/<filename>" so identically-named files in /memo and
+    /// /recordings are tracked independently.
     private var knownFilenames: Set<String> = []
 
     // Callbacks
     var onDeviceConnected: ((String) -> Void)?
     var onDeviceDisconnected: ((String) -> Void)?
-    var onNewRecordings: (([URL], String) -> Void)?
+    var onNewRecordings: (([DownloadedRecording], String) -> Void)?
 
     /// Start watching for TP-7 devices
     func startWatching() {
@@ -73,7 +83,7 @@ final class DeviceWatchService {
         session = newSession
         isConnected = true
         currentDeviceSerial = newSession.device.serial
-        recordingsPath = "/recordings"
+        recordingsPath = "/recordings, /memo"
         knownFilenames = []
 
         AppLogger.device.info("Device connected (serial=\(newSession.device.serial, privacy: .private))")
@@ -104,28 +114,33 @@ final class DeviceWatchService {
 
         guard case .success(let files) = listResult else { return false }
 
-        let newFiles = files.filter { !knownFilenames.contains($0.name) }
+        let newFiles = files.filter { !knownFilenames.contains(Self.trackingKey(for: $0)) }
         guard !newFiles.isEmpty else { return true }
 
-        var downloadedURLs: [URL] = []
+        var downloaded: [DownloadedRecording] = []
 
         for file in newFiles {
-            guard let destination = Self.cacheDestination(for: file.name, serial: serial) else { continue }
+            let key = Self.trackingKey(for: file)
+            guard let source = RecordingSource(rawValue: file.folder) else {
+                AppLogger.device.error("Skipping recording with unknown folder \(file.folder, privacy: .public)")
+                continue
+            }
+            guard let destination = Self.cacheDestination(for: file.name, folder: file.folder, serial: serial) else { continue }
 
             if FileManager.default.fileExists(atPath: destination.path) {
-                knownFilenames.insert(file.name)
-                downloadedURLs.append(destination)
+                knownFilenames.insert(key)
+                downloaded.append(DownloadedRecording(url: destination, source: source))
                 continue
             }
 
             let downloadResult = await Task.detached(priority: .utility) {
-                session.download(filename: file.name, to: destination)
+                session.download(filename: file.name, folder: file.folder, to: destination)
             }.value
 
             switch downloadResult {
             case .success:
-                knownFilenames.insert(file.name)
-                downloadedURLs.append(destination)
+                knownFilenames.insert(key)
+                downloaded.append(DownloadedRecording(url: destination, source: source))
             case .failure(let error):
                 // Do not mark as known: a transient MTP failure here should be
                 // retried on the next poll cycle rather than skipped forever.
@@ -133,11 +148,15 @@ final class DeviceWatchService {
             }
         }
 
-        if !downloadedURLs.isEmpty {
-            onNewRecordings?(downloadedURLs, serial)
+        if !downloaded.isEmpty {
+            onNewRecordings?(downloaded, serial)
         }
 
         return true
+    }
+
+    private static func trackingKey(for file: TP7MTPFileEntry) -> String {
+        "\(file.folder)/\(file.name)"
     }
 
     private func handleDisconnected() {
@@ -165,17 +184,18 @@ final class DeviceWatchService {
     }
 
     /// Deletes a recording from the currently connected device over MTP.
-    /// Blocking; call off the main thread. No-op if no device is connected.
-    func deleteFromDevice(filename: String) async -> Result<Void, TP7MTPError> {
+    /// `folder` must be "recordings" or "memo". Blocking; call off the main
+    /// thread. No-op if no device is connected.
+    func deleteFromDevice(filename: String, folder: String) async -> Result<Void, TP7MTPError> {
         guard let session else {
             return .failure(.device("No device connected"))
         }
         return await Task.detached(priority: .utility) {
-            session.deleteRecording(filename: filename)
+            session.deleteRecording(filename: filename, folder: folder)
         }.value
     }
 
-    private static func cacheDestination(for filename: String, serial: String) -> URL? {
+    private static func cacheDestination(for filename: String, folder: String, serial: String) -> URL? {
         // Defense in depth: never trust the device-reported name as a path.
         // Only its last path component is used, so a malicious "../../foo.wav"
         // can't write outside the cache directory.
@@ -188,10 +208,13 @@ final class DeviceWatchService {
         guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
             return nil
         }
+        // Nested by folder so /memo and /recordings can't collide on identically
+        // named files (both e.g. auto-numbered "0001.wav").
         let dir = appSupport
             .appendingPathComponent("TP-7 VoiceSync", isDirectory: true)
             .appendingPathComponent("DeviceDownloads", isDirectory: true)
             .appendingPathComponent(serial, isDirectory: true)
+            .appendingPathComponent(folder, isDirectory: true)
 
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
 

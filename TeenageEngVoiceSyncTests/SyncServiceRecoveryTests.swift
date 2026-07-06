@@ -65,6 +65,28 @@ final class SyncServiceRecoveryTests: XCTestCase {
         XCTAssertFalse(SyncService.hasAudioSource(recording))
     }
 
+    // MARK: - forceSingleSpeaker
+
+    func testForceSingleSpeakerTrueForMemoFolder() {
+        let recording = Recording(filename: "memo.wav", localPath: "", fileSize: 0, recordedAt: .now)
+        recording.sourceFolder = .memo
+        XCTAssertTrue(SyncService.forceSingleSpeaker(for: recording))
+    }
+
+    func testForceSingleSpeakerFalseForRecordingsFolder() {
+        // /recordings can capture other speakers (interviews, meetings), so it
+        // must go through normal diarization, unlike /memo.
+        let recording = Recording(filename: "session.wav", localPath: "", fileSize: 0, recordedAt: .now)
+        recording.sourceFolder = .recordings
+        XCTAssertFalse(SyncService.forceSingleSpeaker(for: recording))
+    }
+
+    func testForceSingleSpeakerFalseWhenSourceUnknown() {
+        // Recovered rows (S3/Notion/local-folder) have no device origin at all.
+        let recording = Recording(filename: "recovered.wav", localPath: "", fileSize: 0, recordedAt: .now)
+        XCTAssertFalse(SyncService.forceSingleSpeaker(for: recording))
+    }
+
     // MARK: - createRecording adoption
 
     @MainActor
@@ -108,6 +130,34 @@ final class SyncServiceRecoveryTests: XCTestCase {
         XCTAssertEqual(allRecordings.count, 1)
         XCTAssertEqual(allRecordings[0].filename, "session02.wav")
         XCTAssertEqual(allRecordings[0].sampleRate, 44100)
+    }
+
+    // MARK: - createRecording sourceFolder tagging
+
+    @MainActor
+    func testCreateRecordingTagsSourceFolderFromPendingDownload() async throws {
+        let context = try makeContext()
+        let sync = SyncService(modelContext: context)
+
+        let deviceFileURL = writeDeviceFile(named: "memo01.wav")
+        sync.pendingRecordingSources[deviceFileURL.path] = .memo
+
+        let result = try await sync.createRecording(from: deviceFileURL)
+
+        XCTAssertEqual(result.sourceFolder, .memo)
+        // Consumed, not left behind for a later unrelated call to pick up.
+        XCTAssertNil(sync.pendingRecordingSources[deviceFileURL.path])
+    }
+
+    @MainActor
+    func testCreateRecordingLeavesSourceFolderNilWithoutPendingEntry() async throws {
+        let context = try makeContext()
+        let sync = SyncService(modelContext: context)
+
+        let deviceFileURL = writeDeviceFile(named: "recovered.wav")
+        let result = try await sync.createRecording(from: deviceFileURL)
+
+        XCTAssertNil(result.sourceFolder)
     }
 
     @MainActor

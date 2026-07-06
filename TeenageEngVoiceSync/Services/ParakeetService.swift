@@ -217,7 +217,17 @@ actor ParakeetService: TranscriptionProvider {
     // MARK: - TranscriptionProvider
 
     func transcribe(localPath: String) async throws -> TranscriptionResult {
+        try await transcribe(localPath: localPath, forceSingleSpeaker: false)
+    }
+
+    /// - Parameter forceSingleSpeaker: Skips diarization entirely, regardless of
+    ///   the diarization setting. Used for TP-7 recordings from the /memo
+    ///   folder, which only ever captures the primary user's own voice, so any
+    ///   "speaker" diarization might detect there would be a misattribution,
+    ///   not a real second speaker. /recordings has no such guarantee.
+    func transcribe(localPath: String, forceSingleSpeaker: Bool) async throws -> TranscriptionResult {
         let manager = try await loadManager()
+        let runDiarization = diarizationEnabled && !forceSingleSpeaker
 
         let url = URL(fileURLWithPath: localPath)
         var decoderState = TdtDecoderState.make()
@@ -225,7 +235,7 @@ actor ParakeetService: TranscriptionProvider {
 
         let result: ASRResult
         var decodedSamples: [Float]?
-        if diarizationEnabled {
+        if runDiarization {
             let samples = try AudioConverter().resampleAudioFile(url)
             decodedSamples = samples
             result = try await manager.transcribe(samples, decoderState: &decoderState, language: language)
@@ -240,7 +250,7 @@ actor ParakeetService: TranscriptionProvider {
 
         var finalText = text
         var speakerSegments: [StoredSpeakerSegment]?
-        if diarizationEnabled, let decodedSamples {
+        if runDiarization, let decodedSamples {
             do {
                 let diarized = try await diarizedOutput(
                     samples: decodedSamples,
