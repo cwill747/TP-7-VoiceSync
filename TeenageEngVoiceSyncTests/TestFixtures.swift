@@ -35,3 +35,36 @@ func makeWAVData(sampleRate: UInt32 = 44100, channels: UInt16 = 1, bitsPerSample
     data.append(Data(repeating: 0, count: Int(dataSize)))
     return data
 }
+
+/// Synthesizes a canonical-PCM WAV file with explicit per-channel sample data
+/// (interleaved on write), for tests that need multi-channel content control.
+func makeMultiChannelWAVData(sampleRate: UInt32 = 44100, bitsPerSample: UInt16 = 16, channelSamples: [[Int16]]) -> Data {
+    let channels = UInt16(channelSamples.count)
+    let numSamples = channelSamples.first?.count ?? 0
+    let byteRate = sampleRate * UInt32(channels) * UInt32(bitsPerSample / 8)
+    let blockAlign = channels * (bitsPerSample / 8)
+    let dataSize = UInt32(numSamples * Int(channels) * Int(bitsPerSample / 8))
+    let chunkSize = 36 + dataSize
+
+    var data = Data()
+    data.append(contentsOf: Array("RIFF".utf8))
+    data.append(contentsOf: littleEndianBytes(chunkSize))
+    data.append(contentsOf: Array("WAVE".utf8))
+    data.append(contentsOf: Array("fmt ".utf8))
+    data.append(contentsOf: littleEndianBytes(UInt32(16)))
+    data.append(contentsOf: littleEndianBytes(UInt16(1))) // PCM
+    data.append(contentsOf: littleEndianBytes(channels))
+    data.append(contentsOf: littleEndianBytes(sampleRate))
+    data.append(contentsOf: littleEndianBytes(byteRate))
+    data.append(contentsOf: littleEndianBytes(blockAlign))
+    data.append(contentsOf: littleEndianBytes(bitsPerSample))
+    data.append(contentsOf: Array("data".utf8))
+    data.append(contentsOf: littleEndianBytes(dataSize))
+
+    for sampleIndex in 0..<numSamples {
+        for channel in 0..<Int(channels) {
+            data.append(contentsOf: littleEndianBytes(channelSamples[channel][sampleIndex]))
+        }
+    }
+    return data
+}

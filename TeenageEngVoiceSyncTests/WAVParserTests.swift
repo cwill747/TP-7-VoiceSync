@@ -37,6 +37,7 @@ final class WAVParserTests: XCTestCase {
         XCTAssertEqual(metadata.channels, 1)
         XCTAssertEqual(metadata.bitDepth, 16)
         XCTAssertEqual(metadata.duration, 0.1, accuracy: 0.01) // 4410 samples / 44100 Hz
+        XCTAssertEqual(metadata.trackCount, 1)
     }
 
     func testParsesStereoWAVMetadata() async throws {
@@ -47,6 +48,16 @@ final class WAVParserTests: XCTestCase {
         XCTAssertEqual(metadata.sampleRate, 48000)
         XCTAssertEqual(metadata.channels, 2)
         XCTAssertEqual(metadata.bitDepth, 24)
+        XCTAssertEqual(metadata.trackCount, 1) // dual-mono stereo = 1 track
+    }
+
+    func testFourChannelWAVReportsTwoTracks() async throws {
+        let url = write(makeWAVData(sampleRate: 44100, channels: 4, bitsPerSample: 16, numSamples: 100), name: "quad.wav")
+
+        let metadata = try await WAVParser.parse(url: url)
+
+        XCTAssertEqual(metadata.channels, 4)
+        XCTAssertEqual(metadata.trackCount, 2)
     }
 
     func testFileNotFoundThrowsExactError() async throws {

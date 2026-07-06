@@ -286,6 +286,7 @@ final class SyncService {
             if let metadata = try? await WAVParser.parse(url: file) {
                 recording.duration = metadata.duration
                 recording.sampleRate = metadata.sampleRate
+                recording.trackCount = metadata.trackCount
             }
 
             inferRecoveredDeviceOrigin(for: recording)
@@ -815,6 +816,7 @@ final class SyncService {
         if let metadata = try? await WAVParser.parse(url: url) {
             recording.duration = metadata.duration
             recording.sampleRate = metadata.sampleRate
+            recording.trackCount = metadata.trackCount
         }
 
         // Calculate hash
