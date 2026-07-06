@@ -56,6 +56,13 @@ struct RecordingDetailView: View {
                         }
                     }
                     .foregroundStyle(.secondary)
+
+                    if SyncService.hasPendingRemoteWork(recording) {
+                        Label("Waiting for connection to finish uploading", systemImage: "icloud.slash")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                            .padding(.top, 2)
+                    }
                 }
 
                 Divider()
