@@ -171,6 +171,7 @@ final class SyncService {
                     )
                     recording.s3Key = obj.key
                     recording.s3UploadedAt = obj.lastModified
+                    inferRecoveredDeviceOrigin(for: recording)
                     modelContext.insert(recording)
                     recovered += 1
                 }
@@ -205,6 +206,22 @@ final class SyncService {
         } else {
             AppLogger.sync.info("Recovery scan complete: all sources in sync")
         }
+    }
+
+    /// Backfills `sourceFolder`/`deviceFilename` on a recording recovered from
+    /// a remote source (S3/local folder/Notion). None of those stores persist
+    /// those fields — only `filename` — so without this, a recovered /memo
+    /// recording would look identical to a /recordings one: `deleteRecording`
+    /// would then send its device-delete call to the wrong folder, and
+    /// `forceSingleSpeaker` would wrongly run full diarization on retranscribe.
+    /// No-op when `filename` doesn't carry the /memo naming convention, or
+    /// sourceFolder is already known. Internal (not private) so tests can call
+    /// it directly, mirroring `createRecording`'s own access level.
+    func inferRecoveredDeviceOrigin(for recording: Recording) {
+        guard recording.sourceFolder == nil,
+              let inferred = DeviceWatchService.inferMemoOrigin(fromPersistedFilename: recording.filename) else { return }
+        recording.sourceFolder = inferred.source
+        recording.deviceFilename = inferred.deviceFilename
     }
 
     private func fetchAllKnownFilenames() -> Set<String> {
@@ -271,6 +288,7 @@ final class SyncService {
                 recording.sampleRate = metadata.sampleRate
             }
 
+            inferRecoveredDeviceOrigin(for: recording)
             modelContext.insert(recording)
             recovered += 1
         }
@@ -339,6 +357,7 @@ final class SyncService {
                     recording.transcriptionLanguage = lang
                 }
 
+                inferRecoveredDeviceOrigin(for: recording)
                 modelContext.insert(recording)
                 seenFilenames.insert(page.filename)
                 recovered += 1
@@ -363,6 +382,13 @@ final class SyncService {
         guard let recording = try? modelContext.fetch(descriptor).first else { return }
 
         var changed = false
+
+        if recording.sourceFolder == nil {
+            inferRecoveredDeviceOrigin(for: recording)
+            if recording.sourceFolder != nil {
+                changed = true
+            }
+        }
 
         if recording.transcriptionText == nil || recording.transcriptionText?.isEmpty == true {
             if let transcript = try? await service.fetchPageTranscript(pageId: page.pageId), !transcript.isEmpty {
@@ -503,9 +529,10 @@ final class SyncService {
 
         // 1. Try device deletion over MTP (if connected)
         if deviceWatch.isConnected {
-            // Recordings synced before source-folder tracking was added have no
-            // stored value; they all predate the /memo split, so /recordings is
-            // the correct fallback.
+            // Rows with no sourceFolder are either pre-/memo-split recordings, or
+            // recovered rows inferRecoveredDeviceOrigin couldn't identify as
+            // /memo — both cases are /recordings, or not on the device at all
+            // (in which case the device call below just fails harmlessly).
             let folder = (recording.sourceFolder ?? .recordings).rawValue
             // `deviceFilename` holds the literal on-device name; `filename` may be
             // locally qualified (e.g. "memo-0001.wav") to keep the app-wide identity

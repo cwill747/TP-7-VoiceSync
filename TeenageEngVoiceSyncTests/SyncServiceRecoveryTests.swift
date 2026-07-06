@@ -87,6 +87,53 @@ final class SyncServiceRecoveryTests: XCTestCase {
         XCTAssertFalse(SyncService.forceSingleSpeaker(for: recording))
     }
 
+    // MARK: - inferRecoveredDeviceOrigin
+
+    @MainActor
+    func testInferRecoveredDeviceOriginBackfillsMemoRecording() throws {
+        let context = try makeContext()
+        let sync = SyncService(modelContext: context)
+
+        // Simulates an S3/Notion/local-folder recovery: filename round-tripped
+        // through remote storage, but sourceFolder/deviceFilename were never set.
+        let recording = Recording(filename: "memo-0001.wav", localPath: "", fileSize: 0, recordedAt: .now)
+
+        sync.inferRecoveredDeviceOrigin(for: recording)
+
+        XCTAssertEqual(recording.sourceFolder, .memo)
+        XCTAssertEqual(recording.deviceFilename, "0001.wav")
+    }
+
+    @MainActor
+    func testInferRecoveredDeviceOriginLeavesUnqualifiedFilenameUnset() throws {
+        let context = try makeContext()
+        let sync = SyncService(modelContext: context)
+
+        let recording = Recording(filename: "0001.wav", localPath: "", fileSize: 0, recordedAt: .now)
+
+        sync.inferRecoveredDeviceOrigin(for: recording)
+
+        XCTAssertNil(recording.sourceFolder)
+        XCTAssertNil(recording.deviceFilename)
+    }
+
+    @MainActor
+    func testInferRecoveredDeviceOriginDoesNotOverrideKnownSourceFolder() throws {
+        let context = try makeContext()
+        let sync = SyncService(modelContext: context)
+
+        // Already correctly tagged .recordings by a real device sync; must not
+        // be reinterpreted even though nothing about the filename rules it out.
+        let recording = Recording(filename: "memo-0001.wav", localPath: "", fileSize: 0, recordedAt: .now)
+        recording.sourceFolder = .recordings
+        recording.deviceFilename = "memo-0001.wav"
+
+        sync.inferRecoveredDeviceOrigin(for: recording)
+
+        XCTAssertEqual(recording.sourceFolder, .recordings)
+        XCTAssertEqual(recording.deviceFilename, "memo-0001.wav")
+    }
+
     // MARK: - createRecording adoption
 
     @MainActor

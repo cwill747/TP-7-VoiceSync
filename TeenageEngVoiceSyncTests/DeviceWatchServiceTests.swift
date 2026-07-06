@@ -37,4 +37,25 @@ final class DeviceWatchServiceTests: XCTestCase {
         let memoName = DeviceWatchService.localFilename(forDeviceFilename: "0001.wav", folder: "memo")
         XCTAssertNotEqual(recordingsName, memoName)
     }
+
+    // MARK: - inferMemoOrigin
+
+    func testInferMemoOriginRecognizesQualifiedFilename() {
+        let inferred = DeviceWatchService.inferMemoOrigin(fromPersistedFilename: "memo-0001.wav")
+        XCTAssertEqual(inferred?.source, .memo)
+        XCTAssertEqual(inferred?.deviceFilename, "0001.wav")
+    }
+
+    func testInferMemoOriginNilForUnqualifiedFilename() {
+        XCTAssertNil(DeviceWatchService.inferMemoOrigin(fromPersistedFilename: "0001.wav"))
+    }
+
+    func testInferMemoOriginRoundTripsLocalFilename() {
+        // The whole point of the prefix: what localFilename produces for /memo,
+        // inferMemoOrigin must be able to reverse.
+        let qualified = DeviceWatchService.localFilename(forDeviceFilename: "0007.wav", folder: "memo")
+        let inferred = DeviceWatchService.inferMemoOrigin(fromPersistedFilename: qualified)
+        XCTAssertEqual(inferred?.source, .memo)
+        XCTAssertEqual(inferred?.deviceFilename, "0007.wav")
+    }
 }

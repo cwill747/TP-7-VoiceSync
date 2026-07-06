@@ -198,6 +198,12 @@ final class DeviceWatchService {
         }.value
     }
 
+    /// Prefix applied to /memo device filenames (see `localFilename`) so they
+    /// can't collide with /recordings names once they become the app-wide
+    /// `Recording.filename` identity. Shared with `inferMemoOrigin`, which
+    /// reverses the mapping for recordings whose origin fields were lost.
+    private static let memoFilenamePrefix = "memo-"
+
     /// The device-reported filename is only guaranteed unique *within* its own
     /// folder, not across /recordings and /memo (both can auto-number from
     /// "0001.wav"). This name becomes the local cache filename and, downstream,
@@ -209,7 +215,19 @@ final class DeviceWatchService {
     /// (the only folder that existed before this feature) untouched, so
     /// already-synced recordings keep matching their existing S3/Notion state.
     static func localFilename(forDeviceFilename safeName: String, folder: String) -> String {
-        folder == RecordingSource.memo.rawValue ? "memo-\(safeName)" : safeName
+        folder == RecordingSource.memo.rawValue ? "\(memoFilenamePrefix)\(safeName)" : safeName
+    }
+
+    /// Reverses `localFilename` for a persisted `Recording.filename` whose
+    /// `sourceFolder`/`deviceFilename` were never captured. Recordings
+    /// recovered from S3/Notion/local folder only ever persist `filename` -
+    /// none of those stores know about device folders - but that name
+    /// round-trips the /memo prefix unchanged, so it can be recovered from
+    /// here. Returns nil when the name doesn't carry the prefix (a
+    /// /recordings-origin, or pre-/memo-feature, recording).
+    static func inferMemoOrigin(fromPersistedFilename filename: String) -> (source: RecordingSource, deviceFilename: String)? {
+        guard filename.hasPrefix(memoFilenamePrefix) else { return nil }
+        return (.memo, String(filename.dropFirst(memoFilenamePrefix.count)))
     }
 
     private static func cacheDestination(for filename: String, folder: String, serial: String) -> URL? {
