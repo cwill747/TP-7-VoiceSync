@@ -16,6 +16,7 @@ fi
 
 # Clear stale build cache if Go version changed since last build
 CACHE_VERSION_FILE="${GOPATH:-$HOME/go}/.tp7mtp-go-version"
+mkdir -p "$(dirname "$CACHE_VERSION_FILE")"
 CURRENT_GO="$(go version)"
 if [ -f "$CACHE_VERSION_FILE" ] && [ "$(cat "$CACHE_VERSION_FILE")" != "$CURRENT_GO" ]; then
     echo "Go version changed, clearing build cache..."
