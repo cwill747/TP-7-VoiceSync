@@ -41,8 +41,44 @@ actor KeychainService {
     }
 
     private var didMigrate = false
+    private var dataProtectionKeychainAvailable: Bool?
 
     private init() {}
+
+    // The data-protection keychain requires the app to carry a keychain-access-groups
+    // entitlement backed by a matching provisioning profile. Release builds are signed
+    // with a bare Developer ID certificate and no profile, so SecItemAdd/Update/Delete
+    // against it fail with errSecMissingEntitlement (reads of a nonexistent item don't,
+    // which is why availability can only be detected via a real write). Probe once and
+    // cache the result so we never touch the DP path (or its migration) when it's unusable.
+    private func isDataProtectionKeychainAvailable() -> Bool {
+        if let cached = dataProtectionKeychainAvailable {
+            return cached
+        }
+
+        let probeQuery: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: "com.tp7sync.dpkeychain.probe",
+            kSecAttrService as String: "TeenageEngVoiceSync",
+            kSecUseDataProtectionKeychain as String: true,
+            kSecValueData as String: Data()
+        ]
+
+        let status = SecItemAdd(probeQuery as CFDictionary, nil)
+        let available = status == errSecSuccess || status == errSecDuplicateItem
+
+        if status == errSecSuccess || status == errSecDuplicateItem {
+            var deleteQuery = probeQuery
+            deleteQuery.removeValue(forKey: kSecValueData as String)
+            SecItemDelete(deleteQuery as CFDictionary)
+        }
+
+        dataProtectionKeychainAvailable = available
+        if !available {
+            AppLogger.keychain.info("Data-protection keychain unavailable (status \(status, privacy: .public)); using legacy keychain")
+        }
+        return available
+    }
 
     // Migrate from the single-JSON-blob keychain item used in an earlier build.
     private func migrateFromBlobIfNeeded() {
@@ -86,12 +122,14 @@ actor KeychainService {
             throw KeychainError.encodingFailed
         }
 
-        let query: [String: Any] = [
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrAccount as String: key.rawValue,
-            kSecAttrService as String: "TeenageEngVoiceSync",
-            kSecUseDataProtectionKeychain as String: true
+            kSecAttrService as String: "TeenageEngVoiceSync"
         ]
+        if isDataProtectionKeychainAvailable() {
+            query[kSecUseDataProtectionKeychain as String] = true
+        }
 
         let attributes: [String: Any] = [
             kSecValueData as String: data,
@@ -124,20 +162,24 @@ actor KeychainService {
     func retrieve(for key: Key) throws -> String? {
         migrateFromBlobIfNeeded()
 
-        let query: [String: Any] = [
+        let dpAvailable = isDataProtectionKeychainAvailable()
+
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrAccount as String: key.rawValue,
             kSecAttrService as String: "TeenageEngVoiceSync",
-            kSecUseDataProtectionKeychain as String: true,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
+        if dpAvailable {
+            query[kSecUseDataProtectionKeychain as String] = true
+        }
 
         var result: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
 
         if status == errSecItemNotFound {
-            return try migrateFromLegacyKeychainIfNeeded(for: key)
+            return dpAvailable ? try migrateFromLegacyKeychainIfNeeded(for: key) : nil
         }
 
         guard status == errSecSuccess else {
@@ -187,12 +229,15 @@ actor KeychainService {
     }
 
     func delete(for key: Key) throws {
-        let query: [String: Any] = [
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrAccount as String: key.rawValue,
-            kSecAttrService as String: "TeenageEngVoiceSync",
-            kSecUseDataProtectionKeychain as String: true
+            kSecAttrService as String: "TeenageEngVoiceSync"
         ]
+        let dpAvailable = isDataProtectionKeychainAvailable()
+        if dpAvailable {
+            query[kSecUseDataProtectionKeychain as String] = true
+        }
 
         let status = SecItemDelete(query as CFDictionary)
 
@@ -202,12 +247,15 @@ actor KeychainService {
 
         // Best-effort cleanup of an unmigrated legacy copy so hasValue/delete behave
         // identically regardless of whether this key was ever read (and thus migrated).
-        let legacyQuery: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrAccount as String: key.rawValue,
-            kSecAttrService as String: "TeenageEngVoiceSync"
-        ]
-        SecItemDelete(legacyQuery as CFDictionary)
+        // Only meaningful when the DP keychain is actually a distinct store from the query above.
+        if dpAvailable {
+            let legacyQuery: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrAccount as String: key.rawValue,
+                kSecAttrService as String: "TeenageEngVoiceSync"
+            ]
+            SecItemDelete(legacyQuery as CFDictionary)
+        }
     }
 
     func hasValue(for key: Key) throws -> Bool {
