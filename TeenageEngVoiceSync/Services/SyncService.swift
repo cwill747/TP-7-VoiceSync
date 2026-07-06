@@ -873,6 +873,8 @@ final class SyncService {
                 recording.transcriptionLanguage = existing.transcriptionLanguage
                 recording.transcriptionStatus = existing.transcriptionStatus
                 recording.transcribedAt = existing.transcribedAt
+                recording.speakerSegmentsData = existing.speakerSegmentsData
+                recording.overdubNotesData = existing.overdubNotesData
                 recording.updatedAt = Date()
                 try? modelContext.save()
                 return
@@ -1051,11 +1053,29 @@ final class SyncService {
         recording.trackCount > 1 && recording.sourceFolder == .memo
     }
 
+    /// Recordings recovered from S3/Notion never had `WAVParser` run against them
+    /// (no local audio existed yet at recovery time), so `trackCount` is stuck at
+    /// the model default of 1. Only re-parses when it looks unset, so a normal
+    /// device-ingested recording (already correct from `createRecording`) doesn't
+    /// pay for a redundant parse on every transcription.
+    private func refreshTrackCountIfNeeded(for recording: Recording, path: String) async {
+        guard recording.trackCount <= 1,
+              let metadata = try? await WAVParser.parse(url: URL(fileURLWithPath: path)) else { return }
+        recording.trackCount = metadata.trackCount
+    }
+
     /// Runs a local (WhisperKit/Parakeet) transcription.
     private func transcribeLocal(_ transcriber: any TranscriptionProvider, path: String, recording: Recording) async throws -> TranscriptionResult {
         guard let parakeet = transcriber as? ParakeetService else {
             return try await transcriber.transcribe(localPath: path)
         }
+
+        // Rows recovered from S3/Notion have no local audio at recovery time, so
+        // `trackCount` is stuck at the model default of 1 until now — the first
+        // point a real file is on disk. Re-derive it so a recovered multi-track
+        // memo/recording doesn't silently fall through to the flat single-track
+        // path below.
+        await refreshTrackCountIfNeeded(for: recording, path: path)
 
         // A TP-7 /recordings file with 2+ tracks captures distinct speakers on
         // separate channels — split and transcribe each independently instead
