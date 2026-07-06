@@ -27,8 +27,8 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 NATIVE_DIR="$REPO_ROOT/native/tp7mtp"
 VENDOR_DIR="$REPO_ROOT/Vendor/TP7MTP"
 
-# Team identity for signing — set via env or default to ad-hoc
-CODESIGN_IDENTITY="${CODESIGN_IDENTITY:-Apple Development}"
+# Team identity for signing - set via env or default to ad-hoc
+CODESIGN_IDENTITY="${CODESIGN_IDENTITY:--}"
 
 echo "Building libtp7mtp.dylib..."
 cd "$NATIVE_DIR"
@@ -39,6 +39,10 @@ CGO_ENABLED=1 go build -a \
     .
 
 echo "Fixing install names for vendored dependencies..."
+install_name_tool -id \
+    "@rpath/libtp7mtp.dylib" \
+    "$VENDOR_DIR/libtp7mtp.dylib"
+
 # Rewrite Nix store paths to @rpath so the dylib works on machines without Nix
 install_name_tool -change \
     "$(otool -L "$VENDOR_DIR/libtp7mtp.dylib" | grep libusb | awk '{print $1}')" \
