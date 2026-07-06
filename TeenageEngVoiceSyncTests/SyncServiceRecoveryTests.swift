@@ -90,7 +90,7 @@ final class SyncServiceRecoveryTests: XCTestCase {
     // MARK: - inferRecoveredDeviceOrigin
 
     @MainActor
-    func testInferRecoveredDeviceOriginBackfillsMemoRecording() throws {
+    func testInferRecoveredDeviceOriginBackfillsMemoRecording() async throws {
         let context = try makeContext()
         let sync = SyncService(modelContext: context)
 
@@ -105,7 +105,7 @@ final class SyncServiceRecoveryTests: XCTestCase {
     }
 
     @MainActor
-    func testInferRecoveredDeviceOriginLeavesUnqualifiedFilenameUnset() throws {
+    func testInferRecoveredDeviceOriginLeavesUnqualifiedFilenameUnset() async throws {
         let context = try makeContext()
         let sync = SyncService(modelContext: context)
 
@@ -118,7 +118,7 @@ final class SyncServiceRecoveryTests: XCTestCase {
     }
 
     @MainActor
-    func testInferRecoveredDeviceOriginDoesNotOverrideKnownSourceFolder() throws {
+    func testInferRecoveredDeviceOriginDoesNotOverrideKnownSourceFolder() async throws {
         let context = try makeContext()
         let sync = SyncService(modelContext: context)
 
