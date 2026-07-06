@@ -700,7 +700,7 @@ final class SyncService {
         pendingCount = await debouncer.pendingCount
     }
 
-    private func createRecording(from url: URL) async throws -> Recording {
+    func createRecording(from url: URL) async throws -> Recording {
         let filename = url.lastPathComponent
         let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
         let fileSize = attributes[.size] as? Int64 ?? 0
@@ -979,7 +979,7 @@ final class SyncService {
         var playURLString = ""
         var downloadURLString = ""
         if let s3Key = recording.s3Key, let s3 = s3Service {
-            let expiry = parseLinkExpiry(UserDefaults.standard.string(forKey: "applenotes.linkExpiry") ?? "7d")
+            let expiry = Self.parseLinkExpiry(UserDefaults.standard.string(forKey: "applenotes.linkExpiry") ?? "7d")
             playURLString = (try? s3.generatePresignedURL(s3Key: s3Key, expiry: expiry).absoluteString) ?? ""
             downloadURLString = (try? s3.generateDownloadURL(s3Key: s3Key, filename: recording.filename, expiry: expiry).absoluteString) ?? ""
         } else if let localCopyPath = recording.localCopyPath {
@@ -1042,7 +1042,7 @@ final class SyncService {
         if let s3Key = recording.s3Key, let s3 = s3Service {
             // Use S3 presigned URLs
             let expiryString = UserDefaults.standard.string(forKey: "applenotes.linkExpiry") ?? "7d"
-            let expiry = parseLinkExpiry(expiryString)
+            let expiry = Self.parseLinkExpiry(expiryString)
             do {
                 let playURL = try s3.generatePresignedURL(s3Key: s3Key, expiry: expiry)
                 let downloadURL = try s3.generateDownloadURL(s3Key: s3Key, filename: recording.filename, expiry: expiry)
@@ -1189,7 +1189,7 @@ final class SyncService {
 
         let folder = UserDefaults.standard.string(forKey: "applenotes.folder") ?? "TP-7 Transcripts"
         let expiryString = UserDefaults.standard.string(forKey: "applenotes.linkExpiry") ?? "7d"
-        let expiry = parseLinkExpiry(expiryString)
+        let expiry = Self.parseLinkExpiry(expiryString)
 
         // Generate LLM title if enabled and not already generated
         var customTitle = recording.llmTitle
@@ -1269,7 +1269,7 @@ final class SyncService {
         return legacyEnabled
     }
 
-    private func parseLinkExpiry(_ string: String) -> TimeInterval {
+    nonisolated static func parseLinkExpiry(_ string: String) -> TimeInterval {
         let value = string.dropLast()
         let unit = string.last
 

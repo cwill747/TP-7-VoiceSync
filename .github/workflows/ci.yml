@@ -28,11 +28,11 @@ jobs:
       - name: Build libtp7mtp.dylib from source
         run: nix develop --command ./scripts/build-tp7mtp.sh
 
-      - name: Build (no code signing)
+      - name: Build and test (no code signing)
         run: |
           xcodebuild -project "TeenageEngVoiceSync.xcodeproj" \
             -scheme "TeenageEngVoiceSync" \
             -configuration Debug \
             -destination 'platform=macOS' \
             CODE_SIGNING_ALLOWED=NO \
-            build
+            test

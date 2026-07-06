@@ -24,6 +24,13 @@ struct TeenageEngVoiceSyncApp: App {
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
 
+    /// True when launched as the host process for the TeenageEngVoiceSyncTests
+    /// bundle (Xcode sets this env var for hosted test runs). Guards the app
+    /// away from the user's real on-disk store and live service credentials
+    /// so running `xcodebuild test` can't quarantine production data or make
+    /// real S3/Notion calls with the developer's saved secrets.
+    private static let isRunningTests = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+
     init() {
         let schema = Schema([
             Recording.self,
@@ -31,6 +38,13 @@ struct TeenageEngVoiceSyncApp: App {
             Person.self,
             VoiceSample.self
         ])
+
+        if Self.isRunningTests {
+            let configuration = ModelConfiguration(isStoredInMemoryOnly: true)
+            modelContainer = try! ModelContainer(for: schema, configurations: [configuration])
+            storeRecoveryMessage = nil
+            return
+        }
 
         let appSupportURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let appDataURL = appSupportURL.appendingPathComponent("TeenageEngVoiceSync", isDirectory: true)
@@ -86,6 +100,10 @@ struct TeenageEngVoiceSyncApp: App {
                 .environment(appState)
                 .modelContainer(modelContainer)
                 .task {
+                    // Never start the real sync pipeline (Keychain-backed S3/Notion
+                    // calls, USB device watch) when hosted by TeenageEngVoiceSyncTests.
+                    guard !Self.isRunningTests else { return }
+
                     // Wire the menu bar manager before showing the menu bar item
                     menuBarManager.appState = appState
                     menuBarManager.modelContext = modelContainer.mainContext
