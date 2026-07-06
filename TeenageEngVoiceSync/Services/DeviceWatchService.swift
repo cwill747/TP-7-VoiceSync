@@ -110,11 +110,10 @@ final class DeviceWatchService {
         var downloadedURLs: [URL] = []
 
         for file in newFiles {
-            knownFilenames.insert(file.name)
-
             guard let destination = Self.cacheDestination(for: file.name, serial: serial) else { continue }
 
             if FileManager.default.fileExists(atPath: destination.path) {
+                knownFilenames.insert(file.name)
                 downloadedURLs.append(destination)
                 continue
             }
@@ -125,8 +124,11 @@ final class DeviceWatchService {
 
             switch downloadResult {
             case .success:
+                knownFilenames.insert(file.name)
                 downloadedURLs.append(destination)
             case .failure(let error):
+                // Do not mark as known: a transient MTP failure here should be
+                // retried on the next poll cycle rather than skipped forever.
                 AppLogger.device.error("Failed to download \(file.name, privacy: .private): \(error.localizedDescription, privacy: .public)")
             }
         }
@@ -174,6 +176,15 @@ final class DeviceWatchService {
     }
 
     private static func cacheDestination(for filename: String, serial: String) -> URL? {
+        // Defense in depth: never trust the device-reported name as a path.
+        // Only its last path component is used, so a malicious "../../foo.wav"
+        // can't write outside the cache directory.
+        let safeName = (filename as NSString).lastPathComponent
+        guard !safeName.isEmpty, safeName != ".", safeName != ".." else {
+            AppLogger.device.error("Rejecting recording with unsafe filename \(filename, privacy: .private)")
+            return nil
+        }
+
         guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
             return nil
         }
@@ -184,6 +195,6 @@ final class DeviceWatchService {
 
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
 
-        return dir.appendingPathComponent(filename)
+        return dir.appendingPathComponent(safeName)
     }
 }

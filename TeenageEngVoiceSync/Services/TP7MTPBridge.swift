@@ -46,7 +46,12 @@ private struct TP7MTPResponse: Decodable {
 }
 
 /// Holds one open MTP session. Must be closed exactly once via `close()`.
-final class TP7MTPSession {
+///
+/// `@unchecked Sendable`: stored properties are immutable, and the shim
+/// serializes every list/download/delete call on a session behind a mutex
+/// (see `ioMu` in native/tp7mtp/shim.go), so concurrent calls from multiple
+/// `Task.detached` closures are safe even though each call blocks on I/O.
+final class TP7MTPSession: @unchecked Sendable {
     let device: TP7MTPDeviceInfo
     private let handle: Int64
 
