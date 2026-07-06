@@ -214,12 +214,12 @@ final class SyncService {
     /// recording would look identical to a /recordings one: `deleteRecording`
     /// would then send its device-delete call to the wrong folder, and
     /// `forceSingleSpeaker` would wrongly run full diarization on retranscribe.
-    /// No-op when `filename` doesn't carry the /memo naming convention, or
+    /// No-op when `filename` doesn't carry a recognized qualification, or
     /// sourceFolder is already known. Internal (not private) so tests can call
     /// it directly, mirroring `createRecording`'s own access level.
     func inferRecoveredDeviceOrigin(for recording: Recording) {
         guard recording.sourceFolder == nil,
-              let inferred = DeviceWatchService.inferMemoOrigin(fromPersistedFilename: recording.filename) else { return }
+              let inferred = DeviceWatchService.inferDeviceOrigin(fromPersistedFilename: recording.filename) else { return }
         recording.sourceFolder = inferred.source
         recording.deviceFilename = inferred.deviceFilename
     }

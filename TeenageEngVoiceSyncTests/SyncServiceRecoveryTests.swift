@@ -134,6 +134,22 @@ final class SyncServiceRecoveryTests: XCTestCase {
         XCTAssertEqual(recording.deviceFilename, "memo-0001.wav")
     }
 
+    @MainActor
+    func testInferRecoveredDeviceOriginBackfillsEscapedRecordingsRecording() async throws {
+        let context = try makeContext()
+        let sync = SyncService(modelContext: context)
+
+        // A /recordings file whose raw device name collided with the /memo
+        // qualification (see DeviceWatchServiceTests) was escaped before ever
+        // becoming Recording.filename; recovery must unwrap that correctly too.
+        let recording = Recording(filename: "recordings-escaped-memo-0001.wav", localPath: "", fileSize: 0, recordedAt: .now)
+
+        sync.inferRecoveredDeviceOrigin(for: recording)
+
+        XCTAssertEqual(recording.sourceFolder, .recordings)
+        XCTAssertEqual(recording.deviceFilename, "memo-0001.wav")
+    }
+
     // MARK: - createRecording adoption
 
     @MainActor

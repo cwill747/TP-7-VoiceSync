@@ -198,11 +198,21 @@ final class DeviceWatchService {
         }.value
     }
 
-    /// Prefix applied to /memo device filenames (see `localFilename`) so they
-    /// can't collide with /recordings names once they become the app-wide
-    /// `Recording.filename` identity. Shared with `inferMemoOrigin`, which
-    /// reverses the mapping for recordings whose origin fields were lost.
+    /// Prefix applied to every /memo device filename (see `localFilename`) so
+    /// they can't collide with /recordings names once they become the
+    /// app-wide `Recording.filename` identity. Shared with `inferDeviceOrigin`,
+    /// which reverses the mapping for recordings whose origin fields were lost.
     private static let memoFilenamePrefix = "memo-"
+
+    /// Prefix applied to a /recordings device filename only in the rare case it
+    /// would otherwise collide with the /memo mapping above (i.e. it already
+    /// starts with `memoFilenamePrefix`, or with this prefix itself). Distinct
+    /// from `memoFilenamePrefix` so escaped /recordings names can never overlap
+    /// with genuine /memo names, however they're nested: `localFilename` only
+    /// ever emits `memoFilenamePrefix + X` for /memo (for any X), and this
+    /// prefix never starts with `memoFilenamePrefix`, so the two output spaces
+    /// are disjoint by construction, not just for the common case.
+    private static let recordingsEscapePrefix = "recordings-escaped-"
 
     /// The device-reported filename is only guaranteed unique *within* its own
     /// folder, not across /recordings and /memo (both can auto-number from
@@ -212,22 +222,37 @@ final class DeviceWatchService {
     /// matching - so a cross-folder collision there would silently drop or
     /// overwrite one of the two recordings. Qualifying /memo names with a
     /// prefix makes that identity collision-free while leaving /recordings
-    /// (the only folder that existed before this feature) untouched, so
-    /// already-synced recordings keep matching their existing S3/Notion state.
+    /// unqualified in the overwhelmingly common case (the only folder that
+    /// existed before this feature), so already-synced recordings keep
+    /// matching their existing S3/Notion state. The rare /recordings name that
+    /// would otherwise collide (it already looks like a qualified/escaped
+    /// name) gets its own, disjoint escape prefix instead of being left as-is.
     static func localFilename(forDeviceFilename safeName: String, folder: String) -> String {
-        folder == RecordingSource.memo.rawValue ? "\(memoFilenamePrefix)\(safeName)" : safeName
+        if folder == RecordingSource.memo.rawValue {
+            return "\(memoFilenamePrefix)\(safeName)"
+        }
+        if safeName.hasPrefix(memoFilenamePrefix) || safeName.hasPrefix(recordingsEscapePrefix) {
+            return "\(recordingsEscapePrefix)\(safeName)"
+        }
+        return safeName
     }
 
     /// Reverses `localFilename` for a persisted `Recording.filename` whose
     /// `sourceFolder`/`deviceFilename` were never captured. Recordings
     /// recovered from S3/Notion/local folder only ever persist `filename` -
     /// none of those stores know about device folders - but that name
-    /// round-trips the /memo prefix unchanged, so it can be recovered from
-    /// here. Returns nil when the name doesn't carry the prefix (a
-    /// /recordings-origin, or pre-/memo-feature, recording).
-    static func inferMemoOrigin(fromPersistedFilename filename: String) -> (source: RecordingSource, deviceFilename: String)? {
-        guard filename.hasPrefix(memoFilenamePrefix) else { return nil }
-        return (.memo, String(filename.dropFirst(memoFilenamePrefix.count)))
+    /// round-trips both the /memo prefix and the /recordings escape prefix
+    /// unchanged, so origin can be recovered from here. Returns nil for a
+    /// plain, unqualified name (an ordinary /recordings-origin, or
+    /// pre-/memo-feature, recording).
+    static func inferDeviceOrigin(fromPersistedFilename filename: String) -> (source: RecordingSource, deviceFilename: String)? {
+        if filename.hasPrefix(memoFilenamePrefix) {
+            return (.memo, String(filename.dropFirst(memoFilenamePrefix.count)))
+        }
+        if filename.hasPrefix(recordingsEscapePrefix) {
+            return (.recordings, String(filename.dropFirst(recordingsEscapePrefix.count)))
+        }
+        return nil
     }
 
     private static func cacheDestination(for filename: String, folder: String, serial: String) -> URL? {
