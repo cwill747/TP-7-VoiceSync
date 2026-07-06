@@ -72,6 +72,9 @@ final class SyncService {
         await loadServices()
         AppLogger.sync.info("Services loaded (s3=\(self.s3Service != nil), transcription=\(self.transcriptionProvider != nil), provider=\(self.transcriptionProviderKind?.shortName ?? "none"))")
 
+        // Recover recordings from remote sources before starting device watch
+        await recoverFromRemoteSources()
+
         let shouldWatch = UserDefaults.standard.bool(forKey: deviceWatchEnabledKey)
         await updateDeviceWatch(enabled: shouldWatch)
     }
@@ -96,6 +99,241 @@ final class SyncService {
         await loadServices()
 
         AppLogger.sync.info("Services reloaded (s3=\(self.s3Service != nil), transcription=\(self.transcriptionProvider != nil), provider=\(self.transcriptionProviderKind?.shortName ?? "none"))")
+    }
+
+    // MARK: - Startup Recovery
+
+    /// Scans all configured remote/local sources for recordings not present in
+    /// the local database and re-creates their entries. This handles the case
+    /// where local SwiftData state was lost (app reinstall, container reset, etc).
+    private func recoverFromRemoteSources() async {
+        AppLogger.sync.info("Starting recovery scan from remote sources")
+
+        let existingFilenames = fetchAllKnownFilenames()
+        var recovered = 0
+
+        // 1. S3 — richest source of truth for audio files
+        if let s3 = s3Service {
+            do {
+                let objects = try await s3.listObjects()
+                let wavObjects = objects.filter { $0.filename.hasSuffix(".wav") || $0.filename.hasSuffix(".WAV") }
+                AppLogger.sync.info("S3: found \(wavObjects.count) audio files, \(existingFilenames.count) already tracked")
+
+                for obj in wavObjects where !existingFilenames.contains(obj.filename) {
+                    let recording = Recording(
+                        filename: obj.filename,
+                        localPath: "",
+                        fileSize: obj.size,
+                        recordedAt: obj.lastModified
+                    )
+                    recording.s3Key = obj.key
+                    recording.s3UploadedAt = obj.lastModified
+                    modelContext.insert(recording)
+                    recovered += 1
+                }
+
+                if recovered > 0 {
+                    try? modelContext.save()
+                    AppLogger.sync.info("S3: recovered \(recovered) recordings")
+                }
+            } catch {
+                AppLogger.sync.error("S3 recovery scan failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+
+        // 2. Local audio folder — scan for WAV files
+        let useLocalStorage = UserDefaults.standard.bool(forKey: "localaudio.enabled")
+        if useLocalStorage, LocalAudioService.isConfigured {
+            let localRecovered = await recoverFromLocalAudioFolder(existingFilenames: existingFilenames)
+            recovered += localRecovered
+        }
+
+        // 3. Notion — may have transcriptions for recordings we already found
+        //    from S3 or local, plus any recordings only in Notion.
+        let notionEnabled = UserDefaults.standard.bool(forKey: "notion.enabled")
+        let databaseId = UserDefaults.standard.string(forKey: "notion.databaseId") ?? ""
+        if notionEnabled && !databaseId.isEmpty {
+            let notionRecovered = await recoverFromNotion(databaseId: databaseId)
+            recovered += notionRecovered
+        }
+
+        if recovered > 0 {
+            AppLogger.sync.info("Recovery complete: \(recovered) recordings restored from remote sources")
+        } else {
+            AppLogger.sync.info("Recovery scan complete: all sources in sync")
+        }
+    }
+
+    private func fetchAllKnownFilenames() -> Set<String> {
+        let descriptor = FetchDescriptor<Recording>()
+        guard let recordings = try? modelContext.fetch(descriptor) else { return [] }
+        return Set(recordings.map(\.filename))
+    }
+
+    private func recoverFromLocalAudioFolder(existingFilenames: Set<String>) async -> Int {
+        let folderPath: URL?
+        if let url = SecurityScopedBookmark.resolve(key: "localaudio.folderPath") {
+            guard url.startAccessingSecurityScopedResource() else { return 0 }
+            folderPath = url
+        } else {
+            let path = UserDefaults.standard.string(forKey: "localaudio.folderPath") ?? ""
+            folderPath = path.isEmpty ? nil : URL(fileURLWithPath: path)
+        }
+
+        guard let folder = folderPath else { return 0 }
+        defer {
+            if SecurityScopedBookmark.resolve(key: "localaudio.folderPath") != nil {
+                folder.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        let fm = FileManager.default
+        guard let files = try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey]) else {
+            return 0
+        }
+
+        // Refresh known filenames (S3 recovery may have added some)
+        let currentFilenames = fetchAllKnownFilenames()
+
+        let audioFiles = files.filter {
+            let ext = $0.pathExtension.lowercased()
+            return ext == "wav" || ext == "mp3" || ext == "m4a"
+        }
+
+        AppLogger.sync.info("Local folder: found \(audioFiles.count) audio files")
+
+        var recovered = 0
+        for file in audioFiles {
+            let filename = file.lastPathComponent
+            guard !currentFilenames.contains(filename) else { continue }
+
+            let attrs = try? fm.attributesOfItem(atPath: file.path)
+            let size = attrs?[.size] as? Int64 ?? 0
+            let modDate = attrs?[.modificationDate] as? Date ?? Date()
+
+            let recording = Recording(
+                filename: filename,
+                localPath: file.path,
+                fileSize: size,
+                recordedAt: modDate
+            )
+            recording.localCopyPath = file.path
+
+            if let metadata = try? await WAVParser.parse(url: file) {
+                recording.duration = metadata.duration
+                recording.sampleRate = metadata.sampleRate
+            }
+
+            modelContext.insert(recording)
+            recovered += 1
+        }
+
+        if recovered > 0 {
+            try? modelContext.save()
+            AppLogger.sync.info("Local folder: recovered \(recovered) recordings")
+        }
+
+        return recovered
+    }
+
+    private func recoverFromNotion(databaseId: String) async -> Int {
+        guard let apiKey = try? await KeychainService.shared.retrieve(for: .notionAPIKey),
+              !apiKey.isEmpty else { return 0 }
+
+        let service = NotionService(apiKey: apiKey, databaseId: databaseId, props: .loadStored())
+
+        do {
+            let pages = try await service.queryAllPages()
+            AppLogger.sync.info("Notion: found \(pages.count) pages")
+
+            let currentFilenames = fetchAllKnownFilenames()
+            var recovered = 0
+
+            for page in pages {
+                guard !currentFilenames.contains(page.filename) else {
+                    // Recording already exists — enrich with Notion metadata if missing
+                    await enrichExistingRecording(filename: page.filename, from: page, service: service)
+                    continue
+                }
+
+                let recording = Recording(
+                    filename: page.filename,
+                    localPath: "",
+                    fileSize: 0,
+                    recordedAt: page.recordedAt ?? Date()
+                )
+                recording.transcriptionStatus = .completed
+                recording.transcribedAt = Date()
+                recording.notionPageCreatedAt = Date()
+
+                if let title = page.title {
+                    recording.llmTitle = title
+                }
+                if let summary = page.summary, !summary.isEmpty {
+                    recording.llmSummary = summary
+                }
+                if let lang = page.language, !lang.isEmpty {
+                    recording.transcriptionLanguage = lang
+                }
+
+                // Fetch the transcript from the page body
+                if let transcript = try? await service.fetchPageTranscript(pageId: page.pageId) {
+                    recording.transcriptionText = transcript
+                }
+
+                modelContext.insert(recording)
+                recovered += 1
+            }
+
+            if recovered > 0 {
+                try? modelContext.save()
+                AppLogger.sync.info("Notion: recovered \(recovered) recordings")
+            }
+
+            return recovered
+        } catch {
+            AppLogger.sync.error("Notion recovery scan failed: \(error.localizedDescription, privacy: .public)")
+            return 0
+        }
+    }
+
+    /// Fills in gaps on an existing Recording with data from Notion (e.g. if
+    /// S3 recovery created the entry but it has no transcription yet).
+    private func enrichExistingRecording(filename: String, from page: NotionRecordingInfo, service: NotionService) async {
+        let descriptor = FetchDescriptor<Recording>(predicate: #Predicate { $0.filename == filename && $0.deletedAt == nil })
+        guard let recording = try? modelContext.fetch(descriptor).first else { return }
+
+        var changed = false
+
+        if recording.transcriptionText == nil || recording.transcriptionText?.isEmpty == true {
+            if let transcript = try? await service.fetchPageTranscript(pageId: page.pageId), !transcript.isEmpty {
+                recording.transcriptionText = transcript
+                recording.transcriptionStatus = .completed
+                recording.transcribedAt = Date()
+                changed = true
+            }
+        }
+
+        if recording.llmTitle == nil, let title = page.title {
+            recording.llmTitle = title
+            changed = true
+        }
+
+        if recording.llmSummary == nil, let summary = page.summary, !summary.isEmpty {
+            recording.llmSummary = summary
+            changed = true
+        }
+
+        if recording.notionPageCreatedAt == nil {
+            recording.notionPageCreatedAt = Date()
+            changed = true
+        }
+
+        if changed {
+            recording.updatedAt = Date()
+            try? modelContext.save()
+            AppLogger.sync.debug("Enriched recording \(filename, privacy: .private) with Notion data")
+        }
     }
 
     /// Enable or disable device watching and debounce processing.

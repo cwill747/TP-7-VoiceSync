@@ -217,6 +217,40 @@ actor S3Service {
         }
     }
 
+    /// List objects under the configured prefix. Returns keys and metadata
+    /// for all objects (paginates automatically).
+    func listObjects() async throws -> [S3ObjectInfo] {
+        var results: [S3ObjectInfo] = []
+        var continuationToken: String?
+
+        repeat {
+            var components = URLComponents(string: "https://\(bucket).\(endpointHost)/")!
+            var queryItems = [
+                URLQueryItem(name: "list-type", value: "2"),
+                URLQueryItem(name: "prefix", value: prefix)
+            ]
+            if let token = continuationToken {
+                queryItems.append(URLQueryItem(name: "continuation-token", value: token))
+            }
+            components.queryItems = queryItems
+
+            var request = URLRequest(url: components.url!)
+            request.httpMethod = "GET"
+            let signedRequest = try signRequest(request, body: Data())
+
+            let (data, response) = try await session.data(for: signedRequest)
+            guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+                throw S3Error.invalidResponse
+            }
+
+            let parsed = try S3ListParser.parse(data)
+            results.append(contentsOf: parsed.objects)
+            continuationToken = parsed.isTruncated ? parsed.nextContinuationToken : nil
+        } while continuationToken != nil
+
+        return results
+    }
+
     /// Validate bucket access
     func validateBucket() async throws {
         let url = URL(string: "https://\(bucket).\(endpointHost)/")!
@@ -337,6 +371,79 @@ struct S3UploadResult {
     let s3Key: String
     let size: Int64
     let uploadedAt: Date
+}
+
+struct S3ObjectInfo {
+    let key: String
+    let size: Int64
+    let lastModified: Date
+
+    var filename: String { URL(fileURLWithPath: key).lastPathComponent }
+}
+
+private class S3ListParser: NSObject, XMLParserDelegate {
+    struct Result {
+        var objects: [S3ObjectInfo] = []
+        var isTruncated = false
+        var nextContinuationToken: String?
+    }
+
+    private var result = Result()
+    private var currentElement = ""
+    private var currentText = ""
+    private var currentKey = ""
+    private var currentSize: Int64 = 0
+    private var currentLastModified = Date()
+    private var inContents = false
+
+    private static let dateFormatter: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+
+    static func parse(_ data: Data) throws -> Result {
+        let parser = S3ListParser()
+        let xmlParser = XMLParser(data: data)
+        xmlParser.delegate = parser
+        xmlParser.parse()
+        return parser.result
+    }
+
+    func parser(_ parser: XMLParser, didStartElement element: String, namespaceURI: String?, qualifiedName: String?, attributes: [String: String] = [:]) {
+        currentElement = element
+        currentText = ""
+        if element == "Contents" { inContents = true }
+    }
+
+    func parser(_ parser: XMLParser, foundCharacters string: String) {
+        currentText += string
+    }
+
+    func parser(_ parser: XMLParser, didEndElement element: String, namespaceURI: String?, qualifiedName: String?) {
+        let text = currentText.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch element {
+        case "Key" where inContents:
+            currentKey = text
+        case "Size" where inContents:
+            currentSize = Int64(text) ?? 0
+        case "LastModified" where inContents:
+            currentLastModified = Self.dateFormatter.date(from: text) ?? Date()
+        case "Contents":
+            if !currentKey.isEmpty && currentKey != "" {
+                result.objects.append(S3ObjectInfo(key: currentKey, size: currentSize, lastModified: currentLastModified))
+            }
+            inContents = false
+            currentKey = ""
+            currentSize = 0
+        case "IsTruncated":
+            result.isTruncated = text.lowercased() == "true"
+        case "NextContinuationToken":
+            result.nextContinuationToken = text
+        default:
+            break
+        }
+    }
 }
 
 enum S3Error: LocalizedError {

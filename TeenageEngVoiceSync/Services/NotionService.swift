@@ -283,6 +283,165 @@ actor NotionService {
         }
     }
 
+    /// Queries all pages in the database, returning recording metadata for
+    /// each page. Used during startup recovery to find recordings that exist
+    /// in Notion but not in the local database.
+    func queryAllPages() async throws -> [NotionRecordingInfo] {
+        guard !apiKey.isEmpty, !databaseId.isEmpty else {
+            throw NotionError.notConfigured
+        }
+
+        var results: [NotionRecordingInfo] = []
+        var startCursor: String?
+        let cleanId = databaseId.replacingOccurrences(of: "-", with: "")
+
+        repeat {
+            var payload: [String: Any] = ["page_size": 100]
+            if let cursor = startCursor {
+                payload["start_cursor"] = cursor
+            }
+
+            var request = URLRequest(url: URL(string: "https://api.notion.com/v1/databases/\(cleanId)/query")!)
+            request.httpMethod = "POST"
+            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+            request.setValue(notionVersion, forHTTPHeaderField: "Notion-Version")
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse else { throw NotionError.invalidResponse }
+            guard (200...299).contains(http.statusCode) else {
+                throw NotionError.apiError(statusCode: http.statusCode, message: Self.message(from: data))
+            }
+
+            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let pages = json["results"] as? [[String: Any]] else {
+                throw NotionError.invalidResponse
+            }
+
+            for page in pages {
+                if let info = extractRecordingInfo(from: page) {
+                    results.append(info)
+                }
+            }
+
+            let hasMore = json["has_more"] as? Bool ?? false
+            startCursor = hasMore ? (json["next_cursor"] as? String) : nil
+        } while startCursor != nil
+
+        return results
+    }
+
+    private func extractRecordingInfo(from page: [String: Any]) -> NotionRecordingInfo? {
+        guard let properties = page["properties"] as? [String: [String: Any]] else { return nil }
+
+        let filename = extractRichText(properties[props.filename])
+        guard !filename.isEmpty else { return nil }
+
+        let title = extractTitle(properties[props.title])
+        let dateStr = extractDate(properties[props.date])
+        let language = extractRichText(properties[props.language])
+        let durationStr = extractRichText(properties[props.duration])
+        let summary = extractRichText(properties[props.summary])
+
+        var recordedAt: Date?
+        if let dateStr {
+            let iso = ISO8601DateFormatter()
+            iso.formatOptions = [.withInternetDateTime]
+            recordedAt = iso.date(from: dateStr)
+        }
+
+        // Extract transcript from page body would require a separate API call;
+        // we get it via the blocks API only when needed.
+        let pageId = page["id"] as? String ?? ""
+
+        return NotionRecordingInfo(
+            pageId: pageId,
+            filename: filename,
+            title: title,
+            recordedAt: recordedAt,
+            language: language,
+            durationString: durationStr,
+            summary: summary
+        )
+    }
+
+    /// Fetches the transcript text from a Notion page's body blocks.
+    func fetchPageTranscript(pageId: String) async throws -> String? {
+        guard !pageId.isEmpty else { return nil }
+
+        var allText: [String] = []
+        var startCursor: String?
+        var inTranscript = false
+
+        repeat {
+            var urlString = "https://api.notion.com/v1/blocks/\(pageId)/children?page_size=100"
+            if let cursor = startCursor {
+                urlString += "&start_cursor=\(cursor)"
+            }
+
+            var request = URLRequest(url: URL(string: urlString)!)
+            request.httpMethod = "GET"
+            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+            request.setValue(notionVersion, forHTTPHeaderField: "Notion-Version")
+
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+                break
+            }
+
+            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let blocks = json["results"] as? [[String: Any]] else { break }
+
+            for block in blocks {
+                let type = block["type"] as? String ?? ""
+
+                if type == "heading_2",
+                   let heading = block["heading_2"] as? [String: Any],
+                   let richTexts = heading["rich_text"] as? [[String: Any]],
+                   let text = richTexts.first?["plain_text"] as? String {
+                    if text == "Transcript" { inTranscript = true; continue }
+                    if inTranscript { inTranscript = false }
+                }
+
+                if type == "divider" && inTranscript { inTranscript = false; continue }
+
+                if inTranscript, type == "paragraph",
+                   let para = block["paragraph"] as? [String: Any],
+                   let richTexts = para["rich_text"] as? [[String: Any]] {
+                    let paraText = richTexts.compactMap { $0["plain_text"] as? String }.joined()
+                    if !paraText.isEmpty { allText.append(paraText) }
+                }
+            }
+
+            let hasMore = json["has_more"] as? Bool ?? false
+            startCursor = hasMore ? (json["next_cursor"] as? String) : nil
+        } while startCursor != nil
+
+        let joined = allText.joined(separator: "\n\n")
+        return joined.isEmpty ? nil : joined
+    }
+
+    private func extractRichText(_ prop: [String: Any]?) -> String {
+        guard let prop,
+              let richTexts = prop["rich_text"] as? [[String: Any]] else { return "" }
+        return richTexts.compactMap { $0["plain_text"] as? String }.joined()
+    }
+
+    private func extractTitle(_ prop: [String: Any]?) -> String? {
+        guard let prop,
+              let titleArray = prop["title"] as? [[String: Any]] else { return nil }
+        let text = titleArray.compactMap { $0["plain_text"] as? String }.joined()
+        return text.isEmpty ? nil : text
+    }
+
+    private func extractDate(_ prop: [String: Any]?) -> String? {
+        guard let prop,
+              let dateObj = prop["date"] as? [String: Any],
+              let start = dateObj["start"] as? String else { return nil }
+        return start
+    }
+
     // MARK: - Networking
 
     private func createPage(_ payload: [String: Any]) async throws -> String {
@@ -376,6 +535,16 @@ actor NotionService {
         }
         return String(data: data, encoding: .utf8) ?? "Unknown error"
     }
+}
+
+struct NotionRecordingInfo {
+    let pageId: String
+    let filename: String
+    let title: String?
+    let recordedAt: Date?
+    let language: String?
+    let durationString: String?
+    let summary: String?
 }
 
 private extension String {
