@@ -16,6 +16,8 @@ struct TeenageEngVoiceSyncApp: App {
     @StateObject private var menuBarManager = MenuBarManager()
 
     let modelContainer: ModelContainer
+    /// Set when the store had to be reset during init; surfaced as a one-time alert once the UI is up.
+    let storeRecoveryMessage: String?
 
     @State private var appState = AppState()
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
@@ -23,25 +25,57 @@ struct TeenageEngVoiceSyncApp: App {
     @Environment(\.openSettings) private var openSettings
 
     init() {
+        let schema = Schema([
+            Recording.self,
+            Device.self,
+            Person.self,
+            VoiceSample.self
+        ])
+
+        let appSupportURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let appDataURL = appSupportURL.appendingPathComponent("TeenageEngVoiceSync", isDirectory: true)
+        try? FileManager.default.createDirectory(at: appDataURL, withIntermediateDirectories: true)
+        let storeURL = appDataURL.appendingPathComponent("tp7sync.store")
+        let configuration = ModelConfiguration(url: storeURL)
+
         do {
-            let schema = Schema([
-                Recording.self,
-                Device.self,
-                Person.self,
-                VoiceSample.self
-            ])
-
-            let appSupportURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-            let appDataURL = appSupportURL.appendingPathComponent("TeenageEngVoiceSync", isDirectory: true)
-            try? FileManager.default.createDirectory(at: appDataURL, withIntermediateDirectories: true)
-            let storeURL = appDataURL.appendingPathComponent("tp7sync.store")
-
-            modelContainer = try ModelContainer(
-                for: schema,
-                configurations: [ModelConfiguration(url: storeURL)]
-            )
+            modelContainer = try ModelContainer(for: schema, configurations: [configuration])
+            storeRecoveryMessage = nil
         } catch {
-            fatalError("Could not initialize ModelContainer: \(error)")
+            AppLogger.app.fault("ModelContainer init failed, attempting store recovery: \(error, privacy: .public)")
+            Self.quarantineStoreFiles(at: storeURL)
+
+            do {
+                modelContainer = try ModelContainer(for: schema, configurations: [configuration])
+                AppLogger.app.fault("Recovered from corrupt store: created a fresh ModelContainer")
+                storeRecoveryMessage = "Your local database couldn't be opened and had to be reset. The old data was preserved for debugging. Recordings will be restored automatically from your connected storage."
+            } catch {
+                fatalError("Could not initialize ModelContainer even after resetting the store: \(error)")
+            }
+        }
+    }
+
+    /// Moves the (possibly corrupt) store and its SQLite side files aside to timestamped backups
+    /// so a fresh ModelContainer can be created in their place. Never deletes data.
+    private static func quarantineStoreFiles(at storeURL: URL) {
+        let fm = FileManager.default
+        let directory = storeURL.deletingLastPathComponent()
+        let baseName = storeURL.lastPathComponent
+        let timestamp = Int(Date().timeIntervalSince1970)
+
+        guard let contents = try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) else {
+            AppLogger.app.error("Could not list \(directory.path, privacy: .public) to quarantine store files")
+            return
+        }
+
+        for fileURL in contents where fileURL.lastPathComponent.hasPrefix(baseName) {
+            let backupURL = directory.appendingPathComponent("\(fileURL.lastPathComponent).corrupt-\(timestamp)")
+            do {
+                try fm.moveItem(at: fileURL, to: backupURL)
+                AppLogger.app.error("Quarantined \(fileURL.lastPathComponent, privacy: .public) -> \(backupURL.lastPathComponent, privacy: .public)")
+            } catch {
+                AppLogger.app.error("Failed to quarantine \(fileURL.lastPathComponent, privacy: .public): \(error, privacy: .public)")
+            }
         }
     }
 
@@ -69,6 +103,10 @@ struct TeenageEngVoiceSyncApp: App {
                     // SyncService.loadServices() snapshots known speakers.
                     migrateEnrolledSpeakerIfNeeded(context: modelContainer.mainContext)
                     await appState.initialize(modelContext: modelContainer.mainContext)
+
+                    if let storeRecoveryMessage {
+                        appState.setError(storeRecoveryMessage)
+                    }
 
                     if !hasCompletedOnboarding {
                         openWindow(id: "onboarding")

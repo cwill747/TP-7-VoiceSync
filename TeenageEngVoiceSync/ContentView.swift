@@ -98,6 +98,11 @@ struct ContentView: View {
             selectedRecording = nil
             selectedPerson = nil
         }
+        .alert("Notice", isPresented: Bindable(appState).showError, presenting: appState.lastError) { _ in
+            Button("OK") { appState.clearError() }
+        } message: { message in
+            Text(message)
+        }
     }
 
     private var filteredRecordings: [Recording] {
