@@ -230,7 +230,10 @@ actor KeychainService {
             kSecAttrAccount as String: key.rawValue,
             kSecAttrService as String: "TeenageEngVoiceSync"
         ]
-        SecItemDelete(deleteQuery as CFDictionary)
+        let deleteStatus = SecItemDelete(deleteQuery as CFDictionary)
+        guard deleteStatus == errSecSuccess || deleteStatus == errSecItemNotFound else {
+            throw KeychainError.deleteFailed(deleteStatus)
+        }
         AppLogger.keychain.info("Migrated key \(key.rawValue, privacy: .public) to data-protection keychain")
 
         return value
