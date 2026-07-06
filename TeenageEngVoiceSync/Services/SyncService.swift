@@ -1278,12 +1278,16 @@ final class SyncService {
             return 7 * 24 * 3600 // Default 7 days
         }
 
+        var expiry: TimeInterval
         switch unit {
-        case "d": return number * 24 * 3600
-        case "h": return number * 3600
-        case "m": return number * 60
-        default: return 7 * 24 * 3600
+        case "d": expiry = number * 24 * 3600
+        case "h": expiry = number * 3600
+        case "m": expiry = number * 60
+        default: expiry = 7 * 24 * 3600
         }
+
+        // Clamp to SigV4 presigned URL limits: min 60s, max 7 days (604800s)
+        return min(max(expiry, 60), 604800)
     }
 }
 
