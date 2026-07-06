@@ -889,13 +889,12 @@ final class SyncService {
         }
 
         guard let s3Key = recording.s3Key, let s3 = s3Service else { return nil }
+        let ext = (recording.filename as NSString).pathExtension
+        let tmp = fm.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension(ext.isEmpty ? "wav" : ext)
         do {
-            let data = try await s3.download(s3Key: s3Key)
-            let ext = (recording.filename as NSString).pathExtension
-            let tmp = fm.temporaryDirectory
-                .appendingPathComponent(UUID().uuidString)
-                .appendingPathExtension(ext.isEmpty ? "wav" : ext)
-            try data.write(to: tmp)
+            try await s3.download(s3Key: s3Key, to: tmp)
             AppLogger.sync.info("Downloaded S3 audio for transcription: \(recording.filename, privacy: .private)")
             return (tmp.path, tmp)
         } catch {
