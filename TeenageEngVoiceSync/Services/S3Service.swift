@@ -225,14 +225,15 @@ actor S3Service {
 
         repeat {
             var components = URLComponents(string: "https://\(bucket).\(endpointHost)/")!
-            var queryItems = [
-                URLQueryItem(name: "list-type", value: "2"),
-                URLQueryItem(name: "prefix", value: prefix)
-            ]
+            var pairs = [("list-type", "2"), ("prefix", prefix)]
             if let token = continuationToken {
-                queryItems.append(URLQueryItem(name: "continuation-token", value: token))
+                pairs.append(("continuation-token", token))
             }
-            components.queryItems = queryItems
+            // Percent-encode values ourselves (a continuation token can contain
+            // `+`, `/`, or `=`) so the transmitted query matches what we sign.
+            components.percentEncodedQuery = pairs
+                .map { "\($0.0)=\($0.1.addingPercentEncoding(withAllowedCharacters: Self.awsQueryAllowed) ?? $0.1)" }
+                .joined(separator: "&")
 
             var request = URLRequest(url: components.url!)
             request.httpMethod = "GET"
@@ -288,7 +289,21 @@ actor S3Service {
         // Canonical request
         let method = request.httpMethod ?? "GET"
         let canonicalURI = request.url!.path.isEmpty ? "/" : request.url!.path
-        let canonicalQueryString = request.url!.query ?? ""
+
+        // Canonicalize the query per SigV4: percent-encode each name/value
+        // (so `/` in a prefix becomes %2F), then sort by encoded name. Signing
+        // `url.query` verbatim would leave it unsorted and unencoded, which the
+        // server rejects with a 403.
+        let queryItems = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        var encodedPairs: [(name: String, value: String)] = []
+        for item in queryItems {
+            let rawValue = item.value ?? ""
+            let name = item.name.addingPercentEncoding(withAllowedCharacters: Self.awsQueryAllowed) ?? item.name
+            let value = rawValue.addingPercentEncoding(withAllowedCharacters: Self.awsQueryAllowed) ?? rawValue
+            encodedPairs.append((name: name, value: value))
+        }
+        encodedPairs.sort { $0.name == $1.name ? $0.value < $1.value : $0.name < $1.name }
+        let canonicalQueryString = encodedPairs.map { "\($0.name)=\($0.value)" }.joined(separator: "&")
 
         let headers = signedRequest.allHTTPHeaderFields ?? [:]
         let sortedHeaders = headers.keys.sorted { $0.lowercased() < $1.lowercased() }
