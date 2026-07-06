@@ -309,7 +309,13 @@ actor ParakeetService: TranscriptionProvider {
             guard !turns.isEmpty else { continue }
 
             let (label, personId) = labels[index]
-            let rawSpeakerId = "track-\(index)"
+            // `rawSpeakerId` doubles as the display fallback when nothing is
+            // assigned (see `DiarizedTranscriptView`'s `assignedPersonName ??
+            // rawSpeakerId`) — use the generated label itself rather than the
+            // internal "track-N" index so an anonymous "Speaker N" survives
+            // into the speaker-editing UI and re-persisted transcript instead
+            // of regressing to a raw track identifier.
+            let rawSpeakerId = label
             let embedding = perTrackEmbeddings[index]
 
             for turn in turns {
