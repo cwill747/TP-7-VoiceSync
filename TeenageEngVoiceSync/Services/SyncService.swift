@@ -211,9 +211,13 @@ final class SyncService {
             let size = attrs?[.size] as? Int64 ?? 0
             let modDate = attrs?[.modificationDate] as? Date ?? Date()
 
+            // Store the archived file only as `localCopyPath`, not `localPath`.
+            // `deleteRecording` unconditionally removes `localPath` (the disposable
+            // device cache), so pointing it at the user's local-storage archive
+            // would delete their file when they delete a recovered recording.
             let recording = Recording(
                 filename: filename,
-                localPath: file.path,
+                localPath: "",
                 fileSize: size,
                 recordedAt: modDate
             )
@@ -246,11 +250,15 @@ final class SyncService {
             let pages = try await service.queryAllPages()
             AppLogger.sync.info("Notion: found \(pages.count) pages")
 
-            let currentFilenames = fetchAllKnownFilenames()
+            // Mutable so filenames inserted earlier in this loop are seen by later
+            // iterations — the Notion DB can contain multiple pages with the same
+            // filename (e.g. a retranscribe creates a second page), and a stale
+            // pre-loop snapshot would let every duplicate insert its own active row.
+            var seenFilenames = fetchAllKnownFilenames()
             var recovered = 0
 
             for page in pages {
-                guard !currentFilenames.contains(page.filename) else {
+                guard !seenFilenames.contains(page.filename) else {
                     // Recording already exists — enrich with Notion metadata if missing
                     await enrichExistingRecording(filename: page.filename, from: page, service: service)
                     continue
@@ -289,6 +297,7 @@ final class SyncService {
                 }
 
                 modelContext.insert(recording)
+                seenFilenames.insert(page.filename)
                 recovered += 1
             }
 
