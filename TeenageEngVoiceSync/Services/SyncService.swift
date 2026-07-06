@@ -367,12 +367,12 @@ final class SyncService {
                 } else {
                     result = try await transcriber.transcribe(localPath: recording.localPath)
                 }
-            case .whisperKit:
-                let sourcePath = recording.localCopyPath ?? recording.localPath
-                result = try await transcriber.transcribe(localPath: sourcePath)
-            case .parakeet:
-                let sourcePath = recording.localCopyPath ?? recording.localPath
-                result = try await transcriber.transcribe(localPath: sourcePath)
+            case .whisperKit, .parakeet:
+                guard let audio = await resolveLocalAudioPath(for: recording) else {
+                    throw SyncTranscriptionError.noAudioSource
+                }
+                defer { audio.tempURL.map { try? FileManager.default.removeItem(at: $0) } }
+                result = try await transcriber.transcribe(localPath: audio.path)
             }
 
             recording.transcriptionText = result.text
@@ -789,6 +789,37 @@ final class SyncService {
         }
     }
 
+    /// Resolves an on-disk audio path for local transcription providers. Prefers
+    /// an existing local copy or device file; otherwise downloads the S3 object to
+    /// a temp file — this is what makes recordings restored by startup recovery
+    /// (which have an `s3Key` but no local audio) transcribable. When `tempURL` is
+    /// non-nil the caller must delete it after use.
+    private func resolveLocalAudioPath(for recording: Recording) async -> (path: String, tempURL: URL?)? {
+        let fm = FileManager.default
+
+        if let copy = recording.localCopyPath, fm.fileExists(atPath: copy) {
+            return (copy, nil)
+        }
+        if !recording.localPath.isEmpty, fm.fileExists(atPath: recording.localPath) {
+            return (recording.localPath, nil)
+        }
+
+        guard let s3Key = recording.s3Key, let s3 = s3Service else { return nil }
+        do {
+            let data = try await s3.download(s3Key: s3Key)
+            let ext = (recording.filename as NSString).pathExtension
+            let tmp = fm.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString)
+                .appendingPathExtension(ext.isEmpty ? "wav" : ext)
+            try data.write(to: tmp)
+            AppLogger.sync.info("Downloaded S3 audio for transcription: \(recording.filename, privacy: .private)")
+            return (tmp.path, tmp)
+        } catch {
+            AppLogger.sync.error("Failed to download S3 audio for \(recording.filename, privacy: .private): \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
+
     private func transcribeRecording(_ recording: Recording, provider: TranscriptionProviderKind) async -> TranscriptionResult? {
         guard let transcriber = transcriptionProvider else {
             AppLogger.sync.debug("Skipping transcription (transcription provider not configured)")
@@ -814,14 +845,13 @@ final class SyncService {
                     result = try await transcriber.transcribe(localPath: recording.localPath)
                     AppLogger.sync.debug("Transcribed via device file")
                 }
-            case .whisperKit:
-                let sourcePath = recording.localCopyPath ?? recording.localPath
-                result = try await transcriber.transcribe(localPath: sourcePath)
-                AppLogger.sync.debug("Transcribed locally with WhisperKit")
-            case .parakeet:
-                let sourcePath = recording.localCopyPath ?? recording.localPath
-                result = try await transcriber.transcribe(localPath: sourcePath)
-                AppLogger.sync.debug("Transcribed locally with Parakeet")
+            case .whisperKit, .parakeet:
+                guard let audio = await resolveLocalAudioPath(for: recording) else {
+                    throw SyncTranscriptionError.noAudioSource
+                }
+                defer { audio.tempURL.map { try? FileManager.default.removeItem(at: $0) } }
+                result = try await transcriber.transcribe(localPath: audio.path)
+                AppLogger.sync.debug("Transcribed locally with \(provider.shortName)")
             }
 
             AppLogger.sync.info("Transcription complete for \(recording.filename, privacy: .private) (language=\(result.languageCode, privacy: .public), chars=\(result.text.count, privacy: .public))")
@@ -1170,5 +1200,13 @@ final class SyncService {
         case "m": return number * 60
         default: return 7 * 24 * 3600
         }
+    }
+}
+
+private enum SyncTranscriptionError: LocalizedError {
+    case noAudioSource
+
+    var errorDescription: String? {
+        "No audio available to transcribe — the recording has no local file or S3 copy."
     }
 }

@@ -164,9 +164,29 @@ struct RecordingDetailView: View {
     private var transcriptionContent: some View {
         switch recording.transcriptionStatus {
         case .none:
-            Text("Not transcribed")
-                .foregroundStyle(.secondary)
-                .italic()
+            HStack {
+                Text("Not transcribed")
+                    .foregroundStyle(.secondary)
+                    .italic()
+
+                Spacer()
+
+                // Recordings restored by startup recovery have audio (in S3 or a
+                // local copy) but no transcription yet — let the user kick it off.
+                if recording.s3Key != nil || recording.localCopyPath != nil {
+                    Button {
+                        retranscribe()
+                    } label: {
+                        if isRetranscribing {
+                            ProgressView()
+                                .scaleEffect(0.7)
+                        } else {
+                            Label("Transcribe", systemImage: "arrow.clockwise")
+                        }
+                    }
+                    .disabled(isRetranscribing)
+                }
+            }
 
         case .pending, .processing:
             HStack {

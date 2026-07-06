@@ -49,12 +49,13 @@ actor S3Service {
     private let secretAccessKey: String
     private let session: URLSession
 
-    // Character set for AWS query parameter encoding (excludes / and + which must be encoded)
-    private static let awsQueryAllowed: CharacterSet = {
-        var allowed = CharacterSet.urlQueryAllowed
-        allowed.remove(charactersIn: "/+")
-        return allowed
-    }()
+    // SigV4 canonical query encoding: percent-encode every character except the
+    // RFC 3986 unreserved set. `.urlQueryAllowed` leaves reserved characters like
+    // `=`, `&`, `+`, and `/` unescaped, which breaks signing for opaque values such
+    // as S3 continuation tokens (which routinely contain `=` and `/`).
+    private static let awsQueryAllowed = CharacterSet(
+        charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.~"
+    )
 
     init(
         bucket: String,
@@ -250,6 +251,17 @@ actor S3Service {
         } while continuationToken != nil
 
         return results
+    }
+
+    /// Download an object's bytes by key. Used to re-transcribe recordings that
+    /// were restored by startup recovery and have no local audio copy.
+    func download(s3Key: String) async throws -> Data {
+        let presignedURL = try generatePresignedURL(s3Key: s3Key, expiry: 3600)
+        let (data, response) = try await session.data(from: presignedURL)
+        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            throw S3Error.invalidResponse
+        }
+        return data
     }
 
     /// Validate bucket access
