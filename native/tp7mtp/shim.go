@@ -24,9 +24,13 @@ import (
 
 	"github.com/ganeshrvel/go-mtpfs/mtp"
 	mtpx "github.com/ganeshrvel/go-mtpx"
+	"github.com/ganeshrvel/usb"
 )
 
 const recordingsDir = "/recordings"
+
+// Matches mtpx's internal devTimeout (milliseconds).
+const usbTimeoutMs = 15000
 
 // Only allow connections to Teenage Engineering TP-7 devices.
 const allowedManufacturer = "teenage engineering"
@@ -75,6 +79,74 @@ var (
 	nextHandle = 1
 )
 
+// libusb allocates a pthread TLS key each time a context is created
+// (usbi_tls_key_create -> pthread_key_create) and only releases it on
+// libusb_exit. The upstream go-mtpfs SelectDevice* helpers create a fresh
+// context on every call and never call libusb_exit, so the app's connect
+// polling leaked one TLS key per attempt and eventually aborted the whole
+// process once PTHREAD_KEYS_MAX (~512 on macOS) was exhausted:
+//
+//	Assertion failed: (pthread_key_create(key, ((void*)0)) == 0),
+//	function usbi_tls_key_create, file threads_posix.h, line 81.
+//
+// We create a single process-wide context and reuse it for every connect
+// attempt, so exactly one TLS key is ever allocated.
+var (
+	usbCtxMu sync.Mutex
+	usbCtx   *usb.Context
+)
+
+func sharedUSBContext() *usb.Context {
+	usbCtxMu.Lock()
+	defer usbCtxMu.Unlock()
+	if usbCtx == nil {
+		usbCtx = usb.NewContext()
+	}
+	return usbCtx
+}
+
+// openDevice mirrors mtpx.Initialize (find -> open -> configure) but reuses the
+// shared libusb context instead of allocating a new one per call. It opens the
+// first MTP device it finds and releases the usb references of any others.
+func openDevice() (*mtp.Device, error) {
+	cands, err := mtp.FindDevices(sharedUSBContext())
+	if err != nil {
+		return nil, err
+	}
+
+	var dev *mtp.Device
+	for _, cand := range cands {
+		if dev == nil && cand.Open() == nil {
+			dev = cand
+			continue
+		}
+		// Release the usb device reference FindDevices took for candidates we
+		// don't use (unopened or extra devices).
+		cand.Done()
+	}
+	if dev == nil {
+		return nil, fmt.Errorf("no MTP devices found")
+	}
+
+	dev.MTPDebug = false
+	dev.DataDebug = false
+	dev.USBDebug = false
+	dev.Timeout = usbTimeoutMs
+
+	if err := dev.Configure(); err != nil {
+		disposeDevice(dev)
+		return nil, err
+	}
+	return dev, nil
+}
+
+// disposeDevice closes the MTP session and releases the underlying usb device
+// reference. Replaces mtpx.Dispose, which only calls Close (leaking the ref).
+func disposeDevice(dev *mtp.Device) {
+	dev.Close()
+	dev.Done()
+}
+
 func withSession(handle int, fn func(dev *mtp.Device, storageID uint32) error) error {
 	sessionsMu.Lock()
 	s, ok := sessions[handle]
@@ -87,31 +159,31 @@ func withSession(handle int, fn func(dev *mtp.Device, storageID uint32) error) e
 
 //export tp7mtp_open
 func tp7mtp_open() *C.char {
-	dev, err := mtpx.Initialize(mtpx.Init{DebugMode: false})
+	dev, err := openDevice()
 	if err != nil {
 		return toCString(errResponse("%s", err.Error()))
 	}
 
 	info, err := mtpx.FetchDeviceInfo(dev)
 	if err != nil {
-		mtpx.Dispose(dev)
+		disposeDevice(dev)
 		return toCString(errResponse("%s", err.Error()))
 	}
 
 	// Reject non-TP-7 devices to avoid interacting with unrelated MTP hardware.
 	if !strings.EqualFold(info.Manufacturer, allowedManufacturer) ||
 		!strings.Contains(info.Model, allowedModel) {
-		mtpx.Dispose(dev)
+		disposeDevice(dev)
 		return toCString(errResponse("connected MTP device is not a TP-7 (got %s %s)", info.Manufacturer, info.Model))
 	}
 
 	storages, err := mtpx.FetchStorages(dev)
 	if err != nil {
-		mtpx.Dispose(dev)
+		disposeDevice(dev)
 		return toCString(errResponse("%s", err.Error()))
 	}
 	if len(storages) == 0 {
-		mtpx.Dispose(dev)
+		disposeDevice(dev)
 		return toCString(errResponse("no storage found on device"))
 	}
 
@@ -140,7 +212,7 @@ func tp7mtp_close(handle int) {
 	sessionsMu.Unlock()
 
 	if ok {
-		mtpx.Dispose(s.dev)
+		disposeDevice(s.dev)
 	}
 }
 
