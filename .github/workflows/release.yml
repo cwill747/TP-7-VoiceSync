@@ -190,7 +190,6 @@ jobs:
 
             ## Requirements
             - macOS 14.0 (Sonoma) or later
-            - [Teenage Engineering FieldKit](https://teenage.engineering/apps/fieldkit) installed
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
