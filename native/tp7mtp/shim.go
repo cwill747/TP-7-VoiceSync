@@ -78,6 +78,12 @@ type session struct {
 	// download/delete calls - which may be invoked from concurrent Swift
 	// Task.detached closures - must be serialized here.
 	ioMu sync.Mutex
+
+	// Set under ioMu once the session has been disposed. sessionsMu only
+	// protects the handle->session map, so a close can run concurrently with
+	// a lookup that already read the map entry; checking this flag after
+	// acquiring ioMu prevents that lookup from touching a disposed device.
+	closed bool
 }
 
 var (
@@ -163,6 +169,9 @@ func withSession(handle int, fn func(dev *mtp.Device, storageID uint32) error) e
 	}
 	s.ioMu.Lock()
 	defer s.ioMu.Unlock()
+	if s.closed {
+		return fmt.Errorf("invalid or closed session handle %d", handle)
+	}
 	return fn(s.dev, s.storageID)
 }
 
@@ -233,8 +242,12 @@ func tp7mtp_close(handle int) {
 
 	if ok {
 		// Wait for any in-flight list/download/delete call on this session to
-		// finish before tearing down the device.
+		// finish before tearing down the device. withSession re-checks
+		// s.closed after acquiring ioMu, so a call that read the (now
+		// removed) map entry just before this runs will still see the
+		// disposal and refuse to touch the device.
 		s.ioMu.Lock()
+		s.closed = true
 		disposeDevice(s.dev)
 		s.ioMu.Unlock()
 	}
