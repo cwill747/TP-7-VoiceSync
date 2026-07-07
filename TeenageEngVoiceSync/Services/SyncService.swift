@@ -777,7 +777,7 @@ final class SyncService {
             }
 
             // Add to debouncer
-            pendingRecordingOrigins[url.path] = PendingRecordingOrigin(source: download.source, deviceFilename: download.deviceFilename)
+            pendingRecordingOrigins[url.path] = PendingRecordingOrigin(source: download.source, deviceFilename: download.deviceFilename, deviceSerial: serial)
             await debouncer.recordEvent(for: url.path)
         }
 
@@ -861,11 +861,15 @@ final class SyncService {
         // Calculate hash
         recording.fileHash = try await FileHasher.sha256(url: url)
 
-        // Set device serial
-        recording.deviceSerial = deviceWatch.currentDeviceSerial
+        // Set device serial — prefer the serial captured when this file was
+        // downloaded over the currently-connected device, since a different
+        // TP-7 may have connected by the time this debounced pass runs.
         if let origin = pendingRecordingOrigins.removeValue(forKey: url.path) {
             recording.sourceFolder = origin.source
             recording.deviceFilename = origin.deviceFilename
+            recording.deviceSerial = origin.deviceSerial
+        } else {
+            recording.deviceSerial = deviceWatch.currentDeviceSerial
         }
         recording.updatedAt = Date()
 
@@ -1572,6 +1576,15 @@ final class SyncService {
         guard recording.deletedAt == nil, recording.deletedFromDeviceAt == nil else { return }
         guard recording.transcriptionStatus == .completed else { return }
         guard Self.remainingRemoteSteps(for: recording).isEmpty else { return }
+        // `remainingRemoteSteps` omits `.note` when there's no durable audio
+        // copy to build a note from — that state can never resolve on its own,
+        // so treating it as "satisfied" there is fine for the pending-count
+        // badge. For deletion it isn't: it would mean permanently discarding
+        // the only audio copy for a configured note destination that was
+        // never actually delivered. Require the note to genuinely exist.
+        let notesEnabled = UserDefaults.standard.bool(forKey: "markdown.enabled")
+            || UserDefaults.standard.bool(forKey: "applenotes.enabled")
+        guard !notesEnabled || recording.appleNoteCreatedAt != nil else { return }
         // TP-7 filenames (e.g. "0001.wav") aren't globally unique across
         // devices, so only delete when the currently connected device is the
         // same one this recording came from — otherwise a different TP-7
@@ -1999,4 +2012,10 @@ private enum SyncTranscriptionError: LocalizedError {
 struct PendingRecordingOrigin: Equatable {
     let source: RecordingSource
     let deviceFilename: String
+    /// The serial of the device this file was downloaded from, captured at
+    /// download time. Must be used instead of `deviceWatch.currentDeviceSerial`
+    /// when the row is created — the debounced processing pass that calls
+    /// `createRecording` can run after a *different* TP-7 has since connected,
+    /// and TP-7 filenames aren't globally unique across devices.
+    let deviceSerial: String
 }
