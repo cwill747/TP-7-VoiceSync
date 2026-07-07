@@ -59,6 +59,11 @@ final class Recording {
     /// that page in place instead of appending a duplicate. Backfilled for
     /// pre-existing pages during Notion recovery. Nil until a page exists.
     var notionPageId: String?
+    /// The Notion database `notionPageId` lives in. A page ID is only valid
+    /// within its database, so this scopes reuse: if the user points the app at
+    /// a different `notion.databaseId`, the stored page ID is ignored (a fresh
+    /// page is created in the new database) rather than updating the old one.
+    var notionDatabaseId: String?
 
     // Diarization output — JSON-encoded [StoredSpeakerSegment]
     var speakerSegmentsData: Data?

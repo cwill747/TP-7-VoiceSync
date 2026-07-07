@@ -322,7 +322,7 @@ final class SyncService {
             for page in pages {
                 guard !seenFilenames.contains(page.filename) else {
                     // Recording already exists — enrich with Notion metadata if missing
-                    await enrichExistingRecording(filename: page.filename, from: page, service: service)
+                    await enrichExistingRecording(filename: page.filename, from: page, databaseId: databaseId, service: service)
                     continue
                 }
 
@@ -345,6 +345,7 @@ final class SyncService {
                 )
                 recording.notionPageCreatedAt = Date()
                 recording.notionPageId = page.pageId.isEmpty ? nil : page.pageId
+                recording.notionDatabaseId = page.pageId.isEmpty ? nil : databaseId
                 recording.transcriptionText = transcript
                 recording.transcriptionStatus = .completed
                 recording.transcribedAt = Date()
@@ -379,7 +380,7 @@ final class SyncService {
 
     /// Fills in gaps on an existing Recording with data from Notion (e.g. if
     /// S3 recovery created the entry but it has no transcription yet).
-    private func enrichExistingRecording(filename: String, from page: NotionRecordingInfo, service: NotionService) async {
+    private func enrichExistingRecording(filename: String, from page: NotionRecordingInfo, databaseId: String, service: NotionService) async {
         let descriptor = FetchDescriptor<Recording>(predicate: #Predicate { $0.filename == filename && $0.deletedAt == nil })
         guard let recording = try? modelContext.fetch(descriptor).first else { return }
 
@@ -421,6 +422,7 @@ final class SyncService {
         // notionPageId field).
         if recording.notionPageId == nil, !page.pageId.isEmpty {
             recording.notionPageId = page.pageId
+            recording.notionDatabaseId = databaseId
             changed = true
         }
 
@@ -1271,13 +1273,18 @@ final class SyncService {
             playURLString = u; downloadURLString = u
         }
 
+        // A page ID is only valid within the database it was created in. If the
+        // configured database has changed since, ignore the stored ID and create
+        // a fresh page in the current database instead of PATCHing the old one.
+        let existingPageId = (recording.notionDatabaseId == databaseId) ? recording.notionPageId : nil
+
         let service = NotionService(apiKey: apiKey, databaseId: databaseId, props: .loadStored())
         do {
             // Update the existing page in place when we know its ID (e.g. after a
             // retranscribe, which resets notionPageCreatedAt to re-trigger delivery
             // but keeps the page ID), otherwise create a fresh page and record its
             // ID for next time.
-            if let pageId = recording.notionPageId {
+            if let pageId = existingPageId {
                 try await service.updateTranscriptionNote(
                     pageId: pageId,
                     transcription: transcription.text,
@@ -1310,6 +1317,7 @@ final class SyncService {
                     overdubNotes: transcription.overdubNotes
                 )
                 recording.notionPageId = pageId.isEmpty ? nil : pageId
+                recording.notionDatabaseId = pageId.isEmpty ? nil : databaseId
                 AppLogger.notes.info("Created Notion page for \(recording.filename, privacy: .private)")
             }
             recording.notionPageCreatedAt = Date()
@@ -1328,8 +1336,12 @@ final class SyncService {
     /// When offline, clears the delivered marker so reconciliation refreshes the
     /// page (still in place, via the retained page ID) once back online.
     func refreshNotionForEditedTranscript(_ recording: Recording) async {
+        // Only refresh a page that lives in the currently configured database —
+        // a stored page ID from a different database can't be updated in place.
+        let databaseId = UserDefaults.standard.string(forKey: "notion.databaseId") ?? ""
         guard UserDefaults.standard.bool(forKey: "notion.enabled"),
               recording.notionPageId != nil,
+              recording.notionDatabaseId == databaseId,
               recording.transcriptionStatus == .completed,
               let text = recording.transcriptionText else { return }
 
