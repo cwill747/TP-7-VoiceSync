@@ -93,16 +93,13 @@ final class OfflineModePendingWorkTests: XCTestCase {
     }
 
     @MainActor
-    func testLocalProviderOnlyUploadsWithBackupFlag() throws {
+    func testLocalProviderUploadsWhenS3IsADestination() throws {
         UserDefaults.standard.set(true, forKey: "s3.enabled")
         UserDefaults.standard.set("my-bucket", forKey: "s3.bucket")
         UserDefaults.standard.set("parakeet", forKey: "transcription.provider")
 
         let recording = try makeRecording()
-        XCTAssertFalse(SyncService.needsS3Upload(recording), "no backup flag → no S3 for local ASR")
-
-        UserDefaults.standard.set(true, forKey: "s3.backupAfterTranscription")
-        XCTAssertTrue(SyncService.needsS3Upload(recording), "backup flag → S3 for local ASR")
+        XCTAssertTrue(SyncService.needsS3Upload(recording), "S3 is a destination triggered by Send to Destinations, not a local-ASR backup side effect")
     }
 
     // MARK: - remainingRemoteSteps
@@ -160,9 +157,18 @@ final class OfflineModePendingWorkTests: XCTestCase {
     }
 
     @MainActor
-    func testCompletedWithRemainingStepIsWaiting() throws {
+    func testCompletedWithRemainingDestinationStepIsNotWaiting() throws {
         UserDefaults.standard.set(true, forKey: "notion.enabled")
         UserDefaults.standard.set("db-123", forKey: "notion.databaseId")
+
+        let recording = try makeRecording(status: .completed)
+        XCTAssertFalse(SyncService.hasPendingRemoteWork(recording))
+    }
+
+    @MainActor
+    func testCompletedWithRemainingLLMStepIsWaiting() throws {
+        UserDefaults.standard.set(true, forKey: "openrouter.enabled")
+        UserDefaults.standard.set("openai/gpt-4o-mini", forKey: "openrouter.model")
 
         let recording = try makeRecording(status: .completed)
         XCTAssertTrue(SyncService.hasPendingRemoteWork(recording))
