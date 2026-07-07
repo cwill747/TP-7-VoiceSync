@@ -276,23 +276,41 @@ actor ParakeetService: TranscriptionProvider {
     }
 
     /// Transcribes N single-speaker track files split from a TP-7 multi-track
-    /// /recordings WAV (see `MultiTrackAudio.extractTracks`) — each track is a
-    /// clean isolated source, so speaker separation is exact rather than
-    /// acoustic. Produces the same `(text, speakerSegments)` shape the
-    /// diarizer produces so Notion/Notes rendering and the speaker-editing UI
-    /// work unchanged.
+    /// /recordings WAV (see `MultiTrackAudio.extractTracks`).
+    ///
+    /// The tracks can mean one of two things, distinguished here acoustically:
+    /// - Distinct speakers on separate channels (an interview/meeting) — each
+    ///   track is a clean isolated source, so speaker separation is exact rather
+    ///   than acoustic. Rendered as a diarized transcript: same
+    ///   `(text, speakerSegments)` shape the diarizer produces, so Notion/Notes
+    ///   rendering and the speaker-editing UI work unchanged.
+    /// - The same person overdubbing themselves (the TP-7 files overdubs under
+    ///   /recordings, not /memo) — track 0 is the base take and tracks 1+ are
+    ///   overdub layers over the same timeline. Rendered as a base transcript +
+    ///   `OverdubNote`s, matching the /memo overdub shape, since labelling one
+    ///   speaker's own overdub as "Speaker 2" would be a misattribution.
     func transcribeMultiTrack(trackPaths: [String]) async throws -> TranscriptionResult {
         let manager = try await loadManager()
         let language: Language? = variant == .v2 ? .english : nil
 
+        var perTrackText: [String] = []
         var perTrackWords: [[WordSpan]] = []
         var perTrackEmbeddings: [[Float]] = []
 
         for path in trackPaths {
             var decoderState = TdtDecoderState.make()
             let result = try await manager.transcribe(URL(fileURLWithPath: path), decoderState: &decoderState, language: language)
+            perTrackText.append(result.text.trimmingCharacters(in: .whitespacesAndNewlines))
             perTrackWords.append(Self.buildWordSpans(from: result.tokenTimings ?? []))
             perTrackEmbeddings.append((try? await Self.extractEmbedding(from: path)) ?? [])
+        }
+
+        // Same person on every track → it's a self-overdub, not a multi-speaker
+        // capture. Fall back to the diarized-speakers rendering below whenever
+        // that can't be confirmed (missing embeddings, a track that doesn't
+        // match), which is the safe default for a genuine multi-speaker file.
+        if allTracksSameSpeaker(perTrackEmbeddings) {
+            return Self.overdubResult(perTrackText: perTrackText, perTrackWords: perTrackWords, languageCode: variant == .v2 ? "en" : "auto")
         }
 
         let labels = Self.resolveTrackLabels(embeddings: perTrackEmbeddings, knownPersonProfiles: knownPersonProfiles)
@@ -352,6 +370,52 @@ actor ParakeetService: TranscriptionProvider {
             words: nil,
             speakerSegments: timedParagraphs.map(\.segment)
         )
+    }
+
+    /// Cosine-similarity floor for treating two tracks as the same voice. A
+    /// self-overdub is the same person recorded on the same mic seconds apart,
+    /// so its cross-track similarity sits well above this; two different people
+    /// sit below it. Set conservatively (above the natural gap, below the
+    /// known-person match threshold of 0.75) so a genuine multi-speaker capture
+    /// is never collapsed into a single speaker's overdub.
+    private static let sameSpeakerOverdubThreshold: Float = 0.7
+
+    /// True when every track's embedding matches track 0's above
+    /// `sameSpeakerOverdubThreshold` — i.e. one person overdubbing themselves.
+    /// Requires 2+ tracks and a usable embedding for each; any empty embedding
+    /// (extraction failed) or below-threshold track returns false so we fall
+    /// back to the safe multi-speaker rendering.
+    private func allTracksSameSpeaker(_ embeddings: [[Float]]) -> Bool {
+        guard embeddings.count > 1, let base = embeddings.first, !base.isEmpty else { return false }
+        for embedding in embeddings.dropFirst() {
+            guard !embedding.isEmpty,
+                  cosineSimilarity(base, embedding) >= Self.sameSpeakerOverdubThreshold else { return false }
+        }
+        return true
+    }
+
+    /// Builds a base-transcript + overdub-notes result from already-transcribed
+    /// tracks: track 0 is the base take, tracks 1+ become `OverdubNote`s placed
+    /// on the shared timeline by their first word's start time. Mirrors the
+    /// /memo overdub rendering so the two paths produce identical output.
+    private static func overdubResult(perTrackText: [String], perTrackWords: [[WordSpan]], languageCode: String) -> TranscriptionResult {
+        var notes: [OverdubNote] = []
+        for index in perTrackText.indices where index > 0 {
+            let text = perTrackText[index]
+            guard !text.isEmpty else { continue }
+            let startTime = perTrackWords[index].first?.startTime ?? 0
+            notes.append(OverdubNote(trackIndex: index, startTime: startTime, text: text))
+        }
+        var result = TranscriptionResult(
+            text: perTrackText.first ?? "",
+            languageCode: languageCode,
+            languageProbability: nil,
+            transcriptionId: nil,
+            words: nil,
+            speakerSegments: nil
+        )
+        result.overdubNotes = notes.isEmpty ? nil : notes
+        return result
     }
 
     /// A labeled speech turn: a run of a track's words uninterrupted by a

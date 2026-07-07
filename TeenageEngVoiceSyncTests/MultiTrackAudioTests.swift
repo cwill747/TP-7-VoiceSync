@@ -84,6 +84,38 @@ final class MultiTrackAudioTests: XCTestCase {
         try? FileManager.default.removeItem(at: tracks[1])
     }
 
+    func testSilentTrackPairIsDropped() throws {
+        // A TP-7 recording with the overdub bounced onto track 0 leaves track 1
+        // (channels 2,3) all-zero — it should be dropped, leaving a single track.
+        let track0: [Int16] = (0..<200).map { Int16(($0 % 50) * 100) }
+        let silent = [Int16](repeating: 0, count: 200)
+        let data = makeMultiChannelWAVData(channelSamples: [track0, track0, silent, silent])
+        let url = write(data, name: "quad-silent-second.wav")
+
+        let tracks = try MultiTrackAudio.extractTracks(from: url)
+
+        XCTAssertEqual(tracks.count, 1)
+        let samples0 = try readFloatSamples(tracks[0])
+        XCTAssertEqual(samples0.count, 200)
+        for index in 0..<200 {
+            XCTAssertEqual(samples0[index], Float(track0[index]) / 32768.0, accuracy: 0.0001)
+        }
+
+        try? FileManager.default.removeItem(at: tracks[0])
+    }
+
+    func testEntirelySilentFileKeepsSingleTrack() throws {
+        let silent = [Int16](repeating: 0, count: 200)
+        let data = makeMultiChannelWAVData(channelSamples: [silent, silent, silent, silent])
+        let url = write(data, name: "quad-all-silent.wav")
+
+        let tracks = try MultiTrackAudio.extractTracks(from: url)
+
+        XCTAssertEqual(tracks.count, 1)
+
+        try? FileManager.default.removeItem(at: tracks[0])
+    }
+
     func testChunkedReadProducesSameResultAsSingleChunk() throws {
         let track0: [Int16] = (0..<200).map { Int16($0 % 100) }
         let track1: [Int16] = (0..<200).map { Int16(($0 * 3) % 100) }
