@@ -335,12 +335,14 @@ actor ParakeetService: TranscriptionProvider {
             // of regressing to a raw track identifier.
             let rawSpeakerId = label
             let embedding = perTrackEmbeddings[index]
+            let speakerHash = StoredSpeakerSegment.hash(for: embedding, fallback: rawSpeakerId)
 
             for turn in turns {
                 let segment = StoredSpeakerSegment(
                     startTime: turn.startTime,
                     endTime: turn.endTime,
                     rawSpeakerId: rawSpeakerId,
+                    speakerHash: speakerHash,
                     text: turn.text,
                     embedding: embedding,
                     assignedPersonName: label.hasPrefix("Speaker ") ? nil : label,
@@ -601,6 +603,7 @@ actor ParakeetService: TranscriptionProvider {
 
         var storedSegments: [StoredSpeakerSegment] = []
         var paragraphs: [String] = []
+        var speakerHashes: [String: String] = [:]
         var currentRawSpeakerId: String?
         var currentDiarizerSegment: TimedSpeakerSegment?
         var currentWords: [String] = []
@@ -613,6 +616,8 @@ actor ParakeetService: TranscriptionProvider {
 
             let embedding = diarizerSeg.embedding
             let (label, personId) = resolveLabel(for: rawId, embedding: Array(embedding))
+            let speakerHash = speakerHashes[rawId] ?? StoredSpeakerSegment.hash(for: Array(embedding), fallback: rawId)
+            speakerHashes[rawId] = speakerHash
             let text = currentWords.joined(separator: " ")
             paragraphs.append("\(label): \(text)")
 
@@ -620,6 +625,7 @@ actor ParakeetService: TranscriptionProvider {
                 startTime: currentStart,
                 endTime: currentEnd,
                 rawSpeakerId: rawId,
+                speakerHash: speakerHash,
                 text: text,
                 embedding: Array(embedding),
                 assignedPersonName: label.hasPrefix("Speaker ") ? nil : label,
