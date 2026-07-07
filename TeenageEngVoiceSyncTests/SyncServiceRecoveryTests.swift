@@ -231,7 +231,7 @@ final class SyncServiceRecoveryTests: XCTestCase {
         // would have produced (see DeviceWatchServiceTests) - createRecording
         // itself just needs to tag the row with the origin it's told about.
         let deviceFileURL = writeDeviceFile(named: "memo-0001.wav")
-        sync.pendingRecordingOrigins[deviceFileURL.path] = PendingRecordingOrigin(source: .memo, deviceFilename: "0001.wav")
+        sync.pendingRecordingOrigins[deviceFileURL.path] = PendingRecordingOrigin(source: .memo, deviceFilename: "0001.wav", deviceSerial: "TEST-SERIAL")
 
         let result = try await sync.createRecording(from: deviceFileURL)
 
@@ -265,11 +265,11 @@ final class SyncServiceRecoveryTests: XCTestCase {
         let sync = SyncService(modelContext: context)
 
         let recordingsFileURL = writeDeviceFile(named: "0001.wav")
-        sync.pendingRecordingOrigins[recordingsFileURL.path] = PendingRecordingOrigin(source: .recordings, deviceFilename: "0001.wav")
+        sync.pendingRecordingOrigins[recordingsFileURL.path] = PendingRecordingOrigin(source: .recordings, deviceFilename: "0001.wav", deviceSerial: "TEST-SERIAL")
         let recordingsResult = try await sync.createRecording(from: recordingsFileURL)
 
         let memoFileURL = writeDeviceFile(named: "memo-0001.wav")
-        sync.pendingRecordingOrigins[memoFileURL.path] = PendingRecordingOrigin(source: .memo, deviceFilename: "0001.wav")
+        sync.pendingRecordingOrigins[memoFileURL.path] = PendingRecordingOrigin(source: .memo, deviceFilename: "0001.wav", deviceSerial: "TEST-SERIAL")
         let memoResult = try await sync.createRecording(from: memoFileURL)
 
         let allRecordings = try context.fetch(FetchDescriptor<Recording>())
