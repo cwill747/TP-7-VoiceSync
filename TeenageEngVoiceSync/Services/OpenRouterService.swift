@@ -14,6 +14,33 @@ nonisolated struct LLMResult: Sendable {
     let summary: String
 }
 
+/// Toggleable additions to the transcript cleanup prompt. Each one appends an
+/// extra instruction rather than replacing the base prompt, so they compose
+/// with both the default and a user's custom cleanup prompt.
+nonisolated struct TranscriptFormatOptions: Sendable, Equatable {
+    var removeFillerWords = false
+    var removeFalseStarts = false
+    var splitParagraphs = false
+    var bulletPoints = false
+
+    var instructions: [String] {
+        var result: [String] = []
+        if removeFillerWords {
+            result.append(#"Remove filler words and verbal tics ("um", "uh", "like", "you know", "I mean") that don't carry meaning."#)
+        }
+        if removeFalseStarts {
+            result.append("Remove false starts, stutters, and repeated words or phrases where the speaker corrected themselves mid-sentence.")
+        }
+        if splitParagraphs {
+            result.append("Break the text into clear paragraphs whenever the topic or idea shifts, even within a single continuous recording.")
+        }
+        if bulletPoints {
+            result.append("Where the speaker lists items, steps, or action points, format them as a bullet list instead of a run-on sentence.")
+        }
+        return result
+    }
+}
+
 /// Model information from OpenRouter API
 nonisolated struct OpenRouterModel: Identifiable, Sendable {
     let id: String
@@ -187,7 +214,8 @@ actor OpenRouterService {
         transcription: String,
         model: String,
         apiKey: String,
-        customPrompt: String? = nil
+        customPrompt: String? = nil,
+        options: TranscriptFormatOptions = TranscriptFormatOptions()
     ) async throws -> String {
         guard !apiKey.isEmpty else {
             throw OpenRouterError.invalidAPIKey
@@ -198,8 +226,12 @@ actor OpenRouterService {
         }
 
         let promptTemplate = (customPrompt?.isEmpty == false) ? customPrompt! : Self.defaultFormattingPrompt
+        let extraInstructions = options.instructions
+        let promptBody = extraInstructions.isEmpty
+            ? promptTemplate
+            : promptTemplate + "\n\nAdditional formatting instructions:\n" + extraInstructions.map { "- \($0)" }.joined(separator: "\n")
         let prompt = """
-        \(promptTemplate)
+        \(promptBody)
 
         Transcription:
         \(transcription)

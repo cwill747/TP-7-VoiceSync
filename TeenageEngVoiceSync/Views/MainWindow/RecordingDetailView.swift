@@ -20,6 +20,7 @@ struct RecordingDetailView: View {
     @State private var showDeleteConfirmation = false
     @State private var isSendingToNotes = false
     @State private var notesStatus: NotesStatus?
+    @State private var showRawTranscript = false
 
     enum NotesStatus {
         case success
@@ -185,6 +186,9 @@ struct RecordingDetailView: View {
         } message: {
             Text("This will delete the recording from S3 and mark it as deleted. The file may remain on your TP-7 device if it couldn't be removed.")
         }
+        .onChange(of: recording.persistentModelID) { _, _ in
+            showRawTranscript = false
+        }
     }
 
     @ViewBuilder
@@ -233,6 +237,20 @@ struct RecordingDetailView: View {
                             recording: recording,
                             segments: segments
                         )
+                    } else if let cleaned = recording.formattedTranscriptionText {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Picker("Transcript", selection: $showRawTranscript) {
+                                Text("Cleaned up").tag(false)
+                                Text("Original").tag(true)
+                            }
+                            .pickerStyle(.segmented)
+                            .frame(maxWidth: 220)
+
+                            PlainTranscriptView(
+                                text: showRawTranscript ? (recording.transcriptionText ?? "") : cleaned,
+                                language: recording.transcriptionLanguage
+                            )
+                        }
                     } else {
                         PlainTranscriptView(
                             text: recording.transcriptionText ?? "",
