@@ -550,7 +550,7 @@
 			requirement = {
 				kind = versionRange;
 				maximumVersion = 1.0.0;
-				minimumVersion = 0.12.4;
+				minimumVersion = 0.15.5;
 			};
 		};
 		81D8A9F9F9818A4843D8D40A /* XCRemoteSwiftPackageReference "WhisperKit" */ = {
