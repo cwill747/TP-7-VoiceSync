@@ -118,21 +118,26 @@ struct StatusToolbarItem: View {
     let appState: AppState
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 5) {
             if appState.isOffline {
                 Image(systemName: "wifi.slash")
-                    .font(.caption)
+                    .font(.caption2.weight(.semibold))
                     .foregroundStyle(.secondary)
             } else {
                 Circle()
                     .fill(statusColor)
-                    .frame(width: 8, height: 8)
+                    .frame(width: 7, height: 7)
+                    .shadow(color: statusColor.opacity(0.6), radius: 2)
             }
 
             Text(appState.statusText)
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
         }
+        .padding(.horizontal, 2)
+        .animation(.easeInOut(duration: 0.2), value: appState.statusText)
     }
 
     private var statusColor: Color {
