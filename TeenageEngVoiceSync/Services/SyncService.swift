@@ -1629,8 +1629,15 @@ final class SyncService {
             }
         }
 
-        // Clean up the transcript if enabled and not already done.
+        // Clean up the transcript if enabled and not already done. If cleanup is
+        // configured but hasn't succeeded yet (e.g. a transient OpenRouter
+        // failure), bail before creating the note — otherwise we'd stamp
+        // appleNoteCreatedAt against the raw transcript and reconciliation would
+        // never revisit it to apply the cleaned text.
         await formatTranscriptionIfEnabled(for: recording, text: text)
+        guard !Self.remainingRemoteSteps(for: recording).contains(.format) else {
+            throw AppleNotesError.executionFailed("Transcript cleanup did not complete — try again in a moment.")
+        }
         let transcriptText = recording.formattedTranscriptionText ?? text
 
         let playURL = try s3.generatePresignedURL(s3Key: s3Key, expiry: expiry)
