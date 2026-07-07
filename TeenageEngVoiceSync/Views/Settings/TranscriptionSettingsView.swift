@@ -425,6 +425,10 @@ struct TranscriptionSettingsView: View {
                                 }
                             }
 
+                        Button("Choose…") {
+                            chooseMarkdownFolder()
+                        }
+
                         Button("Validate") {
                             validateMarkdownFolder()
                         }
@@ -853,6 +857,26 @@ struct TranscriptionSettingsView: View {
                 }
             }
         }
+    }
+
+    private func chooseMarkdownFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Choose"
+
+        let startPath = markdownInputPath.isEmpty ? markdownFolderPath : markdownInputPath
+        if !startPath.isEmpty {
+            let expanded = NSString(string: startPath).expandingTildeInPath
+            panel.directoryURL = URL(fileURLWithPath: expanded)
+        }
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        SecurityScopedBookmark.save(url: url, key: "markdown.folderPath")
+        markdownInputPath = url.path
+        validateMarkdownFolder()
     }
 
     private func validateMarkdownFolder() {
