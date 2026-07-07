@@ -72,11 +72,17 @@ struct OnboardingNotionView: View {
                 Text("Database")
                     .font(.headline)
 
-                TextField("Database ID (32-char hex from the DB URL)", text: $notionDatabaseId)
+                TextField("Database ID (paste the DB URL or the 32-char hex ID)", text: $notionDatabaseId)
                     .textFieldStyle(.roundedBorder)
                     .disabled(isLoading)
+                    .onChange(of: notionDatabaseId) { _, newValue in
+                        let extracted = NotionService.extractDatabaseId(from: newValue)
+                        if extracted != newValue {
+                            notionDatabaseId = extracted
+                        }
+                    }
 
-                Text("Share the database with your integration first (••• → Connections), then paste its ID from the URL.")
+                Text("Share the database with your integration first (••• → Connections), then paste the \"Copy link\" URL or its ID.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
