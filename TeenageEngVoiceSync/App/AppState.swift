@@ -17,6 +17,9 @@ final class AppState {
     private(set) var syncService: SyncService?
     private var isInitialized = false
 
+    /// True while a manual "Reprocess all recordings" backfill pass is running.
+    private(set) var isReprocessing = false
+
     // Error state
     var lastError: String?
     var showError = false
@@ -126,6 +129,28 @@ final class AppState {
         Task { @MainActor in
             await syncService.reconcilePendingWork()
         }
+    }
+
+    /// Recompute the "N waiting" count from the database. Call after changing
+    /// destination/AI settings so `pendingRemoteCount` reflects how many existing
+    /// recordings now owe work under the new settings (e.g. after enabling Notion).
+    func refreshPendingRemoteCount() {
+        guard let syncService else { return }
+        Task { @MainActor in
+            await syncService.refreshPendingCount()
+        }
+    }
+
+    /// Backfill newly-enabled destinations and AI titles onto existing recordings.
+    /// Reuses the idempotent reconcile pass, so it only fills in missing remote
+    /// steps — it never re-creates notes or Notion pages that already exist.
+    /// No-op while offline (the reconcile pass requires connectivity).
+    func reprocessAllRecordings() async {
+        guard let syncService, !isReprocessing else { return }
+        clearError()
+        isReprocessing = true
+        await syncService.reconcilePendingWork()
+        isReprocessing = false
     }
 
     func setDeviceWatchEnabled(_ enabled: Bool) {

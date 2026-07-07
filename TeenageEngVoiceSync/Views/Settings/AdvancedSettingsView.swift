@@ -8,17 +8,55 @@
 import SwiftUI
 
 struct AdvancedSettingsView: View {
+    @Environment(AppState.self) private var appState
     @AppStorage("llm.customPrompt") private var customPrompt = ""
 
     @State private var promptText = ""
     @State private var saveStatus: SaveStatus?
+    @State private var showReprocessConfirm = false
+    @State private var reprocessResult: ReprocessResult?
 
     enum SaveStatus {
         case success
     }
 
+    /// Outcome of a finished reprocess pass. `reconcilePendingWork` swallows
+    /// per-recording delivery errors (e.g. missing credentials), so success is
+    /// judged by whether the pending count actually reached zero afterwards —
+    /// not merely by the pass returning.
+    enum ReprocessResult {
+        case done
+        case partial(remaining: Int)
+    }
+
     var body: some View {
         Form {
+            Section("Reprocess Recordings") {
+                Text("Apply your current destination and AI-title settings to recordings that were synced before you changed them. This only fills in missing steps — notes and Notion pages that already exist are left untouched.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                HStack {
+                    Button {
+                        showReprocessConfirm = true
+                    } label: {
+                        if appState.isReprocessing {
+                            HStack(spacing: 6) {
+                                ProgressView().controlSize(.small)
+                                Text("Reprocessing…")
+                            }
+                        } else {
+                            Text(reprocessButtonTitle)
+                        }
+                    }
+                    .disabled(appState.isReprocessing || appState.isOffline || appState.pendingRemoteCount == 0)
+
+                    Spacer()
+
+                    reprocessStatusLabel
+                }
+            }
+
             Section("LLM Prompt Template") {
                 Text("Customize the prompt used to generate titles and summaries from your transcriptions.")
                     .font(.caption)
@@ -97,10 +135,62 @@ struct AdvancedSettingsView: View {
         .onAppear {
             // Load current prompt or default
             promptText = customPrompt.isEmpty ? OpenRouterService.defaultPrompt : customPrompt
+            // Recompute how many recordings owe work under the current settings,
+            // in case a destination was just enabled in another tab.
+            appState.refreshPendingRemoteCount()
+        }
+        .confirmationDialog(
+            "Reprocess recordings?",
+            isPresented: $showReprocessConfirm,
+            titleVisibility: .visible
+        ) {
+            Button(reprocessButtonTitle) {
+                Task {
+                    reprocessResult = nil
+                    await appState.reprocessAllRecordings()
+                    // A completed pass leaves anything it couldn't deliver in the
+                    // pending count; only report "Done" when it actually hit zero.
+                    let remaining = appState.pendingRemoteCount
+                    reprocessResult = remaining == 0 ? .done : .partial(remaining: remaining)
+                    try? await Task.sleep(for: .seconds(4))
+                    reprocessResult = nil
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This applies your current destination and AI-title settings to \(appState.pendingRemoteCount) recording\(appState.pendingRemoteCount == 1 ? "" : "s") synced before you changed them. Existing notes and Notion pages are left as-is.")
+        }
+    }
+
+    private var reprocessButtonTitle: String {
+        let count = appState.pendingRemoteCount
+        if count == 0 { return "Nothing to Reprocess" }
+        return "Reprocess \(count) Recording\(count == 1 ? "" : "s")"
+    }
+
+    @ViewBuilder
+    private var reprocessStatusLabel: some View {
+        if appState.isOffline {
+            Label("Offline", systemImage: "wifi.slash")
+                .foregroundStyle(.secondary)
+                .font(.caption)
+        } else if let result = reprocessResult {
+            switch result {
+            case .done:
+                Label("Done", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                    .font(.caption)
+            case .partial(let remaining):
+                Label("\(remaining) still pending", systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                    .font(.caption)
+                    .help("Some recordings couldn't be delivered — check that the destination credentials are configured, then try again.")
+            }
         }
     }
 }
 
 #Preview {
     AdvancedSettingsView()
+        .environment(AppState())
 }
