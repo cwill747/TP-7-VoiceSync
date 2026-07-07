@@ -587,7 +587,7 @@ struct NotionRecordingInfo {
 
 private extension String {
     /// Splits the string into chunks of at most `size` characters.
-    func chunked(into size: Int) -> [String] {
+    nonisolated func chunked(into size: Int) -> [String] {
         guard !isEmpty else { return [""] }
         var result: [String] = []
         var index = startIndex

@@ -56,14 +56,14 @@ actor Debouncer {
     }
 
     /// Start periodic processing with a callback for stable items
-    func startProcessing(interval: TimeInterval = 0.5, handler: @escaping ([String]) async -> Void) {
+    func startProcessing(interval: TimeInterval = 0.5, handler: @escaping @Sendable ([String]) async -> Void) {
         processingTask?.cancel()
         processingTask = Task {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(interval))
                 guard !Task.isCancelled else { break }
 
-                let stable = await getStableItems()
+                let stable = getStableItems()
                 if !stable.isEmpty {
                     await handler(stable)
                 }

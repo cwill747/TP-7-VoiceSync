@@ -126,7 +126,7 @@ enum RecordingSource: String, Codable, CaseIterable {
 
 /// One speaker turn extracted during diarization, stored on the recording so
 /// labels can be corrected and the transcript re-derived without re-running ASR.
-struct StoredSpeakerSegment: Codable, Identifiable, Sendable {
+nonisolated struct StoredSpeakerSegment: Codable, Identifiable, Sendable {
     var id: UUID
     var startTime: TimeInterval
     var endTime: TimeInterval
