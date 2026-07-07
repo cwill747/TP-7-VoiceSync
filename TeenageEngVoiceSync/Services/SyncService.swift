@@ -1540,7 +1540,32 @@ final class SyncService {
 
         await createNotionPage(for: recording, transcription: transcription)
         await createAppleNote(for: recording, transcription: transcription)
+        await deleteFromDeviceIfConfigured(recording)
         await refreshPendingCount()
+    }
+
+    /// Removes the recording's audio from the TP-7 over MTP once it has been
+    /// fully transferred and transcribed, when the user has opted into
+    /// "delete after processing". Only runs once all remote delivery steps
+    /// (S3, summary, format, Notion, note) have completed, so the source file
+    /// isn't removed from the device before the app has a durable copy.
+    private func deleteFromDeviceIfConfigured(_ recording: Recording) async {
+        guard UserDefaults.standard.bool(forKey: "devicewatch.deleteAfterProcessing") else { return }
+        guard recording.deletedAt == nil, recording.deletedFromDeviceAt == nil else { return }
+        guard recording.transcriptionStatus == .completed else { return }
+        guard Self.remainingRemoteSteps(for: recording).isEmpty else { return }
+        guard deviceWatch.isConnected else { return }
+
+        let folder = (recording.sourceFolder ?? .recordings).rawValue
+        let deviceFilename = recording.deviceFilename ?? recording.filename
+        switch await deviceWatch.deleteFromDevice(filename: deviceFilename, folder: folder) {
+        case .success:
+            recording.deletedFromDeviceAt = Date()
+            try? modelContext.save()
+            AppLogger.sync.info("Auto-deleted recording from device after processing: \(recording.filename, privacy: .private)")
+        case .failure(let error):
+            AppLogger.sync.info("Could not auto-delete from device: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     /// Completes deferred remote work across all recordings: resumes transcription
@@ -1591,6 +1616,11 @@ final class SyncService {
                     overdubNotes: overdubNotes
                 )
                 await deliverRemote(recording, transcription: transcription)
+                continue
+            }
+
+            if recording.transcriptionStatus == .completed, recording.deletedFromDeviceAt == nil {
+                await deleteFromDeviceIfConfigured(recording)
             }
         }
 

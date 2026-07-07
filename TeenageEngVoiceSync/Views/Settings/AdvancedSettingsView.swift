@@ -11,6 +11,7 @@ struct AdvancedSettingsView: View {
     @Environment(AppState.self) private var appState
     @AppStorage("llm.customPrompt") private var customPrompt = ""
     @AppStorage("llm.formatPrompt") private var formatPrompt = ""
+    @AppStorage("devicewatch.deleteAfterProcessing") private var deleteAfterProcessing = false
 
     @State private var promptText = ""
     @State private var saveStatus: SaveStatus?
@@ -18,6 +19,7 @@ struct AdvancedSettingsView: View {
     @State private var formatSaveStatus: SaveStatus?
     @State private var showReprocessConfirm = false
     @State private var reprocessResult: ReprocessResult?
+    @State private var showDeleteAfterProcessingConfirm = false
 
     enum SaveStatus {
         case success
@@ -58,6 +60,23 @@ struct AdvancedSettingsView: View {
 
                     reprocessStatusLabel
                 }
+            }
+
+            Section("Device Storage") {
+                Toggle("Delete from TP-7 after processing", isOn: Binding(
+                    get: { deleteAfterProcessing },
+                    set: { newValue in
+                        if newValue {
+                            showDeleteAfterProcessingConfirm = true
+                        } else {
+                            deleteAfterProcessing = false
+                        }
+                    }
+                ))
+
+                Text("Once a recording has been fully transferred, transcribed, and delivered to your configured destinations, its audio file is permanently removed from the TP-7 to free up device storage.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("LLM Prompt Template") {
@@ -219,6 +238,18 @@ struct AdvancedSettingsView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("This applies your current destination and AI-title settings to \(appState.pendingRemoteCount) recording\(appState.pendingRemoteCount == 1 ? "" : "s") synced before you changed them. Existing notes and Notion pages are left as-is.")
+        }
+        .confirmationDialog(
+            "Delete recordings from TP-7 after processing?",
+            isPresented: $showDeleteAfterProcessingConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Enable", role: .destructive) {
+                deleteAfterProcessing = true
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Once a recording is fully transcribed and delivered to your configured destinations, its audio will be permanently deleted from the TP-7. This cannot be undone.")
         }
     }
 
