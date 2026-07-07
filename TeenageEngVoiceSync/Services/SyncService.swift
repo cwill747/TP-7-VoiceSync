@@ -1553,7 +1553,14 @@ final class SyncService {
         guard recording.llmProcessedAt == nil else { return }
         guard UserDefaults.standard.bool(forKey: "openrouter.enabled") else { return }
 
-        guard let result = await generateLLMTitle(for: text) else { return }
+        guard let result = await generateLLMTitle(for: text) else {
+            // LLM failed (missing key, network error, etc.); mark processed anyway
+            // so delivery isn't permanently blocked — a date-based title is used instead.
+            recording.llmProcessedAt = Date()
+            recording.updatedAt = Date()
+            try? modelContext.save()
+            return
+        }
         recording.llmTitle = result.title
         recording.llmSummary = result.summary
         recording.llmProcessedAt = Date()
@@ -1804,7 +1811,11 @@ final class SyncService {
     func sendToDestinations(_ recording: Recording) async throws {
         AppLogger.notes.info("Manual sendToDestinations called for \(recording.filename, privacy: .private)")
 
-        guard reachability.isOnline else {
+        let notionDatabaseId = UserDefaults.standard.string(forKey: "notion.databaseId") ?? ""
+        let needsNetwork = Self.needsS3Upload(recording)
+            || UserDefaults.standard.bool(forKey: "openrouter.enabled")
+            || (UserDefaults.standard.bool(forKey: "notion.enabled") && !notionDatabaseId.isEmpty)
+        guard !needsNetwork || reachability.isOnline else {
             throw AppleNotesError.executionFailed("Connect to the network before sending to destinations.")
         }
         guard recording.transcriptionStatus == .completed,
@@ -1840,8 +1851,19 @@ final class SyncService {
         }
         try await uploadTranscriptToS3IfPossible(recording)
 
+        let notionConfigured = UserDefaults.standard.bool(forKey: "notion.enabled") && !notionDatabaseId.isEmpty
         await createNotionPage(for: recording, transcription: transcription)
+        if notionConfigured, recording.notionPageCreatedAt == nil {
+            throw AppleNotesError.executionFailed(lastError ?? "Notion delivery failed.")
+        }
+
+        let notesConfigured = UserDefaults.standard.bool(forKey: "markdown.enabled")
+            || UserDefaults.standard.bool(forKey: "applenotes.enabled")
         await createAppleNote(for: recording, transcription: transcription)
+        if notesConfigured, recording.appleNoteCreatedAt == nil {
+            throw AppleNotesError.executionFailed(lastError ?? "Note creation failed.")
+        }
+
         await deleteFromDeviceIfConfigured(recording)
         await refreshPendingCount()
     }
