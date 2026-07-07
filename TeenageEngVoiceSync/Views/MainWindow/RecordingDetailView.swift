@@ -502,8 +502,8 @@ struct DiarizedTranscriptView: View {
     }
 
     private func reassign(segment: inout StoredSpeakerSegment, personId: String, personName: String) {
-        segment.assignedPersonName = personName
-        segment.assignedPersonId = personId
+        let speakerHash = segment.effectiveSpeakerHash
+        assignLocalSegments(matching: speakerHash, personId: personId, personName: personName)
 
         // Add this segment's audio as a VoiceSample for the chosen Person
         if !segment.embedding.isEmpty, let person = persons.first(where: { $0.id == personId }) {
@@ -520,12 +520,13 @@ struct DiarizedTranscriptView: View {
             Task { await appState.syncService?.refreshKnownSpeakers() }
         }
 
-        persistSegments()
+        persistAssignment(matching: speakerHash, personId: personId, personName: personName)
     }
 
     private func createAndAssign(segment: inout StoredSpeakerSegment, name: String) {
         let person = Person(name: name)
         modelContext.insert(person)
+        let speakerHash = segment.effectiveSpeakerHash
 
         if !segment.embedding.isEmpty {
             let sample = VoiceSample(
@@ -541,32 +542,64 @@ struct DiarizedTranscriptView: View {
 
         try? modelContext.save()
 
-        segment.assignedPersonName = person.name
-        segment.assignedPersonId = person.id
-        persistSegments()
+        assignLocalSegments(matching: speakerHash, personId: person.id, personName: person.name)
+        persistAssignment(matching: speakerHash, personId: person.id, personName: person.name)
         Task { await appState.syncService?.refreshKnownSpeakers() }
     }
 
-    private func persistSegments() {
-        recording.speakerSegmentsData = try? JSONEncoder().encode(localSegments)
-        recording.transcriptionText = localSegments
-            .map { seg in
-                let label = seg.assignedPersonName ?? seg.rawSpeakerId
-                return "\(label): \(seg.text)"
-            }
-            .joined(separator: "\n\n")
-        // The cleaned transcript is derived from the old text, so it's now stale.
-        // Drop it (leaving formattingProcessedAt set so we don't re-queue cleanup)
-        // — the edited, relabeled transcript is authoritative for delivery.
-        recording.formattedTranscriptionText = nil
-        recording.updatedAt = Date()
+    private func assignLocalSegments(matching speakerHash: String, personId: String, personName: String) {
+        _ = StoredSpeakerSegment.applyAssignment(
+            to: &localSegments,
+            matching: speakerHash,
+            personId: personId,
+            personName: personName
+        )
+    }
+
+    private func persistAssignment(matching speakerHash: String, personId: String, personName: String) {
+        var recordingsToRefresh: [Recording] = []
+        let descriptor = FetchDescriptor<Recording>()
+        let allRecordings = (try? modelContext.fetch(descriptor)) ?? [recording]
+
+        for candidate in allRecordings {
+            guard let data = candidate.speakerSegmentsData,
+                  var segments = try? JSONDecoder().decode([StoredSpeakerSegment].self, from: data) else { continue }
+
+            let changed = StoredSpeakerSegment.applyAssignment(
+                to: &segments,
+                matching: speakerHash,
+                personId: personId,
+                personName: personName
+            )
+
+            guard changed else { continue }
+
+            candidate.speakerSegmentsData = try? JSONEncoder().encode(segments)
+            candidate.transcriptionText = StoredSpeakerSegment.transcript(from: segments)
+            // The cleaned transcript is derived from the old text, so it's now stale.
+            // Drop it (leaving formattingProcessedAt set so we don't re-queue cleanup)
+            // — the edited, relabeled transcript is authoritative for delivery.
+            candidate.formattedTranscriptionText = nil
+            candidate.updatedAt = Date()
+            recordingsToRefresh.append(candidate)
+        }
+
+        if recordingsToRefresh.isEmpty {
+            recording.speakerSegmentsData = try? JSONEncoder().encode(localSegments)
+            recording.transcriptionText = StoredSpeakerSegment.transcript(from: localSegments)
+            recording.formattedTranscriptionText = nil
+            recording.updatedAt = Date()
+            recordingsToRefresh.append(recording)
+        }
+
         try? modelContext.save()
 
-        // Propagate the relabeled transcript to the recording's Notion page in
+        // Propagate the relabeled transcripts to each recording's Notion page in
         // place, so reassigning speakers (or merging two tracks onto one
-        // speaker) is reflected without spawning a duplicate page.
-        let edited = recording
-        Task { await appState.syncService?.refreshNotionForEditedTranscript(edited) }
+        // speaker) is reflected without spawning duplicate pages.
+        for edited in recordingsToRefresh {
+            Task { await appState.syncService?.refreshNotionForEditedTranscript(edited) }
+        }
     }
 }
 

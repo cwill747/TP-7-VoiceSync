@@ -7,6 +7,7 @@
 
 import SwiftData
 import Foundation
+import CryptoKit
 
 @Model
 final class Recording {
@@ -152,6 +153,9 @@ nonisolated struct StoredSpeakerSegment: Codable, Identifiable, Sendable {
     var endTime: TimeInterval
     /// Raw speaker ID from the diarizer (opaque string, stable within a recording).
     var rawSpeakerId: String
+    /// Stable speaker hash used to carry manual person assignments across every
+    /// stored turn that represents the same diarized speaker.
+    var speakerHash: String?
     /// The words attributed to this segment.
     var text: String
     /// Speaker embedding extracted during diarization — used to add this segment
@@ -166,6 +170,7 @@ nonisolated struct StoredSpeakerSegment: Codable, Identifiable, Sendable {
         startTime: TimeInterval,
         endTime: TimeInterval,
         rawSpeakerId: String,
+        speakerHash: String? = nil,
         text: String,
         embedding: [Float],
         assignedPersonName: String? = nil,
@@ -175,10 +180,52 @@ nonisolated struct StoredSpeakerSegment: Codable, Identifiable, Sendable {
         self.startTime = startTime
         self.endTime = endTime
         self.rawSpeakerId = rawSpeakerId
+        self.speakerHash = speakerHash
         self.text = text
         self.embedding = embedding
         self.assignedPersonName = assignedPersonName
         self.assignedPersonId = assignedPersonId
+    }
+
+    var effectiveSpeakerHash: String {
+        speakerHash ?? rawSpeakerId
+    }
+
+    static func hash(for embedding: [Float], fallback: String) -> String {
+        guard !embedding.isEmpty else { return fallback }
+
+        var data = Data(capacity: embedding.count * MemoryLayout<UInt32>.size)
+        for value in embedding {
+            var bits = value.bitPattern.littleEndian
+            withUnsafeBytes(of: &bits) { data.append(contentsOf: $0) }
+        }
+        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    static func applyAssignment(
+        to segments: inout [StoredSpeakerSegment],
+        matching speakerHash: String,
+        personId: String,
+        personName: String
+    ) -> Bool {
+        var changed = false
+        for index in segments.indices where segments[index].effectiveSpeakerHash == speakerHash {
+            if segments[index].assignedPersonId != personId || segments[index].assignedPersonName != personName {
+                segments[index].assignedPersonId = personId
+                segments[index].assignedPersonName = personName
+                changed = true
+            }
+        }
+        return changed
+    }
+
+    static func transcript(from segments: [StoredSpeakerSegment]) -> String {
+        segments
+            .map { segment in
+                let label = segment.assignedPersonName ?? segment.rawSpeakerId
+                return "\(label): \(segment.text)"
+            }
+            .joined(separator: "\n\n")
     }
 }
 
