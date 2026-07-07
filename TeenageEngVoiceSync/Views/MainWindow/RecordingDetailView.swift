@@ -514,6 +514,10 @@ struct DiarizedTranscriptView: View {
                 return "\(label): \(seg.text)"
             }
             .joined(separator: "\n\n")
+        // The cleaned transcript is derived from the old text, so it's now stale.
+        // Drop it (leaving formattingProcessedAt set so we don't re-queue cleanup)
+        // — the edited, relabeled transcript is authoritative for delivery.
+        recording.formattedTranscriptionText = nil
         recording.updatedAt = Date()
         try? modelContext.save()
 

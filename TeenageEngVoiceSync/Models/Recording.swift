@@ -49,6 +49,11 @@ final class Recording {
     var llmSummary: String?
     var llmProcessedAt: Date?
 
+    // LLM-formatted transcription (punctuation + minor transcription-error fixes).
+    // When present, notes/Notion use this in place of `transcriptionText`.
+    var formattedTranscriptionText: String?
+    var formattingProcessedAt: Date?
+
     // Apple Notes integration
     var appleNoteCreatedAt: Date?
 

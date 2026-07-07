@@ -10,9 +10,12 @@ import SwiftUI
 struct AdvancedSettingsView: View {
     @Environment(AppState.self) private var appState
     @AppStorage("llm.customPrompt") private var customPrompt = ""
+    @AppStorage("llm.formatPrompt") private var formatPrompt = ""
 
     @State private var promptText = ""
     @State private var saveStatus: SaveStatus?
+    @State private var formatPromptText = ""
+    @State private var formatSaveStatus: SaveStatus?
     @State private var showReprocessConfirm = false
     @State private var reprocessResult: ReprocessResult?
 
@@ -113,6 +116,62 @@ struct AdvancedSettingsView: View {
                 }
             }
 
+            Section("Transcript Cleanup Prompt") {
+                Text("Customize the prompt used to clean up transcripts — punctuation, capitalization, and correction of likely transcription errors. Keep it conservative so meaning and wording are preserved.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                TextEditor(text: $formatPromptText)
+                    .font(.system(.body, design: .monospaced))
+                    .frame(minHeight: 200)
+                    .scrollContentBackground(.hidden)
+                    .background(Color(NSColor.textBackgroundColor))
+                    .cornerRadius(6)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(Color(NSColor.separatorColor), lineWidth: 1)
+                    )
+
+                Text("The raw transcription text will be automatically appended to this prompt.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                HStack {
+                    Button("Reset to Default") {
+                        formatPromptText = OpenRouterService.defaultFormattingPrompt
+                        formatPrompt = ""
+                        formatSaveStatus = nil
+                    }
+                    .disabled(formatPromptText == OpenRouterService.defaultFormattingPrompt)
+
+                    Spacer()
+
+                    if let status = formatSaveStatus {
+                        switch status {
+                        case .success:
+                            Label("Saved", systemImage: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                                .font(.caption)
+                        }
+                    }
+
+                    Button("Save") {
+                        formatPrompt = formatPromptText
+                        formatSaveStatus = .success
+                        Task {
+                            try? await Task.sleep(for: .seconds(3))
+                            await MainActor.run {
+                                formatSaveStatus = nil
+                            }
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(formatPromptText == formatPrompt || (formatPromptText == OpenRouterService.defaultFormattingPrompt && formatPrompt.isEmpty))
+                }
+            }
+
             Section {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Tips for writing effective prompts:")
@@ -135,6 +194,7 @@ struct AdvancedSettingsView: View {
         .onAppear {
             // Load current prompt or default
             promptText = customPrompt.isEmpty ? OpenRouterService.defaultPrompt : customPrompt
+            formatPromptText = formatPrompt.isEmpty ? OpenRouterService.defaultFormattingPrompt : formatPrompt
             // Recompute how many recordings owe work under the current settings,
             // in case a destination was just enabled in another tab.
             appState.refreshPendingRemoteCount()

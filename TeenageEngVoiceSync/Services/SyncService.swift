@@ -521,11 +521,15 @@ final class SyncService {
             }
 
             // Reset note + summary tracking so retranscription regenerates them
-            // from the new transcript. notionPageId is deliberately kept so the
-            // existing Notion page is updated in place rather than duplicated.
+            // from the new transcript. Also drop the cleaned transcript so the
+            // note/Notion paths don't publish text derived from the old ASR run.
+            // notionPageId is deliberately kept so the existing Notion page is
+            // updated in place rather than duplicated.
             recording.appleNoteCreatedAt = nil
             recording.notionPageCreatedAt = nil
             recording.llmProcessedAt = nil
+            recording.formattedTranscriptionText = nil
+            recording.formattingProcessedAt = nil
 
             // Regenerate summary/notes via deliverRemote so the Work Offline
             // guard is honoured; reconciliation finishes deferred steps later.
@@ -1278,6 +1282,9 @@ final class SyncService {
         // a fresh page in the current database instead of PATCHing the old one.
         let existingPageId = (recording.notionDatabaseId == databaseId) ? recording.notionPageId : nil
 
+        // Prefer the LLM-cleaned transcript when cleanup produced one.
+        let transcriptText = recording.formattedTranscriptionText ?? transcription.text
+
         let service = NotionService(apiKey: apiKey, databaseId: databaseId, props: .loadStored())
         do {
             // Update the existing page in place when we know its ID (e.g. after a
@@ -1287,7 +1294,7 @@ final class SyncService {
             if let pageId = existingPageId {
                 try await service.updateTranscriptionNote(
                     pageId: pageId,
-                    transcription: transcription.text,
+                    transcription: transcriptText,
                     filename: recording.filename,
                     tpDeviceFilename: recording.filename,
                     recordedAt: recording.recordedAt,
@@ -1303,7 +1310,7 @@ final class SyncService {
                 AppLogger.notes.info("Updated Notion page in place for \(recording.filename, privacy: .private)")
             } else {
                 let pageId = try await service.createTranscriptionNote(
-                    transcription: transcription.text,
+                    transcription: transcriptText,
                     filename: recording.filename,
                     tpDeviceFilename: recording.filename,
                     recordedAt: recording.recordedAt,
@@ -1431,13 +1438,15 @@ final class SyncService {
         // the delivery phase; reuse whatever was stored on the recording.
         let customTitle = recording.llmTitle
         let summary = recording.llmSummary
+        // Prefer the LLM-cleaned transcript when formatting produced one.
+        let transcriptText = recording.formattedTranscriptionText ?? transcription.text
 
         do {
             if useMarkdown {
                 // Create local markdown file (takes priority)
                 let markdownService = LocalMarkdownService()
                 try await markdownService.createTranscriptionNote(
-                    transcription: transcription.text,
+                    transcription: transcriptText,
                     filename: recording.filename,
                     tpDeviceFilename: recording.filename,
                     recordedAt: recording.recordedAt,
@@ -1454,7 +1463,7 @@ final class SyncService {
                 // Create Apple Note
                 let notesService = AppleNotesService()
                 try await notesService.createTranscriptionNote(
-                    transcription: transcription.text,
+                    transcription: transcriptText,
                     filename: recording.filename,
                     tpDeviceFilename: recording.filename,
                     recordedAt: recording.recordedAt,
@@ -1516,6 +1525,19 @@ final class SyncService {
             }
         }
         await generateAndStoreSummary(for: recording, text: transcription.text)
+
+        await formatTranscriptionIfEnabled(for: recording, text: transcription.text)
+        // If cleanup is configured but hasn't succeeded yet (e.g. a transient
+        // OpenRouter failure), defer note/Notion delivery. Those steps set their
+        // own "created" timestamps and are never revisited, so publishing now
+        // would permanently ship the raw transcript instead of the cleaned one.
+        // Reconciliation retries the cleanup, then finishes delivery.
+        guard !Self.remainingRemoteSteps(for: recording).contains(.format) else {
+            AppLogger.sync.info("Deferring note/Notion delivery until transcript cleanup completes for \(recording.filename, privacy: .private)")
+            await refreshPendingCount()
+            return
+        }
+
         await createNotionPage(for: recording, transcription: transcription)
         await createAppleNote(for: recording, transcription: transcription)
         await refreshPendingCount()
@@ -1617,6 +1639,78 @@ final class SyncService {
         }
     }
 
+    /// Outcome of a transcript-cleanup attempt. `skip` means the step can never
+    /// succeed with the current config (no key / no model) so delivery should
+    /// proceed with the raw transcript; `failed` is transient and left pending
+    /// for reconciliation to retry.
+    private enum FormatOutcome {
+        case cleaned(String)
+        case skip
+        case failed
+    }
+
+    /// Reformats a transcription via OpenRouter (punctuation + minor correction)
+    /// using a separately-chosen model.
+    private func formatLLMTranscription(_ transcription: String) async -> FormatOutcome {
+        guard let apiKey = try? await KeychainService.shared.retrieve(for: .openRouterAPIKey),
+              !apiKey.isEmpty else {
+            AppLogger.network.debug("OpenRouter API key not configured; skipping cleanup")
+            return .skip
+        }
+
+        // Formatting has its own model choice, independent of titling.
+        let model = UserDefaults.standard.string(forKey: "openrouter.formatModel") ?? ""
+        guard !model.isEmpty else {
+            AppLogger.network.debug("OpenRouter formatting model not selected; skipping cleanup")
+            return .skip
+        }
+
+        AppLogger.network.info("Formatting transcription (model=\(model, privacy: .public))")
+
+        let customPrompt = UserDefaults.standard.string(forKey: "llm.formatPrompt")
+
+        do {
+            let formatted = try await openRouterService.formatTranscription(
+                transcription: transcription,
+                model: model,
+                apiKey: apiKey,
+                customPrompt: customPrompt
+            )
+            return formatted.isEmpty ? .failed : .cleaned(formatted)
+        } catch {
+            AppLogger.network.error("Failed to format transcription: \(error.localizedDescription, privacy: .public)")
+            return .failed
+        }
+    }
+
+    /// Formats and persists the cleaned transcription if enabled and not already
+    /// done. Idempotent — safe to call from both the live pipeline and
+    /// reconciliation. On success (or when the step can't run at all) it stamps
+    /// `formattingProcessedAt` so delivery can proceed; a transient failure
+    /// leaves it unset so reconciliation retries before notes/Notion are built.
+    /// The Notion and note steps prefer the formatted text when present.
+    private func formatTranscriptionIfEnabled(for recording: Recording, text: String) async {
+        guard recording.formattingProcessedAt == nil else { return }
+        guard UserDefaults.standard.bool(forKey: "openrouter.formatEnabled") else { return }
+
+        switch await formatLLMTranscription(text) {
+        case .cleaned(let formatted):
+            recording.formattedTranscriptionText = formatted
+            recording.formattingProcessedAt = Date()
+            recording.updatedAt = Date()
+            try? modelContext.save()
+            AppLogger.notes.debug("Stored formatted transcription (\(formatted.count, privacy: .public) chars)")
+        case .skip:
+            // Nothing to store; mark done so downstream delivery isn't blocked.
+            recording.formattingProcessedAt = Date()
+            recording.updatedAt = Date()
+            try? modelContext.save()
+        case .failed:
+            // Leave pending — reconciliation retries the cleanup later.
+            break
+        }
+    }
+
     /// Manually send a transcribed recording to Apple Notes
     func sendToAppleNotes(_ recording: Recording) async throws {
         AppLogger.notes.info("Manual sendToAppleNotes called for \(recording.filename, privacy: .private)")
@@ -1658,6 +1752,17 @@ final class SyncService {
             }
         }
 
+        // Clean up the transcript if enabled and not already done. If cleanup is
+        // configured but hasn't succeeded yet (e.g. a transient OpenRouter
+        // failure), bail before creating the note — otherwise we'd stamp
+        // appleNoteCreatedAt against the raw transcript and reconciliation would
+        // never revisit it to apply the cleaned text.
+        await formatTranscriptionIfEnabled(for: recording, text: text)
+        guard !Self.remainingRemoteSteps(for: recording).contains(.format) else {
+            throw AppleNotesError.executionFailed("Transcript cleanup did not complete — try again in a moment.")
+        }
+        let transcriptText = recording.formattedTranscriptionText ?? text
+
         let playURL = try s3.generatePresignedURL(s3Key: s3Key, expiry: expiry)
         let downloadURL = try s3.generateDownloadURL(s3Key: s3Key, filename: recording.filename, expiry: expiry)
 
@@ -1668,7 +1773,7 @@ final class SyncService {
 
         let notesService = AppleNotesService()
         try await notesService.createTranscriptionNote(
-            transcription: text,
+            transcription: transcriptText,
             filename: recording.filename,
             tpDeviceFilename: recording.filename,
             recordedAt: recording.recordedAt,
@@ -1751,6 +1856,7 @@ extension SyncService {
     enum RemoteStep: Equatable {
         case s3       // audio upload
         case summary  // LLM title/summary
+        case format   // LLM transcript cleanup
         case notion   // Notion page
         case note     // Markdown / Apple note
     }
@@ -1785,6 +1891,12 @@ extension SyncService {
         if defaults.bool(forKey: "openrouter.enabled"), !openRouterModel.isEmpty,
            recording.llmProcessedAt == nil {
             steps.append(.summary)
+        }
+
+        let formatModel = defaults.string(forKey: "openrouter.formatModel") ?? ""
+        if defaults.bool(forKey: "openrouter.formatEnabled"), !formatModel.isEmpty,
+           recording.formattingProcessedAt == nil {
+            steps.append(.format)
         }
 
         let notionEnabled = defaults.bool(forKey: "notion.enabled")

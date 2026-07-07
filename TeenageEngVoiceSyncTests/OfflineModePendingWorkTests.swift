@@ -20,6 +20,7 @@ final class OfflineModePendingWorkTests: XCTestCase {
         "s3.enabled", "s3.bucket", "s3.backupAfterTranscription",
         "localaudio.enabled", "localaudio.folderPath",
         "transcription.provider", "openrouter.enabled", "openrouter.model",
+        "openrouter.formatEnabled", "openrouter.formatModel",
         "notion.enabled", "notion.databaseId",
         "markdown.enabled", "applenotes.enabled",
     ]
