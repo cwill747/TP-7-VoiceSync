@@ -82,14 +82,14 @@ final class OfflineModePendingWorkTests: XCTestCase {
     }
 
     @MainActor
-    func testLocalStoragePrecludesS3() throws {
+    func testLocalStorageDoesNotPrecludeS3() throws {
         UserDefaults.standard.set(true, forKey: "s3.enabled")
         UserDefaults.standard.set("my-bucket", forKey: "s3.bucket")
         UserDefaults.standard.set(true, forKey: "localaudio.enabled")
         UserDefaults.standard.set("/tmp/audio", forKey: "localaudio.folderPath")
 
         let recording = try makeRecording()
-        XCTAssertFalse(SyncService.needsS3Upload(recording))
+        XCTAssertTrue(SyncService.needsS3Upload(recording), "S3 and local storage run independently, so enabling local storage no longer skips S3")
     }
 
     @MainActor
