@@ -14,10 +14,19 @@ struct AdvancedSettingsView: View {
     @State private var promptText = ""
     @State private var saveStatus: SaveStatus?
     @State private var showReprocessConfirm = false
-    @State private var reprocessCompleted = false
+    @State private var reprocessResult: ReprocessResult?
 
     enum SaveStatus {
         case success
+    }
+
+    /// Outcome of a finished reprocess pass. `reconcilePendingWork` swallows
+    /// per-recording delivery errors (e.g. missing credentials), so success is
+    /// judged by whether the pending count actually reached zero afterwards —
+    /// not merely by the pass returning.
+    enum ReprocessResult {
+        case done
+        case partial(remaining: Int)
     }
 
     var body: some View {
@@ -44,15 +53,7 @@ struct AdvancedSettingsView: View {
 
                     Spacer()
 
-                    if appState.isOffline {
-                        Label("Offline", systemImage: "wifi.slash")
-                            .foregroundStyle(.secondary)
-                            .font(.caption)
-                    } else if reprocessCompleted {
-                        Label("Done", systemImage: "checkmark.circle.fill")
-                            .foregroundStyle(.green)
-                            .font(.caption)
-                    }
+                    reprocessStatusLabel
                 }
             }
 
@@ -145,11 +146,14 @@ struct AdvancedSettingsView: View {
         ) {
             Button(reprocessButtonTitle) {
                 Task {
-                    reprocessCompleted = false
+                    reprocessResult = nil
                     await appState.reprocessAllRecordings()
-                    reprocessCompleted = true
-                    try? await Task.sleep(for: .seconds(3))
-                    reprocessCompleted = false
+                    // A completed pass leaves anything it couldn't deliver in the
+                    // pending count; only report "Done" when it actually hit zero.
+                    let remaining = appState.pendingRemoteCount
+                    reprocessResult = remaining == 0 ? .done : .partial(remaining: remaining)
+                    try? await Task.sleep(for: .seconds(4))
+                    reprocessResult = nil
                 }
             }
             Button("Cancel", role: .cancel) {}
@@ -162,6 +166,27 @@ struct AdvancedSettingsView: View {
         let count = appState.pendingRemoteCount
         if count == 0 { return "Nothing to Reprocess" }
         return "Reprocess \(count) Recording\(count == 1 ? "" : "s")"
+    }
+
+    @ViewBuilder
+    private var reprocessStatusLabel: some View {
+        if appState.isOffline {
+            Label("Offline", systemImage: "wifi.slash")
+                .foregroundStyle(.secondary)
+                .font(.caption)
+        } else if let result = reprocessResult {
+            switch result {
+            case .done:
+                Label("Done", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                    .font(.caption)
+            case .partial(let remaining):
+                Label("\(remaining) still pending", systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                    .font(.caption)
+                    .help("Some recordings couldn't be delivered — check that the destination credentials are configured, then try again.")
+            }
+        }
     }
 }
 
