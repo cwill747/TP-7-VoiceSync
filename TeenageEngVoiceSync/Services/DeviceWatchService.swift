@@ -31,6 +31,8 @@ final class DeviceWatchService {
     private(set) var isConnected = false
     private(set) var currentDeviceSerial: String?
     private(set) var recordingsPath: String?
+    private(set) var isDownloading = false
+    private(set) var downloadingCount = 0
 
     private var watchTask: Task<Void, Never>?
     private var session: TP7MTPSession?
@@ -121,6 +123,12 @@ final class DeviceWatchService {
         guard !newFiles.isEmpty else { return true }
 
         var downloaded: [DownloadedRecording] = []
+        isDownloading = true
+        downloadingCount = newFiles.count
+        defer {
+            isDownloading = false
+            downloadingCount = 0
+        }
 
         for file in newFiles {
             let key = Self.trackingKey(for: file)

@@ -70,13 +70,20 @@ struct RecordingRow: View {
     @ViewBuilder
     private var statusBadge: some View {
         if recording.transcriptionStatus == .processing {
-            ProgressView()
-                .scaleEffect(0.6)
-        } else if SyncService.hasPendingRemoteWork(recording) {
-            Image(systemName: "icloud.slash")
+            Image(systemName: "text.bubble")
                 .foregroundStyle(.orange)
                 .font(.caption)
-                .help("Waiting for connection to finish uploading")
+                .help("Transcribing")
+        } else if recording.transcriptionStatus == .pending {
+            Image(systemName: "clock")
+                .foregroundStyle(.orange)
+                .font(.caption)
+                .help("Waiting to transcribe")
+        } else if let step = SyncService.remainingRemoteSteps(for: recording).first {
+            Image(systemName: step.systemImage)
+                .foregroundStyle(.orange)
+                .font(.caption)
+                .help(step.shortStatus)
         } else if recording.isTranscribed {
             Image(systemName: "text.bubble.fill")
                 .foregroundStyle(.green)

@@ -10,12 +10,41 @@ import os
 import SwiftData
 import Observation
 
+enum ProcessingActivity: Equatable {
+    case processingDeviceFiles
+    case uploading
+    case transcribing
+    case delivering
+    case reconciling
+
+    var statusText: String {
+        switch self {
+        case .processingDeviceFiles: return "Processing device recordings..."
+        case .uploading: return "Uploading..."
+        case .transcribing: return "Transcribing..."
+        case .delivering: return "Delivering..."
+        case .reconciling: return "Finishing pending work..."
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .processingDeviceFiles: return "gearshape.2"
+        case .uploading: return "icloud.and.arrow.up"
+        case .transcribing: return "text.bubble"
+        case .delivering: return "square.and.arrow.up"
+        case .reconciling: return "arrow.triangle.2.circlepath"
+        }
+    }
+}
+
 @Observable
 @MainActor
 final class SyncService {
     private(set) var isSyncing = false
     private(set) var pendingCount = 0
     private(set) var lastError: String?
+    private(set) var processingActivity: ProcessingActivity?
 
     /// Number of recordings with deferred remote work (upload/summary/notion/note)
     /// still pending — surfaced in the UI as "N waiting".
@@ -480,6 +509,9 @@ final class SyncService {
         }
 
         let provider = transcriptionProviderKind ?? .elevenLabs
+        let previousActivity = processingActivity
+        processingActivity = .transcribing
+        defer { processingActivity = previousActivity }
         recording.transcriptionStatus = .processing
 
         do {
@@ -788,6 +820,9 @@ final class SyncService {
         guard !paths.isEmpty else { return }
 
         isSyncing = true
+        let previousActivity = processingActivity
+        processingActivity = .processingDeviceFiles
+        defer { processingActivity = previousActivity }
         pendingCount = await debouncer.pendingCount
 
         if UserDefaults.standard.bool(forKey: "notify.onSync") {
@@ -1042,6 +1077,9 @@ final class SyncService {
             AppLogger.sync.debug("Deferred S3 upload skipped: no local audio for \(recording.filename, privacy: .private)")
             return
         }
+        let previousActivity = processingActivity
+        processingActivity = .uploading
+        defer { processingActivity = previousActivity }
         do {
             let result = try await s3.upload(fileURL: URL(fileURLWithPath: recording.localPath))
             recording.s3Key = result.s3Key
@@ -1220,6 +1258,9 @@ final class SyncService {
             return nil
         }
 
+        let previousActivity = processingActivity
+        processingActivity = .transcribing
+        defer { processingActivity = previousActivity }
         recording.transcriptionStatus = .processing
         AppLogger.sync.info("Starting transcription for \(recording.filename, privacy: .private) (provider=\(provider.shortName))")
 
@@ -1549,6 +1590,9 @@ final class SyncService {
             return
         }
 
+        let previousActivity = processingActivity
+        processingActivity = .delivering
+        defer { processingActivity = previousActivity }
         if Self.needsS3Upload(recording) {
             await uploadToS3IfPossible(recording)
             guard !Self.needsS3Upload(recording) else {
@@ -1623,7 +1667,12 @@ final class SyncService {
     func reconcilePendingWork() async {
         guard reachability.isOnline, !isReconciling else { return }
         isReconciling = true
-        defer { isReconciling = false }
+        let previousActivity = processingActivity
+        processingActivity = .reconciling
+        defer {
+            processingActivity = previousActivity
+            isReconciling = false
+        }
 
         let descriptor = FetchDescriptor<Recording>(predicate: #Predicate { $0.deletedAt == nil })
         guard let recordings = try? modelContext.fetch(descriptor) else { return }
@@ -1945,6 +1994,26 @@ extension SyncService {
         case format   // LLM transcript cleanup
         case notion   // Notion page
         case note     // Markdown / Apple note
+
+        var systemImage: String {
+            switch self {
+            case .s3: return "icloud.and.arrow.up"
+            case .summary: return "sparkles"
+            case .format: return "text.alignleft"
+            case .notion: return "square.and.arrow.up"
+            case .note: return "note.text"
+            }
+        }
+
+        var shortStatus: String {
+            switch self {
+            case .s3: return "Uploading audio"
+            case .summary: return "Generating summary"
+            case .format: return "Cleaning transcript"
+            case .notion: return "Sending to Notion"
+            case .note: return "Creating note"
+            }
+        }
     }
 
     /// Whether a recording still needs its audio uploaded to S3, mirroring the
