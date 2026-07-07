@@ -214,7 +214,63 @@ actor NotionService {
 
     /// Creates a Notion page for a transcription. Signature parallels
     /// AppleNotesService.createTranscriptionNote for symmetric wiring.
+    /// Creates a new transcription page and returns its Notion page ID (store it
+    /// so the page can later be updated in place via `updateTranscriptionNote`).
+    @discardableResult
     func createTranscriptionNote(
+        transcription: String,
+        filename: String,
+        tpDeviceFilename: String? = nil,
+        recordedAt: Date,
+        fileSize: Int64,
+        duration: TimeInterval? = nil,
+        language: String,
+        playURL: String,
+        downloadURL: String,
+        customTitle: String? = nil,
+        summary: String? = nil,
+        overdubNotes: [OverdubNote]? = nil
+    ) async throws -> String {
+        guard !apiKey.isEmpty, !databaseId.isEmpty else {
+            throw NotionError.notConfigured
+        }
+
+        let content = buildNoteContent(
+            transcription: transcription, filename: filename, tpDeviceFilename: tpDeviceFilename,
+            recordedAt: recordedAt, fileSize: fileSize, duration: duration, language: language,
+            playURL: playURL, downloadURL: downloadURL, customTitle: customTitle,
+            summary: summary, overdubNotes: overdubNotes
+        )
+
+        // Notion caps children at 100 blocks per create call.
+        let firstBatch = Array(content.children.prefix(100))
+        let overflow = Array(content.children.dropFirst(100))
+
+        let payload: [String: Any] = [
+            "parent": ["database_id": databaseId],
+            "properties": content.properties,
+            "children": firstBatch
+        ]
+
+        let pageId = try await createPage(payload)
+
+        // Append any overflow blocks in batches of 100.
+        var remaining = overflow
+        while !remaining.isEmpty {
+            let batch = Array(remaining.prefix(100))
+            remaining = Array(remaining.dropFirst(100))
+            try await appendChildren(pageId: pageId, blocks: batch)
+        }
+        return pageId
+    }
+
+    /// Updates an existing transcription page in place: rewrites its properties
+    /// and fully replaces its body blocks. Used by re-delivery (e.g. after a
+    /// retranscribe) so the transcript is refreshed without leaving a duplicate
+    /// page behind. Notion has no "replace all children" call, so the existing
+    /// body blocks are deleted (archived) and the new ones appended.
+    func updateTranscriptionNote(
+        pageId: String,
         transcription: String,
         filename: String,
         tpDeviceFilename: String? = nil,
@@ -231,7 +287,46 @@ actor NotionService {
         guard !apiKey.isEmpty, !databaseId.isEmpty else {
             throw NotionError.notConfigured
         }
+        guard !pageId.isEmpty else { throw NotionError.invalidResponse }
 
+        let content = buildNoteContent(
+            transcription: transcription, filename: filename, tpDeviceFilename: tpDeviceFilename,
+            recordedAt: recordedAt, fileSize: fileSize, duration: duration, language: language,
+            playURL: playURL, downloadURL: downloadURL, customTitle: customTitle,
+            summary: summary, overdubNotes: overdubNotes
+        )
+
+        try await updatePageProperties(pageId: pageId, properties: content.properties)
+
+        // Clear the old body, then re-append the freshly built blocks (batched
+        // at Notion's 100-per-call cap).
+        for blockId in try await fetchChildBlockIDs(pageId: pageId) {
+            try await deleteBlock(blockId: blockId)
+        }
+        var remaining = content.children
+        while !remaining.isEmpty {
+            let batch = Array(remaining.prefix(100))
+            remaining = Array(remaining.dropFirst(100))
+            try await appendChildren(pageId: pageId, blocks: batch)
+        }
+    }
+
+    /// Builds the property map and body blocks shared by create + update, so the
+    /// two paths always produce identical page content.
+    private func buildNoteContent(
+        transcription: String,
+        filename: String,
+        tpDeviceFilename: String?,
+        recordedAt: Date,
+        fileSize: Int64,
+        duration: TimeInterval?,
+        language: String,
+        playURL: String,
+        downloadURL: String,
+        customTitle: String?,
+        summary: String?,
+        overdubNotes: [OverdubNote]?
+    ) -> (properties: [String: Any], children: [[String: Any]]) {
         let title = customTitle
             ?? "TP-7 Recording - \(recordedAt.formatted(.dateTime.month(.wide).day().year()))"
         let tpFilename = tpDeviceFilename ?? filename
@@ -298,25 +393,7 @@ actor NotionService {
             children.append(bookmarkBlock(downloadURL))
         }
 
-        // Notion caps children at 100 blocks per create call.
-        let firstBatch = Array(children.prefix(100))
-        let overflow = Array(children.dropFirst(100))
-
-        let payload: [String: Any] = [
-            "parent": ["database_id": databaseId],
-            "properties": properties,
-            "children": firstBatch
-        ]
-
-        let pageId = try await createPage(payload)
-
-        // Append any overflow blocks in batches of 100.
-        var remaining = overflow
-        while !remaining.isEmpty {
-            let batch = Array(remaining.prefix(100))
-            remaining = Array(remaining.dropFirst(100))
-            try await appendChildren(pageId: pageId, blocks: batch)
-        }
+        return (properties, children)
     }
 
     /// Queries all pages in the database, returning recording metadata for
@@ -513,6 +590,68 @@ actor NotionService {
         request.setValue(notionVersion, forHTTPHeaderField: "Notion-Version")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: ["children": blocks])
+
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw NotionError.invalidResponse }
+        guard (200...299).contains(http.statusCode) else {
+            throw NotionError.apiError(statusCode: http.statusCode, message: Self.message(from: data))
+        }
+    }
+
+    /// PATCHes a page's properties (title/date/filename/etc.). Body blocks are
+    /// updated separately — this call only touches the database properties.
+    private func updatePageProperties(pageId: String, properties: [String: Any]) async throws {
+        var request = URLRequest(url: URL(string: "https://api.notion.com/v1/pages/\(pageId)")!)
+        request.httpMethod = "PATCH"
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue(notionVersion, forHTTPHeaderField: "Notion-Version")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["properties": properties])
+
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw NotionError.invalidResponse }
+        guard (200...299).contains(http.statusCode) else {
+            throw NotionError.apiError(statusCode: http.statusCode, message: Self.message(from: data))
+        }
+    }
+
+    /// Returns the IDs of a page's direct child blocks (its body), paging through
+    /// all results. Used to clear the body before rewriting it on update.
+    private func fetchChildBlockIDs(pageId: String) async throws -> [String] {
+        var ids: [String] = []
+        var startCursor: String?
+
+        repeat {
+            var urlString = "https://api.notion.com/v1/blocks/\(pageId)/children?page_size=100"
+            if let cursor = startCursor {
+                urlString += "&start_cursor=\(cursor)"
+            }
+            var request = URLRequest(url: URL(string: urlString)!)
+            request.httpMethod = "GET"
+            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+            request.setValue(notionVersion, forHTTPHeaderField: "Notion-Version")
+
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse else { throw NotionError.invalidResponse }
+            guard (200...299).contains(http.statusCode) else {
+                throw NotionError.apiError(statusCode: http.statusCode, message: Self.message(from: data))
+            }
+            let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+            let results = json?["results"] as? [[String: Any]] ?? []
+            ids.append(contentsOf: results.compactMap { $0["id"] as? String })
+            startCursor = (json?["has_more"] as? Bool == true) ? json?["next_cursor"] as? String : nil
+        } while startCursor != nil
+
+        return ids
+    }
+
+    /// Archives (deletes) a single block. Notion's `DELETE /v1/blocks/{id}` moves
+    /// the block to trash rather than hard-deleting it.
+    private func deleteBlock(blockId: String) async throws {
+        var request = URLRequest(url: URL(string: "https://api.notion.com/v1/blocks/\(blockId)")!)
+        request.httpMethod = "DELETE"
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue(notionVersion, forHTTPHeaderField: "Notion-Version")
 
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw NotionError.invalidResponse }
