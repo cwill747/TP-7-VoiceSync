@@ -233,10 +233,33 @@ struct RecordingDetailView: View {
                     if let segData = recording.speakerSegmentsData,
                        let segments = try? JSONDecoder().decode([StoredSpeakerSegment].self, from: segData),
                        !segments.isEmpty {
-                        DiarizedTranscriptView(
-                            recording: recording,
-                            segments: segments
-                        )
+                        if let cleaned = recording.formattedTranscriptionText {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Picker("Transcript", selection: $showRawTranscript) {
+                                    Text("Cleaned up").tag(false)
+                                    Text("Original").tag(true)
+                                }
+                                .pickerStyle(.segmented)
+                                .frame(maxWidth: 220)
+
+                                if showRawTranscript {
+                                    DiarizedTranscriptView(
+                                        recording: recording,
+                                        segments: segments
+                                    )
+                                } else {
+                                    PlainTranscriptView(
+                                        text: cleaned,
+                                        language: recording.transcriptionLanguage
+                                    )
+                                }
+                            }
+                        } else {
+                            DiarizedTranscriptView(
+                                recording: recording,
+                                segments: segments
+                            )
+                        }
                     } else if let cleaned = recording.formattedTranscriptionText {
                         VStack(alignment: .leading, spacing: 6) {
                             Picker("Transcript", selection: $showRawTranscript) {

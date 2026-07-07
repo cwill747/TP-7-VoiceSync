@@ -85,6 +85,12 @@ actor OpenRouterService {
         Return ONLY the corrected transcription text, with no preamble or quotation marks.
         """
 
+    static let speakerFormattingInstructions = [
+        "Preserve every speaker label exactly as written, including the colon (for example, \"Speaker 1:\" or \"Alex:\").",
+        "Do NOT merge speaker turns, reorder turns, rename speakers, or move words from one speaker to another.",
+        "Clean only the spoken text after each speaker label. If you split a speaker's turn into paragraphs or bullets, keep that content under the same speaker label."
+    ]
+
     init() {
         let config = URLSessionConfiguration.default
         // Formatting a long transcript can generate a lot of tokens, so allow
@@ -225,11 +231,11 @@ actor OpenRouterService {
             throw OpenRouterError.emptyTranscription
         }
 
-        let promptTemplate = (customPrompt?.isEmpty == false) ? customPrompt! : Self.defaultFormattingPrompt
-        let extraInstructions = options.instructions
-        let promptBody = extraInstructions.isEmpty
-            ? promptTemplate
-            : promptTemplate + "\n\nAdditional formatting instructions:\n" + extraInstructions.map { "- \($0)" }.joined(separator: "\n")
+        let promptBody = Self.formattingPromptBody(
+            transcription: transcription,
+            customPrompt: customPrompt,
+            options: options
+        )
         let prompt = """
         \(promptBody)
 
@@ -276,6 +282,54 @@ actor OpenRouterService {
         }
 
         return Self.stripPreamble(content.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    static func formattingPromptBody(
+        transcription: String,
+        customPrompt: String? = nil,
+        options: TranscriptFormatOptions = TranscriptFormatOptions()
+    ) -> String {
+        let promptTemplate = (customPrompt?.isEmpty == false) ? customPrompt! : Self.defaultFormattingPrompt
+        var extraInstructions = options.instructions
+        if containsSpeakerLabels(transcription) {
+            extraInstructions.append(contentsOf: speakerFormattingInstructions)
+        }
+
+        guard !extraInstructions.isEmpty else { return promptTemplate }
+        return promptTemplate
+            + "\n\nAdditional formatting instructions:\n"
+            + extraInstructions.map { "- \($0)" }.joined(separator: "\n")
+    }
+
+    static func containsSpeakerLabels(_ transcription: String) -> Bool {
+        let lines = transcription.components(separatedBy: .newlines)
+        var labels = Set<String>()
+
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard let colonIndex = trimmed.firstIndex(of: ":") else { continue }
+
+            let label = String(trimmed[..<colonIndex]).trimmingCharacters(in: .whitespaces)
+            let remainder = trimmed[trimmed.index(after: colonIndex)...].trimmingCharacters(in: .whitespaces)
+            guard !label.isEmpty, !remainder.isEmpty, label.count <= 60 else { continue }
+            guard label.range(of: #"^[\p{L}\p{N}][\p{L}\p{N} _.'-]*$"#, options: .regularExpression) != nil else { continue }
+
+            if label.range(of: #"(?i)^speaker[\s_-]*[[:alnum:]]+$"#, options: .regularExpression) != nil {
+                return true
+            }
+            let normalizedLabel = label.lowercased()
+            let ordinaryHeadings: Set<String> = [
+                "action item", "action items", "agenda", "date", "duration",
+                "file", "filename", "language", "note", "notes", "summary",
+                "title", "transcript", "transcription"
+            ]
+            guard !ordinaryHeadings.contains(normalizedLabel) else { continue }
+
+            labels.insert(normalizedLabel)
+            if labels.count >= 2 { return true }
+        }
+
+        return false
     }
 
     /// Some models ignore the "no preamble" instruction and prefix the output
