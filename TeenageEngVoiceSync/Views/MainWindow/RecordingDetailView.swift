@@ -516,6 +516,12 @@ struct DiarizedTranscriptView: View {
             .joined(separator: "\n\n")
         recording.updatedAt = Date()
         try? modelContext.save()
+
+        // Propagate the relabeled transcript to the recording's Notion page in
+        // place, so reassigning speakers (or merging two tracks onto one
+        // speaker) is reflected without spawning a duplicate page.
+        let edited = recording
+        Task { await appState.syncService?.refreshNotionForEditedTranscript(edited) }
     }
 }
 

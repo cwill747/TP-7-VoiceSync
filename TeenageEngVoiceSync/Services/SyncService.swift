@@ -344,6 +344,7 @@ final class SyncService {
                     recordedAt: page.recordedAt ?? Date()
                 )
                 recording.notionPageCreatedAt = Date()
+                recording.notionPageId = page.pageId.isEmpty ? nil : page.pageId
                 recording.transcriptionText = transcript
                 recording.transcriptionStatus = .completed
                 recording.transcribedAt = Date()
@@ -412,6 +413,14 @@ final class SyncService {
 
         if recording.notionPageCreatedAt == nil {
             recording.notionPageCreatedAt = Date()
+            changed = true
+        }
+
+        // Backfill the page ID so a later retranscribe updates this existing page
+        // in place instead of creating a duplicate (pre-existing pages predate the
+        // notionPageId field).
+        if recording.notionPageId == nil, !page.pageId.isEmpty {
+            recording.notionPageId = page.pageId
             changed = true
         }
 
@@ -487,7 +496,7 @@ final class SyncService {
                 guard let audio = await resolveLocalAudioPath(for: recording) else {
                     throw SyncTranscriptionError.noAudioSource
                 }
-                defer { audio.tempURL.map { try? FileManager.default.removeItem(at: $0) } }
+                defer { audio.cleanup?() }
                 result = try await transcribeLocal(transcriber, path: audio.path, recording: recording)
             }
 
@@ -510,7 +519,8 @@ final class SyncService {
             }
 
             // Reset note + summary tracking so retranscription regenerates them
-            // from the new transcript.
+            // from the new transcript. notionPageId is deliberately kept so the
+            // existing Notion page is updated in place rather than duplicated.
             recording.appleNoteCreatedAt = nil
             recording.notionPageCreatedAt = nil
             recording.llmProcessedAt = nil
@@ -1006,19 +1016,35 @@ final class SyncService {
         }
     }
 
-    /// Resolves an on-disk audio path for local transcription providers. Prefers
-    /// an existing local copy or device file; otherwise downloads the S3 object to
-    /// a temp file — this is what makes recordings restored by startup recovery
-    /// (which have an `s3Key` but no local audio) transcribable. When `tempURL` is
-    /// non-nil the caller must delete it after use.
-    private func resolveLocalAudioPath(for recording: Recording) async -> (path: String, tempURL: URL?)? {
+    /// Resolves an on-disk audio path for local transcription providers, plus a
+    /// `cleanup` closure the caller must run when done (deletes a temp download
+    /// and/or releases security-scoped access — no-op when neither applies).
+    ///
+    /// Prefers the in-container device cache, which is always readable, over the
+    /// user's configured local-audio copy: that copy can live outside the app
+    /// sandbox (e.g. a synced cloud folder), and opening it without holding the
+    /// folder's security-scoped bookmark fails with `AVAudioFile` error -54. When
+    /// only the external copy exists we start that bookmark for the read. Falls
+    /// back to downloading the S3 object to a temp file (what makes recordings
+    /// restored by startup recovery, with an `s3Key` but no local audio,
+    /// transcribable).
+    private func resolveLocalAudioPath(for recording: Recording) async -> (path: String, cleanup: (() -> Void)?)? {
         let fm = FileManager.default
 
-        if let copy = recording.localCopyPath, fm.fileExists(atPath: copy) {
-            return (copy, nil)
-        }
+        // In-container device cache first — readable without any bookmark.
         if !recording.localPath.isEmpty, fm.fileExists(atPath: recording.localPath) {
             return (recording.localPath, nil)
+        }
+
+        if let copy = recording.localCopyPath, fm.fileExists(atPath: copy) {
+            // The copy may be outside the sandbox; hold the local-audio folder's
+            // security-scoped bookmark for the duration of the read so the open
+            // doesn't fail with error -54.
+            if let folder = SecurityScopedBookmark.resolve(key: "localaudio.folderPath"),
+               folder.startAccessingSecurityScopedResource() {
+                return (copy, { folder.stopAccessingSecurityScopedResource() })
+            }
+            return (copy, nil)
         }
 
         guard let s3Key = recording.s3Key, let s3 = s3Service else { return nil }
@@ -1029,7 +1055,7 @@ final class SyncService {
         do {
             try await s3.download(s3Key: s3Key, to: tmp)
             AppLogger.sync.info("Downloaded S3 audio for transcription: \(recording.filename, privacy: .private)")
-            return (tmp.path, tmp)
+            return (tmp.path, { try? FileManager.default.removeItem(at: tmp) })
         } catch {
             AppLogger.sync.error("Failed to download S3 audio for \(recording.filename, privacy: .private): \(error.localizedDescription, privacy: .public)")
             return nil
@@ -1082,7 +1108,7 @@ final class SyncService {
         // of handing a naive downmix (which would sum the speakers together)
         // to the transcriber.
         if recording.trackCount > 1, recording.sourceFolder == .recordings {
-            return try await transcribeMultiTrackRecording(parakeet, path: path)
+            return try await transcribeMultiTrackRecording(parakeet, path: path, recording: recording)
         }
 
         // A TP-7 /memo file with 2+ tracks is an overdub: track 0 is the base
@@ -1095,20 +1121,32 @@ final class SyncService {
         return try await parakeet.transcribe(localPath: path, forceSingleSpeaker: Self.forceSingleSpeaker(for: recording))
     }
 
-    /// Splits a multi-track /recordings WAV into its N per-speaker tracks and
-    /// transcribes each independently. Falls back to the normal single-track
-    /// path if extraction doesn't actually yield multiple tracks (e.g. stale
-    /// `trackCount` from before the file changed) rather than deleting the
-    /// original audio.
-    private func transcribeMultiTrackRecording(_ parakeet: ParakeetService, path: String) async throws -> TranscriptionResult {
+    /// Splits a multi-track /recordings WAV into its per-speaker tracks and
+    /// transcribes each independently. `extractTracks` drops all-silent track
+    /// slots (the TP-7 pads unused tracks with silence), so a file that's really
+    /// single-track once silence is removed transcribes as one diarized track
+    /// instead of a phantom multi-speaker/overdub split. Writes the corrected
+    /// (non-silent) track count back onto the recording so the UI and future
+    /// routing stop treating the padded slots as real tracks.
+    private func transcribeMultiTrackRecording(_ parakeet: ParakeetService, path: String, recording: Recording) async throws -> TranscriptionResult {
         let tracks = try MultiTrackAudio.extractTracks(from: URL(fileURLWithPath: path))
-        guard tracks.count > 1 else {
-            return try await parakeet.transcribe(localPath: path, forceSingleSpeaker: false)
-        }
         defer {
-            for track in tracks {
+            for track in tracks where track.path != path {
                 try? FileManager.default.removeItem(at: track)
             }
+        }
+
+        if recording.trackCount != tracks.count {
+            recording.trackCount = tracks.count
+            recording.updatedAt = Date()
+            try? modelContext.save()
+        }
+
+        // Only genuinely multi-track audio goes through per-track transcription;
+        // a single surviving track (incl. a 2-or-fewer-channel file that
+        // extractTracks returns unchanged) is a normal single-track recording.
+        guard tracks.count > 1 else {
+            return try await parakeet.transcribe(localPath: tracks.first?.path ?? path, forceSingleSpeaker: false)
         }
         return try await parakeet.transcribeMultiTrack(trackPaths: tracks.map(\.path))
     }
@@ -1166,7 +1204,7 @@ final class SyncService {
                 guard let audio = await resolveLocalAudioPath(for: recording) else {
                     throw SyncTranscriptionError.noAudioSource
                 }
-                defer { audio.tempURL.map { try? FileManager.default.removeItem(at: $0) } }
+                defer { audio.cleanup?() }
                 result = try await transcribeLocal(transcriber, path: audio.path, recording: recording)
                 AppLogger.sync.debug("Transcribed locally with \(provider.shortName)")
             }
@@ -1202,8 +1240,15 @@ final class SyncService {
         }
     }
 
-    private func createNotionPage(for recording: Recording, transcription: TranscriptionResult) async {
-        guard recording.notionPageCreatedAt == nil else { return }
+    /// Delivers a recording's transcript to Notion. Creates a page on first
+    /// delivery; on later calls it updates the existing page in place when its
+    /// ID is known. `forceUpdate` lets an explicit edit (e.g. a speaker
+    /// reassignment) refresh an already-delivered page; without it, an
+    /// already-delivered recording is skipped so reconciliation doesn't re-push.
+    private func createNotionPage(for recording: Recording, transcription: TranscriptionResult, forceUpdate: Bool = false) async {
+        if recording.notionPageCreatedAt != nil {
+            guard forceUpdate, recording.notionPageId != nil else { return }
+        }
         guard UserDefaults.standard.bool(forKey: "notion.enabled") else { return }
 
         let databaseId = UserDefaults.standard.string(forKey: "notion.databaseId") ?? ""
@@ -1228,28 +1273,90 @@ final class SyncService {
 
         let service = NotionService(apiKey: apiKey, databaseId: databaseId, props: .loadStored())
         do {
-            try await service.createTranscriptionNote(
-                transcription: transcription.text,
-                filename: recording.filename,
-                tpDeviceFilename: recording.filename,
-                recordedAt: recording.recordedAt,
-                fileSize: recording.fileSize,
-                duration: recording.duration,
-                language: transcription.languageCode,
-                playURL: playURLString,
-                downloadURL: downloadURLString,
-                customTitle: recording.llmTitle,
-                summary: recording.llmSummary,
-                overdubNotes: transcription.overdubNotes
-            )
+            // Update the existing page in place when we know its ID (e.g. after a
+            // retranscribe, which resets notionPageCreatedAt to re-trigger delivery
+            // but keeps the page ID), otherwise create a fresh page and record its
+            // ID for next time.
+            if let pageId = recording.notionPageId {
+                try await service.updateTranscriptionNote(
+                    pageId: pageId,
+                    transcription: transcription.text,
+                    filename: recording.filename,
+                    tpDeviceFilename: recording.filename,
+                    recordedAt: recording.recordedAt,
+                    fileSize: recording.fileSize,
+                    duration: recording.duration,
+                    language: transcription.languageCode,
+                    playURL: playURLString,
+                    downloadURL: downloadURLString,
+                    customTitle: recording.llmTitle,
+                    summary: recording.llmSummary,
+                    overdubNotes: transcription.overdubNotes
+                )
+                AppLogger.notes.info("Updated Notion page in place for \(recording.filename, privacy: .private)")
+            } else {
+                let pageId = try await service.createTranscriptionNote(
+                    transcription: transcription.text,
+                    filename: recording.filename,
+                    tpDeviceFilename: recording.filename,
+                    recordedAt: recording.recordedAt,
+                    fileSize: recording.fileSize,
+                    duration: recording.duration,
+                    language: transcription.languageCode,
+                    playURL: playURLString,
+                    downloadURL: downloadURLString,
+                    customTitle: recording.llmTitle,
+                    summary: recording.llmSummary,
+                    overdubNotes: transcription.overdubNotes
+                )
+                recording.notionPageId = pageId.isEmpty ? nil : pageId
+                AppLogger.notes.info("Created Notion page for \(recording.filename, privacy: .private)")
+            }
             recording.notionPageCreatedAt = Date()
             recording.updatedAt = Date()
             try? modelContext.save()
-            AppLogger.notes.info("Created Notion page for \(recording.filename, privacy: .private)")
         } catch {
             AppLogger.notes.error("Notion delivery failed: \(error.localizedDescription, privacy: .public)")
             lastError = "Notion: \(error.localizedDescription)"
         }
+    }
+
+    /// Re-pushes a recording's current transcript to its existing Notion page
+    /// after an in-app edit (e.g. reassigning a speaker, or assigning the same
+    /// speaker to two tracks). Updates the page in place — no new page, and no
+    /// LLM summary/title regeneration, since only the transcript body changed.
+    /// When offline, clears the delivered marker so reconciliation refreshes the
+    /// page (still in place, via the retained page ID) once back online.
+    func refreshNotionForEditedTranscript(_ recording: Recording) async {
+        guard UserDefaults.standard.bool(forKey: "notion.enabled"),
+              recording.notionPageId != nil,
+              recording.transcriptionStatus == .completed,
+              let text = recording.transcriptionText else { return }
+
+        var overdubNotes: [OverdubNote]?
+        if let data = recording.overdubNotesData {
+            overdubNotes = try? JSONDecoder().decode([OverdubNote].self, from: data)
+        }
+        let transcription = TranscriptionResult(
+            text: text,
+            languageCode: recording.transcriptionLanguage ?? "en",
+            languageProbability: nil,
+            transcriptionId: nil,
+            words: nil,
+            speakerSegments: nil,
+            overdubNotes: overdubNotes
+        )
+
+        guard reachability.isOnline else {
+            recording.notionPageCreatedAt = nil
+            recording.updatedAt = Date()
+            try? modelContext.save()
+            await refreshPendingCount()
+            AppLogger.notes.info("Offline: deferring Notion refresh for edited \(recording.filename, privacy: .private)")
+            return
+        }
+
+        await createNotionPage(for: recording, transcription: transcription, forceUpdate: true)
     }
 
     private func createAppleNote(for recording: Recording, transcription: TranscriptionResult) async {

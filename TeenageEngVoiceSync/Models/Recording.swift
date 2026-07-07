@@ -54,6 +54,11 @@ final class Recording {
 
     // Notion integration
     var notionPageCreatedAt: Date?
+    /// Notion page ID for this recording's transcription page, captured when the
+    /// page is first created. Lets re-delivery (e.g. after a retranscribe) update
+    /// that page in place instead of appending a duplicate. Backfilled for
+    /// pre-existing pages during Notion recovery. Nil until a page exists.
+    var notionPageId: String?
 
     // Diarization output — JSON-encoded [StoredSpeakerSegment]
     var speakerSegmentsData: Data?
