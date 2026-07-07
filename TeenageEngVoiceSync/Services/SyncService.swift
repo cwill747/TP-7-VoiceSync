@@ -697,6 +697,24 @@ final class SyncService {
         if UserDefaults.standard.bool(forKey: "notify.onConnect") {
             await notificationService.deviceConnected(serial)
         }
+
+        await retryPendingDeviceDeletes(forDeviceSerial: serial)
+    }
+
+    /// Finishes device-deletion for recordings that fully completed processing
+    /// while this TP-7 was disconnected. Doesn't depend on network reachability
+    /// (only on the MTP connection that just came up), so it's called directly
+    /// on connect rather than folded into `reconcilePendingWork`.
+    private func retryPendingDeviceDeletes(forDeviceSerial serial: String) async {
+        guard UserDefaults.standard.bool(forKey: "devicewatch.deleteAfterProcessing") else { return }
+        let descriptor = FetchDescriptor<Recording>(predicate: #Predicate { $0.deletedAt == nil })
+        guard let recordings = try? modelContext.fetch(descriptor) else { return }
+
+        for recording in recordings where recording.deviceSerial == serial
+            && recording.transcriptionStatus == .completed
+            && recording.deletedFromDeviceAt == nil {
+            await deleteFromDeviceIfConfigured(recording)
+        }
     }
 
     private func updateDeviceWatch(enabled: Bool) async {
@@ -1554,7 +1572,13 @@ final class SyncService {
         guard recording.deletedAt == nil, recording.deletedFromDeviceAt == nil else { return }
         guard recording.transcriptionStatus == .completed else { return }
         guard Self.remainingRemoteSteps(for: recording).isEmpty else { return }
-        guard deviceWatch.isConnected else { return }
+        // TP-7 filenames (e.g. "0001.wav") aren't globally unique across
+        // devices, so only delete when the currently connected device is the
+        // same one this recording came from — otherwise a different TP-7
+        // could have an unrelated file at that same folder/name deleted.
+        guard let recordingSerial = recording.deviceSerial,
+              let connectedSerial = deviceWatch.currentDeviceSerial,
+              recordingSerial == connectedSerial else { return }
 
         let folder = (recording.sourceFolder ?? .recordings).rawValue
         let deviceFilename = recording.deviceFilename ?? recording.filename
