@@ -510,10 +510,13 @@ final class SyncService {
             }
 
             // Reset note + summary tracking so retranscription regenerates them
-            // from the new transcript.
+            // from the new transcript. Also drop the cleaned transcript so the
+            // note/Notion paths don't publish text derived from the old ASR run.
             recording.appleNoteCreatedAt = nil
             recording.notionPageCreatedAt = nil
             recording.llmProcessedAt = nil
+            recording.formattedTranscriptionText = nil
+            recording.formattingProcessedAt = nil
 
             // Regenerate summary/notes via deliverRemote so the Work Offline
             // guard is honoured; reconciliation finishes deferred steps later.
@@ -1399,7 +1402,19 @@ final class SyncService {
             }
         }
         await generateAndStoreSummary(for: recording, text: transcription.text)
+
         await formatTranscriptionIfEnabled(for: recording, text: transcription.text)
+        // If cleanup is configured but hasn't succeeded yet (e.g. a transient
+        // OpenRouter failure), defer note/Notion delivery. Those steps set their
+        // own "created" timestamps and are never revisited, so publishing now
+        // would permanently ship the raw transcript instead of the cleaned one.
+        // Reconciliation retries the cleanup, then finishes delivery.
+        guard !Self.remainingRemoteSteps(for: recording).contains(.format) else {
+            AppLogger.sync.info("Deferring note/Notion delivery until transcript cleanup completes for \(recording.filename, privacy: .private)")
+            await refreshPendingCount()
+            return
+        }
+
         await createNotionPage(for: recording, transcription: transcription)
         await createAppleNote(for: recording, transcription: transcription)
         await refreshPendingCount()
@@ -1501,20 +1516,30 @@ final class SyncService {
         }
     }
 
+    /// Outcome of a transcript-cleanup attempt. `skip` means the step can never
+    /// succeed with the current config (no key / no model) so delivery should
+    /// proceed with the raw transcript; `failed` is transient and left pending
+    /// for reconciliation to retry.
+    private enum FormatOutcome {
+        case cleaned(String)
+        case skip
+        case failed
+    }
+
     /// Reformats a transcription via OpenRouter (punctuation + minor correction)
-    /// using a separately-chosen model, returning the cleaned text.
-    private func formatLLMTranscription(_ transcription: String) async -> String? {
+    /// using a separately-chosen model.
+    private func formatLLMTranscription(_ transcription: String) async -> FormatOutcome {
         guard let apiKey = try? await KeychainService.shared.retrieve(for: .openRouterAPIKey),
               !apiKey.isEmpty else {
-            AppLogger.network.debug("OpenRouter API key not configured")
-            return nil
+            AppLogger.network.debug("OpenRouter API key not configured; skipping cleanup")
+            return .skip
         }
 
         // Formatting has its own model choice, independent of titling.
         let model = UserDefaults.standard.string(forKey: "openrouter.formatModel") ?? ""
         guard !model.isEmpty else {
-            AppLogger.network.debug("OpenRouter formatting model not selected")
-            return nil
+            AppLogger.network.debug("OpenRouter formatting model not selected; skipping cleanup")
+            return .skip
         }
 
         AppLogger.network.info("Formatting transcription (model=\(model, privacy: .public))")
@@ -1528,27 +1553,39 @@ final class SyncService {
                 apiKey: apiKey,
                 customPrompt: customPrompt
             )
-            guard !formatted.isEmpty else { return nil }
-            return formatted
+            return formatted.isEmpty ? .failed : .cleaned(formatted)
         } catch {
             AppLogger.network.error("Failed to format transcription: \(error.localizedDescription, privacy: .public)")
-            return nil
+            return .failed
         }
     }
 
     /// Formats and persists the cleaned transcription if enabled and not already
     /// done. Idempotent — safe to call from both the live pipeline and
-    /// reconciliation. The Notion and note steps prefer the formatted text.
+    /// reconciliation. On success (or when the step can't run at all) it stamps
+    /// `formattingProcessedAt` so delivery can proceed; a transient failure
+    /// leaves it unset so reconciliation retries before notes/Notion are built.
+    /// The Notion and note steps prefer the formatted text when present.
     private func formatTranscriptionIfEnabled(for recording: Recording, text: String) async {
         guard recording.formattingProcessedAt == nil else { return }
         guard UserDefaults.standard.bool(forKey: "openrouter.formatEnabled") else { return }
 
-        guard let formatted = await formatLLMTranscription(text) else { return }
-        recording.formattedTranscriptionText = formatted
-        recording.formattingProcessedAt = Date()
-        recording.updatedAt = Date()
-        try? modelContext.save()
-        AppLogger.notes.debug("Stored formatted transcription (\(formatted.count, privacy: .public) chars)")
+        switch await formatLLMTranscription(text) {
+        case .cleaned(let formatted):
+            recording.formattedTranscriptionText = formatted
+            recording.formattingProcessedAt = Date()
+            recording.updatedAt = Date()
+            try? modelContext.save()
+            AppLogger.notes.debug("Stored formatted transcription (\(formatted.count, privacy: .public) chars)")
+        case .skip:
+            // Nothing to store; mark done so downstream delivery isn't blocked.
+            recording.formattingProcessedAt = Date()
+            recording.updatedAt = Date()
+            try? modelContext.save()
+        case .failed:
+            // Leave pending — reconciliation retries the cleanup later.
+            break
+        }
     }
 
     /// Manually send a transcribed recording to Apple Notes
