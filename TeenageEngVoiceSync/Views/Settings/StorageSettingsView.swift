@@ -2,7 +2,7 @@
 //  StorageSettingsView.swift
 //  TeenageEngVoiceSync
 //
-//  Storage configuration: S3 cloud storage OR local folder.
+//  Storage configuration: S3 cloud storage and/or local folder.
 //
 
 import SwiftUI
@@ -47,11 +47,7 @@ struct StorageSettingsView: View {
             // MARK: - S3 Cloud Storage
             Section("S3 Cloud Storage") {
                 Toggle("Enable S3 cloud storage", isOn: $s3Enabled)
-                    .onChange(of: s3Enabled) { _, newValue in
-                        if newValue {
-                            // Disable local storage when S3 is enabled
-                            localAudioEnabled = false
-                        }
+                    .onChange(of: s3Enabled) { _, _ in
                         appState.reloadServices()
                     }
 
@@ -132,11 +128,7 @@ struct StorageSettingsView: View {
             // MARK: - Local Storage
             Section("Local Folder Storage") {
                 Toggle("Save audio files locally", isOn: $localAudioEnabled)
-                    .onChange(of: localAudioEnabled) { _, newValue in
-                        if newValue {
-                            // Disable S3 when local storage is enabled
-                            s3Enabled = false
-                        }
+                    .onChange(of: localAudioEnabled) { _, _ in
                         appState.reloadServices()
                     }
 
@@ -188,8 +180,12 @@ struct StorageSettingsView: View {
             // MARK: - Info
             Section {
                 if !s3Enabled && !localAudioEnabled {
-                    Label("Enable either S3 or local storage to sync recordings", systemImage: "exclamationmark.triangle")
+                    Label("Enable S3 and/or local storage to sync recordings", systemImage: "exclamationmark.triangle")
                         .foregroundStyle(.orange)
+                        .font(.caption)
+                } else if s3Enabled && localAudioEnabled {
+                    Label("Audio files will be uploaded to S3 and saved locally", systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
                         .font(.caption)
                 } else if s3Enabled {
                     Label("Audio files will be uploaded to S3", systemImage: "cloud.fill")

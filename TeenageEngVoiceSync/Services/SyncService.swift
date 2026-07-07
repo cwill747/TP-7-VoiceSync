@@ -959,11 +959,11 @@ final class SyncService {
     private func storeRecording(_ recording: Recording, allowS3Upload: Bool) async -> Bool {
         let sourceURL = URL(fileURLWithPath: recording.localPath)
 
-        // Check if user explicitly chose local storage (takes priority over S3)
         let useLocalStorage = UserDefaults.standard.bool(forKey: "localaudio.enabled")
         let localFolderPath = UserDefaults.standard.string(forKey: "localaudio.folderPath") ?? ""
         AppLogger.sync.debug("Storage check: useLocalStorage=\(useLocalStorage), localFolderPath=\(localFolderPath, privacy: .private), s3Service=\(self.s3Service != nil)")
 
+        var localOk = true
         if useLocalStorage && LocalAudioService.isConfigured {
             do {
                 let destinationURL = try await localAudioService.copyToLocalFolder(sourceURL: sourceURL)
@@ -971,33 +971,37 @@ final class SyncService {
                 recording.updatedAt = Date()
                 try? modelContext.save()
                 AppLogger.sync.info("Copied to local folder: \(recording.filename, privacy: .private)")
-                return true
             } catch {
                 lastError = error.localizedDescription
                 AppLogger.sync.error("Failed to copy to local folder: \(error.localizedDescription, privacy: .public)")
                 await notificationService.storageError("Failed to copy to local folder: \(error.localizedDescription)")
-                return false
+                localOk = false
             }
-        } else if allowS3Upload, s3Service != nil {
+        }
+
+        var s3Ok = true
+        if allowS3Upload, s3Service != nil {
             // Offline: defer the upload (not a failure) so the local phase
             // continues. Reconciliation uploads it once we're back online.
-            guard reachability.isOnline else {
+            if reachability.isOnline {
+                await uploadToS3IfPossible(recording)
+                s3Ok = recording.s3Key != nil
+            } else {
                 AppLogger.sync.info("Offline: deferring S3 upload for \(recording.filename, privacy: .private)")
-                return true
             }
-            await uploadToS3IfPossible(recording)
-            // Deferred backup uploads shouldn't block the pipeline; only a
-            // failure of a *required* upload (no local copy) is fatal here.
-            return recording.s3Key != nil || recording.localCopyPath != nil
-        } else if allowS3Upload {
+        }
+
+        if !useLocalStorage && allowS3Upload && s3Service == nil {
             lastError = "No storage configured (S3 or local folder)"
             AppLogger.sync.error("No storage configured")
             await notificationService.storageError("No storage configured. Please configure S3 or local folder in Settings.")
             return false
-        } else {
-            AppLogger.sync.debug("Skipping S3 upload (backup disabled)")
-            return true
         }
+
+        // Succeed as long as at least one configured destination worked (or is
+        // deferred, e.g. offline S3); only a hard failure on every configured
+        // destination is fatal.
+        return localOk || s3Ok
     }
 
     /// Uploads a recording's local audio to S3 if it hasn't been uploaded yet and
@@ -1862,17 +1866,14 @@ extension SyncService {
     }
 
     /// Whether a recording still needs its audio uploaded to S3, mirroring the
-    /// conditions in `storeRecording`: local-folder storage precludes S3; for
-    /// local ASR providers S3 is opt-in via the backup flag; cloud providers
-    /// always need it.
+    /// conditions in `storeRecording`: S3 and local-folder storage run
+    /// independently, so local storage no longer precludes S3; for local ASR
+    /// providers S3 is opt-in via the backup flag; cloud providers always need it.
     nonisolated static func needsS3Upload(_ recording: Recording) -> Bool {
         guard recording.s3Key == nil else { return false }
         let defaults = UserDefaults.standard
         guard defaults.bool(forKey: "s3.enabled"),
               !(defaults.string(forKey: "s3.bucket") ?? "").isEmpty else { return false }
-        if defaults.bool(forKey: "localaudio.enabled"), LocalAudioService.isConfigured {
-            return false
-        }
         let providerRaw = defaults.string(forKey: "transcription.provider") ?? TranscriptionProviderKind.elevenLabs.rawValue
         let provider = TranscriptionProviderKind(rawValue: providerRaw) ?? .elevenLabs
         let isLocalProvider = provider == .whisperKit || provider == .parakeet
