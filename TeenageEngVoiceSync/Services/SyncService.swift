@@ -963,27 +963,31 @@ final class SyncService {
         let localFolderPath = UserDefaults.standard.string(forKey: "localaudio.folderPath") ?? ""
         AppLogger.sync.debug("Storage check: useLocalStorage=\(useLocalStorage), localFolderPath=\(localFolderPath, privacy: .private), s3Service=\(self.s3Service != nil)")
 
-        var localOk = true
+        var localAttempted = false
+        var localOk = false
         if useLocalStorage && LocalAudioService.isConfigured {
+            localAttempted = true
             do {
                 let destinationURL = try await localAudioService.copyToLocalFolder(sourceURL: sourceURL)
                 recording.localCopyPath = destinationURL.path
                 recording.updatedAt = Date()
                 try? modelContext.save()
                 AppLogger.sync.info("Copied to local folder: \(recording.filename, privacy: .private)")
+                localOk = true
             } catch {
                 lastError = error.localizedDescription
                 AppLogger.sync.error("Failed to copy to local folder: \(error.localizedDescription, privacy: .public)")
                 await notificationService.storageError("Failed to copy to local folder: \(error.localizedDescription)")
-                localOk = false
             }
         }
 
-        var s3Ok = true
+        var s3Attempted = false
+        var s3Ok = false
         if allowS3Upload, s3Service != nil {
             // Offline: defer the upload (not a failure) so the local phase
             // continues. Reconciliation uploads it once we're back online.
             if reachability.isOnline {
+                s3Attempted = true
                 await uploadToS3IfPossible(recording)
                 s3Ok = recording.s3Key != nil
             } else {
@@ -998,10 +1002,13 @@ final class SyncService {
             return false
         }
 
-        // Succeed as long as at least one configured destination worked (or is
-        // deferred, e.g. offline S3); only a hard failure on every configured
-        // destination is fatal.
-        return localOk || s3Ok
+        // Only a hard failure of every destination that was actually attempted
+        // is fatal; destinations that were never attempted (disabled, deferred
+        // offline) don't count toward success or failure.
+        if !localAttempted && !s3Attempted {
+            return true
+        }
+        return (!localAttempted || localOk) && (!s3Attempted || s3Ok)
     }
 
     /// Uploads a recording's local audio to S3 if it hasn't been uploaded yet and
