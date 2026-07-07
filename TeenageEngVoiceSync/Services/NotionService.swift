@@ -96,6 +96,34 @@ actor NotionService {
         self.session = URLSession(configuration: config)
     }
 
+    /// Extracts a 32-char hex database/page ID from a pasted Notion "Copy link"
+    /// URL (e.g. `https://app.notion.com/p/394a2d2be14680d89627d4547651f8f2?v=...`)
+    /// or a raw ID (dashed or not). Falls back to a dash-stripped copy of the
+    /// input if no 32-hex run is found, so plain valid IDs pass through unchanged.
+    static func extractDatabaseId(from input: String) -> String {
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return trimmed }
+
+        let hexRegex = try? NSRegularExpression(pattern: "[0-9a-fA-F]{32}")
+        func firstHexMatch(in string: String) -> String? {
+            guard let hexRegex,
+                  let match = hexRegex.firstMatch(in: string, range: NSRange(string.startIndex..., in: string)),
+                  let range = Range(match.range, in: string) else { return nil }
+            return String(string[range])
+        }
+
+        // For a full Notion URL, prefer the ID from the path — the query string
+        // also carries a 32-hex `v=` view ID that isn't the page/database ID.
+        if let components = URLComponents(string: trimmed), let host = components.host, host.contains("notion") {
+            if let id = firstHexMatch(in: components.path) {
+                return id
+            }
+        }
+
+        let dashless = trimmed.replacingOccurrences(of: "-", with: "")
+        return firstHexMatch(in: dashless) ?? dashless
+    }
+
     /// Ensures the target database has every property this app needs,
     /// creating whichever ones are missing. Adapts to the database's
     /// existing title column (Notion allows only one) and, if a required

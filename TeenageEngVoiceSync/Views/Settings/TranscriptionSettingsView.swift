@@ -487,9 +487,15 @@ struct TranscriptionSettingsView: View {
                     }
                     .disabled(isLoadingNotionKey)
 
-                    TextField("Database ID (32-char hex from the DB URL)", text: $notionDatabaseId)
+                    TextField("Database ID (paste the DB URL or the 32-char hex ID)", text: $notionDatabaseId)
                         .textFieldStyle(.roundedBorder)
                         .disabled(isLoadingNotionKey)
+                        .onChange(of: notionDatabaseId) { _, newValue in
+                            let extracted = NotionService.extractDatabaseId(from: newValue)
+                            if extracted != newValue {
+                                notionDatabaseId = extracted
+                            }
+                        }
 
                     HStack {
                         Button(isValidatingNotion ? "Connecting…" : "Save & Connect") {
