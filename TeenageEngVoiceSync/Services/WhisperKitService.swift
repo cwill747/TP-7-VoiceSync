@@ -6,7 +6,7 @@
 //
 
 import Foundation
-import WhisperKit
+@preconcurrency import WhisperKit
 
 struct WhisperKitModelInfo: Identifiable, Hashable {
     let id: String
@@ -75,7 +75,7 @@ actor WhisperKitService: TranscriptionProvider {
 
     static func downloadModel(
         variant: String,
-        progress: @escaping (Progress) -> Void
+        progress: @escaping @Sendable (Progress) -> Void
     ) async throws -> URL {
         try await WhisperKit.download(
             variant: variant,

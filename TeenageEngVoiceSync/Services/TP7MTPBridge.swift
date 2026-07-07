@@ -39,7 +39,7 @@ struct TP7MTPFileEntry: Decodable {
     let modTime: Int64
 }
 
-private struct TP7MTPResponse: Decodable {
+private nonisolated struct TP7MTPResponse: Decodable {
     let ok: Bool
     let error: String?
     let handle: Int64?
@@ -53,7 +53,7 @@ private struct TP7MTPResponse: Decodable {
 /// serializes every list/download/delete call on a session behind a mutex
 /// (see `ioMu` in native/tp7mtp/shim.go), so concurrent calls from multiple
 /// `Task.detached` closures are safe even though each call blocks on I/O.
-final class TP7MTPSession: @unchecked Sendable {
+nonisolated final class TP7MTPSession: @unchecked Sendable {
     let device: TP7MTPDeviceInfo
     private let handle: Int64
 

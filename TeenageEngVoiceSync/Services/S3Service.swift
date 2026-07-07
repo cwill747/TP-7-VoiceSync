@@ -10,7 +10,7 @@ import Foundation
 import CryptoKit
 
 /// S3-compatible storage providers supported by the app.
-enum S3Provider: String, CaseIterable, Identifiable, Codable {
+nonisolated enum S3Provider: String, CaseIterable, Identifiable, Codable {
     case aws
     case backblazeB2
 
@@ -488,7 +488,7 @@ struct S3ObjectInfo {
     var filename: String { URL(fileURLWithPath: key).lastPathComponent }
 }
 
-class S3ListParser: NSObject, XMLParserDelegate {
+nonisolated class S3ListParser: NSObject, XMLParserDelegate {
     struct Result {
         var objects: [S3ObjectInfo] = []
         var isTruncated = false
@@ -503,7 +503,7 @@ class S3ListParser: NSObject, XMLParserDelegate {
     private var currentLastModified = Date()
     private var inContents = false
 
-    private static let dateFormatter: ISO8601DateFormatter = {
+    private let dateFormatter: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return f
@@ -535,7 +535,7 @@ class S3ListParser: NSObject, XMLParserDelegate {
         case "Size" where inContents:
             currentSize = Int64(text) ?? 0
         case "LastModified" where inContents:
-            currentLastModified = Self.dateFormatter.date(from: text) ?? Date()
+            currentLastModified = dateFormatter.date(from: text) ?? Date()
         case "Contents":
             if !currentKey.isEmpty && currentKey != "" {
                 result.objects.append(S3ObjectInfo(key: currentKey, size: currentSize, lastModified: currentLastModified))

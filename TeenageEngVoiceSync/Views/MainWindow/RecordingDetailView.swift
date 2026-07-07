@@ -703,9 +703,11 @@ struct AudioPlayerView: View {
         isPlaying = true
 
         timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
-            currentTime = player?.currentTime ?? 0
-            if !(player?.isPlaying ?? false) {
-                stopPlayback()
+            Task { @MainActor in
+                currentTime = player?.currentTime ?? 0
+                if !(player?.isPlaying ?? false) {
+                    stopPlayback()
+                }
             }
         }
     }

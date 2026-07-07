@@ -172,7 +172,7 @@ actor ElevenLabsTranscriptionService: TranscriptionProvider {
     }
 }
 
-struct TranscriptionResult: Codable, Sendable {
+nonisolated struct TranscriptionResult: Codable, Sendable {
     let text: String
     let languageCode: String
     let languageProbability: Double?

@@ -1,7 +1,7 @@
 import Foundation
 import os
 
-enum SecurityScopedBookmark {
+nonisolated enum SecurityScopedBookmark {
 
     private static let logger = Logger(subsystem: "com.tp7sync", category: "bookmark")
 

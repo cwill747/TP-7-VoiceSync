@@ -18,7 +18,7 @@ import os
 
 /// Parakeet model variants exposed by FluidAudio.
 /// v3 = multilingual (25 European langs + JA/ZH). v2 = English-only, highest recall.
-enum ParakeetModelVariant: String, CaseIterable, Identifiable {
+nonisolated enum ParakeetModelVariant: String, CaseIterable, Identifiable {
     case v3
     case v2
 
@@ -547,7 +547,7 @@ actor ParakeetService: TranscriptionProvider {
             guard let rawId = currentRawSpeakerId, !currentWords.isEmpty,
                   let diarizerSeg = currentDiarizerSegment else { return }
 
-            let embedding = diarizerSeg.embedding ?? []
+            let embedding = diarizerSeg.embedding
             let (label, personId) = resolveLabel(for: rawId, embedding: Array(embedding))
             let text = currentWords.joined(separator: " ")
             paragraphs.append("\(label): \(text)")
@@ -660,7 +660,7 @@ actor ParakeetService: TranscriptionProvider {
 
 // MARK: - Cosine similarity helper
 
-private func cosineSimilarity(_ a: [Float], _ b: [Float]) -> Float {
+private nonisolated func cosineSimilarity(_ a: [Float], _ b: [Float]) -> Float {
     guard a.count == b.count, !a.isEmpty else { return 0 }
     var dot: Float = 0
     var normA: Float = 0
