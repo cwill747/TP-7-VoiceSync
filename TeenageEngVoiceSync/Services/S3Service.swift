@@ -121,6 +121,41 @@ actor S3Service {
         )
     }
 
+    /// Upload generated transcript text next to the audio object.
+    func uploadText(filename: String, text: String) async throws -> S3UploadResult {
+        let data = Data(text.utf8)
+        let base = (filename as NSString).deletingPathExtension
+        let s3Key = prefix + base + ".txt"
+
+        guard let encodedKey = s3Key.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+              let url = URL(string: "https://\(bucket).\(endpointHost)/\(encodedKey)") else {
+            throw S3Error.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue("text/plain; charset=utf-8", forHTTPHeaderField: "Content-Type")
+        request.setValue("\(data.count)", forHTTPHeaderField: "Content-Length")
+
+        let signedRequest = try signRequest(request, body: data)
+        let (_, response) = try await session.upload(for: signedRequest, from: data)
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw S3Error.invalidResponse
+        }
+
+        guard (200...299).contains(httpResponse.statusCode) else {
+            throw S3Error.uploadFailed(statusCode: httpResponse.statusCode)
+        }
+
+        return S3UploadResult(
+            filename: base + ".txt",
+            s3Key: s3Key,
+            size: Int64(data.count),
+            uploadedAt: Date()
+        )
+    }
+
     /// Generate a presigned URL for downloading/playing a file
     nonisolated func generatePresignedURL(s3Key: String, expiry: TimeInterval = 3600, date: Date = Date()) throws -> URL {
         let expires = Int(expiry)
