@@ -275,7 +275,22 @@ actor OpenRouterService {
             throw OpenRouterError.noContent
         }
 
-        return content.trimmingCharacters(in: .whitespacesAndNewlines)
+        return Self.stripPreamble(content.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    /// Some models ignore the "no preamble" instruction and prefix the output
+    /// with a line like "Here is the reformatted transcription:". Strip a single
+    /// leading intro line that ends in a colon (optionally followed by a blank
+    /// line) before returning the cleaned text.
+    static func stripPreamble(_ text: String) -> String {
+        guard let newlineIndex = text.firstIndex(of: "\n") else { return text }
+        let firstLine = text[text.startIndex..<newlineIndex]
+            .trimmingCharacters(in: .whitespaces)
+        // Only treat short intro sentences ending in a colon as preamble, so we
+        // don't accidentally drop real transcript content.
+        guard firstLine.hasSuffix(":"), firstLine.count <= 80 else { return text }
+        let remainder = text[text.index(after: newlineIndex)...]
+        return remainder.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func parseLLMResponse(_ content: String) throws -> LLMResult {
