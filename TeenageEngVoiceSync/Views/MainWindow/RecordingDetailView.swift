@@ -58,8 +58,8 @@ struct RecordingDetailView: View {
                     }
                     .foregroundStyle(.secondary)
 
-                    if SyncService.hasPendingRemoteWork(recording) {
-                        Label("Waiting for connection to finish uploading", systemImage: "icloud.slash")
+                    if let pendingStatus {
+                        Label(pendingStatus.text, systemImage: pendingStatus.systemImage)
                             .font(.caption)
                             .foregroundStyle(.orange)
                             .padding(.top, 2)
@@ -191,6 +191,16 @@ struct RecordingDetailView: View {
         }
     }
 
+    private var pendingStatus: (text: String, systemImage: String)? {
+        if recording.transcriptionStatus == .pending {
+            return ("Waiting to transcribe", "clock")
+        }
+        guard let step = SyncService.remainingRemoteSteps(for: recording).first else {
+            return nil
+        }
+        return (step.shortStatus, step.systemImage)
+    }
+
     @ViewBuilder
     private var transcriptionContent: some View {
         switch recording.transcriptionStatus {
@@ -219,7 +229,15 @@ struct RecordingDetailView: View {
                 }
             }
 
-        case .pending, .processing:
+        case .pending:
+            HStack {
+                Image(systemName: "clock")
+                    .foregroundStyle(.orange)
+                Text("Waiting to transcribe...")
+                    .foregroundStyle(.secondary)
+            }
+
+        case .processing:
             HStack {
                 ProgressView()
                 Text("Transcribing...")

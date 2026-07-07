@@ -42,6 +42,18 @@ final class AppState {
         syncService?.pendingCount ?? 0
     }
 
+    var isDownloadingFromDevice: Bool {
+        syncService?.deviceWatch.isDownloading ?? false
+    }
+
+    var deviceDownloadCount: Int {
+        syncService?.deviceWatch.downloadingCount ?? 0
+    }
+
+    var processingActivity: ProcessingActivity? {
+        syncService?.processingActivity
+    }
+
     // Forward offline state from sync service
     var isOffline: Bool {
         syncService?.isOffline ?? false
@@ -79,12 +91,16 @@ final class AppState {
             // Truncate error message for menu bar
             let truncated = error.count > 50 ? String(error.prefix(47)) + "..." : error
             return "Error: \(truncated)"
+        } else if isDownloadingFromDevice {
+            return deviceDownloadCount == 1 ? "Downloading from TP-7..." : "Downloading \(deviceDownloadCount) from TP-7..."
+        } else if let processingActivity {
+            return processingActivity.statusText
         } else if isOffline {
             return pendingRemoteCount > 0 ? "Offline — \(pendingRemoteCount) waiting" : "Offline"
         } else if isSyncing {
             return "Syncing..."
         } else if pendingRemoteCount > 0 {
-            return "\(pendingRemoteCount) waiting to upload"
+            return "\(pendingRemoteCount) waiting to finish"
         } else if !isDeviceWatchEnabled {
             return "Watching disabled"
         } else if isDeviceConnected {
