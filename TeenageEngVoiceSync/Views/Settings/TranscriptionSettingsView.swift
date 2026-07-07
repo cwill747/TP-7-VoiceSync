@@ -43,6 +43,10 @@ struct TranscriptionSettingsView: View {
     // LLM transcript cleanup settings (separate model choice from titling)
     @AppStorage("openrouter.formatEnabled") private var formatEnabled = false
     @AppStorage("openrouter.formatModel") private var formatModel = ""
+    @AppStorage("openrouter.format.removeFillerWords") private var removeFillerWords = false
+    @AppStorage("openrouter.format.removeFalseStarts") private var removeFalseStarts = false
+    @AppStorage("openrouter.format.splitParagraphs") private var splitParagraphs = false
+    @AppStorage("openrouter.format.bulletPoints") private var bulletPoints = false
 
     // State
     @State private var hasElevenLabsKey = false
@@ -673,6 +677,15 @@ struct TranscriptionSettingsView: View {
                 Text("Rewrites the transcript with proper punctuation and paragraphs, correcting only words very likely misheard by the transcription engine. Notes and Notion pages use the cleaned text. Configure the prompt in the Advanced tab.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+
+                Toggle("Cut filler words (\u{201c}um\u{201d}, \u{201c}uh\u{201d}, \u{201c}like\u{201d})", isOn: $removeFillerWords)
+                    .disabled(!formatEnabled)
+                Toggle("Remove false starts and repeated words", isOn: $removeFalseStarts)
+                    .disabled(!formatEnabled)
+                Toggle("Split into paragraphs by topic", isOn: $splitParagraphs)
+                    .disabled(!formatEnabled)
+                Toggle("Format lists as bullet points", isOn: $bulletPoints)
+                    .disabled(!formatEnabled)
             }
         }
         .formStyle(.grouped)

@@ -1668,13 +1668,21 @@ final class SyncService {
         AppLogger.network.info("Formatting transcription (model=\(model, privacy: .public))")
 
         let customPrompt = UserDefaults.standard.string(forKey: "llm.formatPrompt")
+        let defaults = UserDefaults.standard
+        let options = TranscriptFormatOptions(
+            removeFillerWords: defaults.bool(forKey: "openrouter.format.removeFillerWords"),
+            removeFalseStarts: defaults.bool(forKey: "openrouter.format.removeFalseStarts"),
+            splitParagraphs: defaults.bool(forKey: "openrouter.format.splitParagraphs"),
+            bulletPoints: defaults.bool(forKey: "openrouter.format.bulletPoints")
+        )
 
         do {
             let formatted = try await openRouterService.formatTranscription(
                 transcription: transcription,
                 model: model,
                 apiKey: apiKey,
-                customPrompt: customPrompt
+                customPrompt: customPrompt,
+                options: options
             )
             return formatted.isEmpty ? .failed : .cleaned(formatted)
         } catch {
