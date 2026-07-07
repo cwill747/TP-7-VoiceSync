@@ -38,10 +38,32 @@ actor OpenRouterService {
         {"title": "Your title here", "summary": "Your summary here"}
         """
 
+    /// Default prompt template for cleaning up a raw transcription. Intentionally
+    /// conservative: punctuation and capitalization only, plus corrections limited
+    /// to words that were very likely misheard by the speech-to-text engine.
+    static let defaultFormattingPrompt = """
+        You are a transcription formatter. Reformat the following speech-to-text \
+        transcription to improve readability WITHOUT changing its meaning or wording.
+
+        Rules:
+        - Add correct punctuation, capitalization, and paragraph breaks.
+        - Fix ONLY obvious transcription errors — words that were very likely misheard \
+        by the speech-to-text engine (for example homophones or clearly garbled words). \
+        When in doubt, leave the original word unchanged.
+        - Do NOT paraphrase, summarize, add, remove, or reorder content.
+        - Do NOT add commentary, headings, or explanations.
+        - Preserve the speaker's original vocabulary, tone, and filler words unless they \
+        are clearly transcription noise.
+
+        Return ONLY the corrected transcription text, with no preamble or quotation marks.
+        """
+
     init() {
         let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 30
-        config.timeoutIntervalForResource = 60
+        // Formatting a long transcript can generate a lot of tokens, so allow
+        // more headroom than short title/summary requests need.
+        config.timeoutIntervalForRequest = 120
+        config.timeoutIntervalForResource = 180
         self.session = URLSession(configuration: config)
     }
 
@@ -151,6 +173,77 @@ actor OpenRouterService {
 
         // Parse the JSON response from the LLM
         return try parseLLMResponse(content)
+    }
+
+    /// Cleans up a raw transcription: adds punctuation and capitalization and
+    /// corrects only high-confidence transcription errors, returning the
+    /// reformatted plain text. Uses a separate model choice from titling.
+    /// - Parameters:
+    ///   - transcription: The raw transcription text to reformat
+    ///   - model: The model ID to use for formatting
+    ///   - apiKey: The OpenRouter API key
+    ///   - customPrompt: Optional custom prompt (uses defaultFormattingPrompt if nil or empty)
+    func formatTranscription(
+        transcription: String,
+        model: String,
+        apiKey: String,
+        customPrompt: String? = nil
+    ) async throws -> String {
+        guard !apiKey.isEmpty else {
+            throw OpenRouterError.invalidAPIKey
+        }
+
+        guard !transcription.isEmpty else {
+            throw OpenRouterError.emptyTranscription
+        }
+
+        let promptTemplate = (customPrompt?.isEmpty == false) ? customPrompt! : Self.defaultFormattingPrompt
+        let prompt = """
+        \(promptTemplate)
+
+        Transcription:
+        \(transcription)
+        """
+
+        var request = URLRequest(url: URL(string: "\(baseURL)/chat/completions")!)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("TP-7-VoiceSync", forHTTPHeaderField: "HTTP-Referer")
+        request.setValue("TP-7 Voice Sync", forHTTPHeaderField: "X-Title")
+
+        let requestBody = ChatCompletionRequest(
+            model: model,
+            messages: [
+                ChatMessage(role: "user", content: prompt)
+            ],
+            temperature: 0.2
+        )
+
+        request.httpBody = try JSONEncoder().encode(requestBody)
+
+        AppLogger.network.info("OpenRouter format request (model=\(model, privacy: .public))")
+        let (data, response) = try await session.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw OpenRouterError.invalidResponse
+        }
+
+        guard httpResponse.statusCode == 200 else {
+            if httpResponse.statusCode == 401 {
+                throw OpenRouterError.invalidAPIKey
+            }
+            AppLogger.network.error("OpenRouter format API error (status=\(httpResponse.statusCode, privacy: .public))")
+            throw OpenRouterError.apiError(statusCode: httpResponse.statusCode)
+        }
+
+        let completionResponse = try JSONDecoder().decode(ChatCompletionResponse.self, from: data)
+
+        guard let content = completionResponse.choices.first?.message.content, !content.isEmpty else {
+            throw OpenRouterError.noContent
+        }
+
+        return content.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func parseLLMResponse(_ content: String) throws -> LLMResult {

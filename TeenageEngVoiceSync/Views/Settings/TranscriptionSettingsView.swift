@@ -40,6 +40,10 @@ struct TranscriptionSettingsView: View {
     @AppStorage("openrouter.enabled") private var llmEnabled = false
     @AppStorage("openrouter.model") private var selectedLLMModel = ""
 
+    // LLM transcript cleanup settings (separate model choice from titling)
+    @AppStorage("openrouter.formatEnabled") private var formatEnabled = false
+    @AppStorage("openrouter.formatModel") private var formatModel = ""
+
     // State
     @State private var hasElevenLabsKey = false
     @State private var hasOpenRouterKey = false
@@ -611,6 +615,59 @@ struct TranscriptionSettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+
+            // MARK: - AI Transcript Cleanup
+            Section("AI Transcript Cleanup") {
+                Toggle("Clean up transcripts with AI", isOn: $formatEnabled)
+                    .disabled(!hasOpenRouterKey)
+                    .help("Add punctuation and fix likely transcription errors before saving")
+
+                if !hasOpenRouterKey {
+                    Label("Configure OpenRouter API key in API Keys tab", systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.orange)
+                        .font(.caption)
+                }
+
+                if isLoadingModels {
+                    HStack {
+                        ProgressView()
+                            .scaleEffect(0.7)
+                        Text("Loading models...")
+                            .foregroundStyle(.secondary)
+                    }
+                } else if availableLLMModels.isEmpty && hasOpenRouterKey {
+                    Text("Click 'Refresh Models' above to load available models")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else if !availableLLMModels.isEmpty {
+                    Picker("Model", selection: $formatModel) {
+                        Text("Select a model").tag("")
+                        ForEach(availableLLMModels) { model in
+                            Text(model.name).tag(model.id)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .disabled(!formatEnabled)
+
+                    if let model = availableLLMModels.first(where: { $0.id == formatModel }) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            if !model.description.isEmpty {
+                                Text(model.description)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(2)
+                            }
+                            Text("Context: \(model.contextLength.formatted()) tokens")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                }
+
+                Text("Rewrites the transcript with proper punctuation and paragraphs, correcting only words very likely misheard by the transcription engine. Notes and Notion pages use the cleaned text. Configure the prompt in the Advanced tab.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
         .padding()
@@ -803,10 +860,15 @@ struct TranscriptionSettingsView: View {
             availableLLMModels = try await openRouterService.fetchModels(apiKey: apiKey)
 
             // If no model selected yet, try to select a reasonable default
-            if selectedLLMModel.isEmpty, let defaultModel = availableLLMModels.first(where: {
+            if let defaultModel = availableLLMModels.first(where: {
                 $0.id.contains("gpt-4o-mini") || $0.id.contains("claude-3-haiku")
             }) {
-                selectedLLMModel = defaultModel.id
+                if selectedLLMModel.isEmpty {
+                    selectedLLMModel = defaultModel.id
+                }
+                if formatModel.isEmpty {
+                    formatModel = defaultModel.id
+                }
             }
         } catch {
             AppLogger.app.error("Failed to load OpenRouter models: \(String(describing: error), privacy: .public)")
