@@ -22,6 +22,11 @@ final class Recording {
     /// a prefix to stay collision-free against /recordings (see
     /// `DeviceWatchService.localFilename`). Nil for non-device recordings.
     var deviceFilename: String?
+    /// Set once the recording's audio file has been removed from the TP-7 over
+    /// MTP as part of the "delete after processing" setting. Nil if never
+    /// auto-deleted (including when the setting is off, or the file was only
+    /// ever removed manually via `deleteRecording`).
+    var deletedFromDeviceAt: Date?
 
     // Audio metadata
     var recordedAt: Date

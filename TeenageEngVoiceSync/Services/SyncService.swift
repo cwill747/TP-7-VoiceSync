@@ -697,6 +697,24 @@ final class SyncService {
         if UserDefaults.standard.bool(forKey: "notify.onConnect") {
             await notificationService.deviceConnected(serial)
         }
+
+        await retryPendingDeviceDeletes(forDeviceSerial: serial)
+    }
+
+    /// Finishes device-deletion for recordings that fully completed processing
+    /// while this TP-7 was disconnected. Doesn't depend on network reachability
+    /// (only on the MTP connection that just came up), so it's called directly
+    /// on connect rather than folded into `reconcilePendingWork`.
+    private func retryPendingDeviceDeletes(forDeviceSerial serial: String) async {
+        guard UserDefaults.standard.bool(forKey: "devicewatch.deleteAfterProcessing") else { return }
+        let descriptor = FetchDescriptor<Recording>(predicate: #Predicate { $0.deletedAt == nil })
+        guard let recordings = try? modelContext.fetch(descriptor) else { return }
+
+        for recording in recordings where recording.deviceSerial == serial
+            && recording.transcriptionStatus == .completed
+            && recording.deletedFromDeviceAt == nil {
+            await deleteFromDeviceIfConfigured(recording)
+        }
     }
 
     private func updateDeviceWatch(enabled: Bool) async {
@@ -759,7 +777,7 @@ final class SyncService {
             }
 
             // Add to debouncer
-            pendingRecordingOrigins[url.path] = PendingRecordingOrigin(source: download.source, deviceFilename: download.deviceFilename)
+            pendingRecordingOrigins[url.path] = PendingRecordingOrigin(source: download.source, deviceFilename: download.deviceFilename, deviceSerial: serial)
             await debouncer.recordEvent(for: url.path)
         }
 
@@ -843,11 +861,15 @@ final class SyncService {
         // Calculate hash
         recording.fileHash = try await FileHasher.sha256(url: url)
 
-        // Set device serial
-        recording.deviceSerial = deviceWatch.currentDeviceSerial
+        // Set device serial — prefer the serial captured when this file was
+        // downloaded over the currently-connected device, since a different
+        // TP-7 may have connected by the time this debounced pass runs.
         if let origin = pendingRecordingOrigins.removeValue(forKey: url.path) {
             recording.sourceFolder = origin.source
             recording.deviceFilename = origin.deviceFilename
+            recording.deviceSerial = origin.deviceSerial
+        } else {
+            recording.deviceSerial = deviceWatch.currentDeviceSerial
         }
         recording.updatedAt = Date()
 
@@ -1551,7 +1573,47 @@ final class SyncService {
 
         await createNotionPage(for: recording, transcription: transcription)
         await createAppleNote(for: recording, transcription: transcription)
+        await deleteFromDeviceIfConfigured(recording)
         await refreshPendingCount()
+    }
+
+    /// Removes the recording's audio from the TP-7 over MTP once it has been
+    /// fully transferred and transcribed, when the user has opted into
+    /// "delete after processing". Only runs once all remote delivery steps
+    /// (S3, summary, format, Notion, note) have completed, so the source file
+    /// isn't removed from the device before the app has a durable copy.
+    private func deleteFromDeviceIfConfigured(_ recording: Recording) async {
+        guard UserDefaults.standard.bool(forKey: "devicewatch.deleteAfterProcessing") else { return }
+        guard recording.deletedAt == nil, recording.deletedFromDeviceAt == nil else { return }
+        guard recording.transcriptionStatus == .completed else { return }
+        guard Self.remainingRemoteSteps(for: recording).isEmpty else { return }
+        // `remainingRemoteSteps` omits `.note` when there's no durable audio
+        // copy to build a note from — that state can never resolve on its own,
+        // so treating it as "satisfied" there is fine for the pending-count
+        // badge. For deletion it isn't: it would mean permanently discarding
+        // the only audio copy for a configured note destination that was
+        // never actually delivered. Require the note to genuinely exist.
+        let notesEnabled = UserDefaults.standard.bool(forKey: "markdown.enabled")
+            || UserDefaults.standard.bool(forKey: "applenotes.enabled")
+        guard !notesEnabled || recording.appleNoteCreatedAt != nil else { return }
+        // TP-7 filenames (e.g. "0001.wav") aren't globally unique across
+        // devices, so only delete when the currently connected device is the
+        // same one this recording came from — otherwise a different TP-7
+        // could have an unrelated file at that same folder/name deleted.
+        guard let recordingSerial = recording.deviceSerial,
+              let connectedSerial = deviceWatch.currentDeviceSerial,
+              recordingSerial == connectedSerial else { return }
+
+        let folder = (recording.sourceFolder ?? .recordings).rawValue
+        let deviceFilename = recording.deviceFilename ?? recording.filename
+        switch await deviceWatch.deleteFromDevice(filename: deviceFilename, folder: folder) {
+        case .success:
+            recording.deletedFromDeviceAt = Date()
+            try? modelContext.save()
+            AppLogger.sync.info("Auto-deleted recording from device after processing: \(recording.filename, privacy: .private)")
+        case .failure(let error):
+            AppLogger.sync.info("Could not auto-delete from device: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     /// Completes deferred remote work across all recordings: resumes transcription
@@ -1602,6 +1664,11 @@ final class SyncService {
                     overdubNotes: overdubNotes
                 )
                 await deliverRemote(recording, transcription: transcription)
+                continue
+            }
+
+            if recording.transcriptionStatus == .completed, recording.deletedFromDeviceAt == nil {
+                await deleteFromDeviceIfConfigured(recording)
             }
         }
 
@@ -1961,4 +2028,10 @@ private enum SyncTranscriptionError: LocalizedError {
 struct PendingRecordingOrigin: Equatable {
     let source: RecordingSource
     let deviceFilename: String
+    /// The serial of the device this file was downloaded from, captured at
+    /// download time. Must be used instead of `deviceWatch.currentDeviceSerial`
+    /// when the row is created — the debounced processing pass that calls
+    /// `createRecording` can run after a *different* TP-7 has since connected,
+    /// and TP-7 filenames aren't globally unique across devices.
+    let deviceSerial: String
 }
