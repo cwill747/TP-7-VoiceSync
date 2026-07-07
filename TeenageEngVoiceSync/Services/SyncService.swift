@@ -1239,7 +1239,8 @@ final class SyncService {
                 playURL: playURLString,
                 downloadURL: downloadURLString,
                 customTitle: recording.llmTitle,
-                summary: recording.llmSummary
+                summary: recording.llmSummary,
+                overdubNotes: transcription.overdubNotes
             )
             recording.notionPageCreatedAt = Date()
             recording.updatedAt = Date()
@@ -1326,7 +1327,8 @@ final class SyncService {
                     playURL: playURLString,
                     downloadURL: downloadURLString,
                     customTitle: customTitle,
-                    summary: summary
+                    summary: summary,
+                    overdubNotes: transcription.overdubNotes
                 )
                 AppLogger.notes.info("Successfully created markdown file for \(recording.filename, privacy: .private)")
             } else if appleNotesEnabled {
@@ -1343,7 +1345,8 @@ final class SyncService {
                     downloadURL: downloadURLString,
                     folder: folder,
                     customTitle: customTitle,
-                    summary: summary
+                    summary: summary,
+                    overdubNotes: transcription.overdubNotes
                 )
                 AppLogger.notes.info("Successfully created Apple Note for \(recording.filename, privacy: .private)")
             }
@@ -1433,13 +1436,18 @@ final class SyncService {
             if recording.transcriptionStatus == .completed,
                !Self.remainingRemoteSteps(for: recording).isEmpty,
                let text = recording.transcriptionText {
+                var overdubNotes: [OverdubNote]?
+                if let data = recording.overdubNotesData {
+                    overdubNotes = try? JSONDecoder().decode([OverdubNote].self, from: data)
+                }
                 let transcription = TranscriptionResult(
                     text: text,
                     languageCode: recording.transcriptionLanguage ?? "en",
                     languageProbability: nil,
                     transcriptionId: nil,
                     words: nil,
-                    speakerSegments: nil
+                    speakerSegments: nil,
+                    overdubNotes: overdubNotes
                 )
                 await deliverRemote(recording, transcription: transcription)
             }
@@ -1534,6 +1542,11 @@ final class SyncService {
         let playURL = try s3.generatePresignedURL(s3Key: s3Key, expiry: expiry)
         let downloadURL = try s3.generateDownloadURL(s3Key: s3Key, filename: recording.filename, expiry: expiry)
 
+        var overdubNotes: [OverdubNote]?
+        if let data = recording.overdubNotesData {
+            overdubNotes = try? JSONDecoder().decode([OverdubNote].self, from: data)
+        }
+
         let notesService = AppleNotesService()
         try await notesService.createTranscriptionNote(
             transcription: text,
@@ -1546,7 +1559,8 @@ final class SyncService {
             downloadURL: downloadURL.absoluteString,
             folder: folder,
             customTitle: customTitle,
-            summary: summary
+            summary: summary,
+            overdubNotes: overdubNotes
         )
 
         // Track that a note was created

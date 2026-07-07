@@ -20,7 +20,8 @@ actor LocalMarkdownService {
         playURL: String,
         downloadURL: String,
         customTitle: String? = nil,
-        summary: String? = nil
+        summary: String? = nil,
+        overdubNotes: [OverdubNote]? = nil
     ) async throws {
         let (folderURL, scoped) = try resolveFolder()
         defer { if scoped { folderURL.stopAccessingSecurityScopedResource() } }
@@ -36,7 +37,8 @@ actor LocalMarkdownService {
             language: language,
             playURL: playURL,
             downloadURL: downloadURL,
-            summary: summary
+            summary: summary,
+            overdubNotes: overdubNotes
         )
 
         let safeFilename = generateSafeFilename(title: title, recordedAt: recordedAt)
@@ -59,7 +61,8 @@ actor LocalMarkdownService {
         language: String,
         playURL: String,
         downloadURL: String,
-        summary: String?
+        summary: String?,
+        overdubNotes: [OverdubNote]? = nil
     ) -> String {
         let dateStr = recordedAt.formatted(.dateTime.month(.wide).day().year().hour().minute())
         let sizeStr = ByteCountFormatter.string(fromByteCount: fileSize, countStyle: .file)
@@ -73,6 +76,17 @@ actor LocalMarkdownService {
         // Transcription
         parts.append(transcription)
         parts.append("")
+
+        // Overdubbed notes (memo tracks 1+), if any
+        if let overdubNotes, !overdubNotes.isEmpty {
+            parts.append("## Overdubbed notes")
+            parts.append("")
+            for note in overdubNotes.sorted(by: { $0.startTime < $1.startTime }) {
+                parts.append("- \(formatTimestamp(note.startTime)) — \(note.text)")
+            }
+            parts.append("")
+        }
+
         parts.append("---")
         parts.append("")
 
@@ -108,6 +122,12 @@ actor LocalMarkdownService {
         parts.append("")
 
         return parts.joined(separator: "\n")
+    }
+
+    private func formatTimestamp(_ time: TimeInterval) -> String {
+        let minutes = Int(time) / 60
+        let seconds = Int(time) % 60
+        return String(format: "%d:%02d", minutes, seconds)
     }
 
     /// Generates a safe filename from the title

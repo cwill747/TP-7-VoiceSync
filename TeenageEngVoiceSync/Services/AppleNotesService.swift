@@ -50,7 +50,8 @@ actor AppleNotesService {
         downloadURL: String,
         folder: String,
         customTitle: String? = nil,
-        summary: String? = nil
+        summary: String? = nil,
+        overdubNotes: [OverdubNote]? = nil
     ) async throws {
         // Use custom title if provided, otherwise fall back to date-based title
         let title = customTitle ?? "TP-7 Recording - \(recordedAt.formatted(.dateTime.month(.wide).day().year()))"
@@ -65,6 +66,16 @@ actor AppleNotesService {
         // Main transcription
         bodyParts.append("<p>\(escapeHTML(transcription))</p>")
         bodyParts.append("<hr>")
+
+        // Overdubbed notes (memo tracks 1+), if any
+        if let overdubNotes, !overdubNotes.isEmpty {
+            bodyParts.append("<p><b>Overdubbed notes</b></p>")
+            let items = overdubNotes.sorted(by: { $0.startTime < $1.startTime }).map { note in
+                "<li>\(formatTimestamp(note.startTime)) — \(escapeHTML(note.text))</li>"
+            }.joined()
+            bodyParts.append("<ul>\(items)</ul>")
+            bodyParts.append("<hr>")
+        }
 
         // Summary section (if provided)
         if let summary = summary, !summary.isEmpty {
@@ -124,6 +135,12 @@ actor AppleNotesService {
             .replacingOccurrences(of: "&", with: "&amp;")
             .replacingOccurrences(of: "<", with: "&lt;")
             .replacingOccurrences(of: ">", with: "&gt;")
+    }
+
+    nonisolated private func formatTimestamp(_ time: TimeInterval) -> String {
+        let minutes = Int(time) / 60
+        let seconds = Int(time) % 60
+        return String(format: "%d:%02d", minutes, seconds)
     }
 }
 
