@@ -24,6 +24,9 @@ final class AppState {
     var lastError: String?
     var showError = false
 
+    // Navigation state for menu bar to request sidebar navigation
+    var navigationTarget: SidebarItem? = nil
+
     // Forward device state from sync service
     var isDeviceConnected: Bool {
         syncService?.deviceWatch.isConnected ?? false

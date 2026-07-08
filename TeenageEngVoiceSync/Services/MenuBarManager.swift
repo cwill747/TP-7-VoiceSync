@@ -91,9 +91,8 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
         let settingsItem = NSMenuItem(
             title: "Settings\u{2026}",
             action: #selector(openPrefs),
-            keyEquivalent: ","
+            keyEquivalent: ""
         )
-        settingsItem.keyEquivalentModifierMask = [.command]
         settingsItem.target = self
         menu.addItem(settingsItem)
 

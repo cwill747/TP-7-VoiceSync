@@ -22,7 +22,6 @@ struct TeenageEngVoiceSyncApp: App {
     @State private var appState = AppState()
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
     @Environment(\.openWindow) private var openWindow
-    @Environment(\.openSettings) private var openSettings
 
     /// True when launched as the host process for the TeenageEngVoiceSyncTests
     /// bundle (Xcode sets this env var for hosted test runs). Guards the app
@@ -113,7 +112,8 @@ struct TeenageEngVoiceSyncApp: App {
                     }
                     menuBarManager.openSettings = {
                         NSApp.activate(ignoringOtherApps: true)
-                        openSettings()
+                        openWindow(id: "main")
+                        appState.navigationTarget = .settings
                     }
                     menuBarManager.initializeMenuBar()
 
@@ -137,13 +137,6 @@ struct TeenageEngVoiceSyncApp: App {
         .defaultSize(width: 960, height: 640)
         .commands {
             CommandGroup(replacing: .newItem) { }
-        }
-
-        // Settings window
-        Settings {
-            SettingsView()
-                .environment(appState)
-                .modelContainer(modelContainer)
         }
 
         // Onboarding wizard

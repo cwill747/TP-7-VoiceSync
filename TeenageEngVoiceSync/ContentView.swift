@@ -11,6 +11,7 @@ import SwiftData
 enum SidebarItem: String, CaseIterable, Identifiable {
     case recordings
     case people
+    case settings
 
     var id: String { rawValue }
 
@@ -18,6 +19,7 @@ enum SidebarItem: String, CaseIterable, Identifiable {
         switch self {
         case .recordings: return "Recordings"
         case .people: return "People"
+        case .settings: return "Settings"
         }
     }
 
@@ -25,6 +27,40 @@ enum SidebarItem: String, CaseIterable, Identifiable {
         switch self {
         case .recordings: return "waveform"
         case .people: return "person.2"
+        case .settings: return "gear"
+        }
+    }
+}
+
+enum SettingsSection: String, CaseIterable, Identifiable {
+    case general
+    case storage
+    case apiKeys
+    case transcription
+    case vocabulary
+    case advanced
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .general: return "General"
+        case .storage: return "Storage"
+        case .apiKeys: return "API Keys"
+        case .transcription: return "Transcription"
+        case .vocabulary: return "Dictionary"
+        case .advanced: return "Advanced"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .general: return "gear"
+        case .storage: return "externaldrive"
+        case .apiKeys: return "key"
+        case .transcription: return "text.bubble"
+        case .vocabulary: return "text.book.closed"
+        case .advanced: return "slider.horizontal.3"
         }
     }
 }
@@ -41,6 +77,7 @@ struct ContentView: View {
     @State private var selectedSection: SidebarItem = .recordings
     @State private var selectedRecording: Recording?
     @State private var selectedPerson: Person?
+    @State private var selectedSettingsSection: SettingsSection = .general
     @State private var searchText = ""
 
     var body: some View {
@@ -62,6 +99,12 @@ struct ContentView: View {
                 .navigationSplitViewColumnWidth(min: 250, ideal: 300, max: 400)
             case .people:
                 PeopleScreen(selectedPerson: $selectedPerson)
+            case .settings:
+                List(SettingsSection.allCases, selection: $selectedSettingsSection) { section in
+                    Label(section.label, systemImage: section.systemImage)
+                        .tag(section)
+                }
+                .navigationSplitViewColumnWidth(min: 150, ideal: 170, max: 220)
             }
         } detail: {
             switch selectedSection {
@@ -85,6 +128,8 @@ struct ContentView: View {
                         description: Text("Choose a person to manage their voice samples.")
                     )
                 }
+            case .settings:
+                settingsDetailView(for: selectedSettingsSection)
             }
         }
         .searchable(text: $searchText, prompt: "Search recordings")
@@ -98,10 +143,34 @@ struct ContentView: View {
             selectedRecording = nil
             selectedPerson = nil
         }
+        .onChange(of: appState.navigationTarget) { _, target in
+            if let target {
+                selectedSection = target
+                appState.navigationTarget = nil
+            }
+        }
         .alert("Notice", isPresented: Bindable(appState).showError, presenting: appState.lastError) { _ in
             Button("OK") { appState.clearError() }
         } message: { message in
             Text(message)
+        }
+    }
+
+    @ViewBuilder
+    private func settingsDetailView(for section: SettingsSection) -> some View {
+        switch section {
+        case .general:
+            GeneralSettingsView()
+        case .storage:
+            StorageSettingsView()
+        case .apiKeys:
+            APIKeysSettingsView()
+        case .transcription:
+            TranscriptionSettingsView()
+        case .vocabulary:
+            VocabularySettingsView()
+        case .advanced:
+            AdvancedSettingsView()
         }
     }
 
