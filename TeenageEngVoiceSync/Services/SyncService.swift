@@ -71,7 +71,6 @@ final class SyncService {
     private var transcriptionProvider: (any TranscriptionProvider)?
     private var transcriptionProviderKind: TranscriptionProviderKind?
     private let openRouterService = OpenRouterService()
-    private let localGGUFService = LocalGGUFService()
     private let localAudioService = LocalAudioService()
 
     /// A not-yet-processed cache file's device origin, keyed by its local path.
@@ -157,7 +156,6 @@ final class SyncService {
         reachability.stop()
         Task {
             await debouncer.stopProcessing()
-            await localGGUFService.shutdown()
         }
     }
 
@@ -1575,8 +1573,9 @@ final class SyncService {
     /// Runs the configured LLM passes immediately after ASR and before speaker
     /// assignment or destination delivery.
     private func finishPostTranscriptionProcessing(_ recording: Recording, transcription: TranscriptionResult) async {
-        let backend = AIEnhancementBackend.current()
-        guard reachability.isOnline || backend == .localGGUF else {
+        // A local (on-device) AI endpoint can run while the app is offline;
+        // a remote one can't.
+        guard reachability.isOnline || OpenRouterService.isLocalEndpoint() else {
             AppLogger.sync.debug("Offline: deferring LLM processing for \(recording.filename, privacy: .private)")
             return
         }
@@ -1629,7 +1628,7 @@ final class SyncService {
     /// but not yet fully uploaded. Triggered at launch, on offline→online, and via
     /// a manual "Retry now".
     func reconcilePendingWork() async {
-        let canProcessLocalLLMOffline = AIEnhancementBackend.current() == .localGGUF
+        let canProcessLocalLLMOffline = OpenRouterService.isLocalEndpoint()
         guard reachability.isOnline || canProcessLocalLLMOffline, !isReconciling else { return }
         isReconciling = true
         let previousActivity = processingActivity
@@ -1699,37 +1698,18 @@ final class SyncService {
         pendingRemoteCount = all.filter { Self.hasPendingRemoteWork($0) }.count
     }
 
-    /// Generates a title and summary using OpenRouter LLM
+    /// Generates a title and summary via the configured OpenAI-compatible API.
     private func generateLLMTitle(for transcription: String) async -> LLMResult? {
-        if AIEnhancementBackend.current() == .localGGUF {
-            guard LocalGGUFService.isConfigured() else {
-                AppLogger.network.debug("Local GGUF enhancement is not configured")
-                return nil
-            }
-
-            AppLogger.network.info("Generating title/summary with local GGUF")
-            do {
-                let result = try await localGGUFService.generateTitleAndSummary(
-                    transcription: transcription,
-                    customPrompt: UserDefaults.standard.string(forKey: "llm.customPrompt")
-                )
-                AppLogger.network.debug("Generated local title: \(result.title, privacy: .private)")
-                return result
-            } catch {
-                AppLogger.network.error("Failed to generate local title/summary: \(error.localizedDescription, privacy: .public)")
-                return nil
-            }
-        }
-
-        guard let apiKey = try? await KeychainService.shared.retrieve(for: .openRouterAPIKey),
-              !apiKey.isEmpty else {
-            AppLogger.network.debug("OpenRouter API key not configured")
+        let apiKey = (try? await KeychainService.shared.retrieve(for: .openRouterAPIKey)) ?? ""
+        // A local endpoint needs no key; a remote one does.
+        guard !apiKey.isEmpty || OpenRouterService.isLocalEndpoint() else {
+            AppLogger.network.debug("AI provider API key not configured")
             return nil
         }
 
         let model = UserDefaults.standard.string(forKey: "openrouter.model") ?? ""
         guard !model.isEmpty else {
-            AppLogger.network.debug("OpenRouter model not selected")
+            AppLogger.network.debug("AI model not selected")
             return nil
         }
 
@@ -1776,36 +1756,19 @@ final class SyncService {
             bulletPoints: defaults.bool(forKey: "openrouter.format.bulletPoints")
         )
 
-        if AIEnhancementBackend.current() == .localGGUF {
-            guard LocalGGUFService.isConfigured() else {
-                AppLogger.network.debug("Local GGUF enhancement is not configured; skipping cleanup")
-                return .skip
-            }
-
-            AppLogger.network.info("Formatting transcription with local GGUF")
-            do {
-                let formatted = try await localGGUFService.formatTranscription(
-                    transcription: transcription,
-                    customPrompt: customPrompt,
-                    options: options
-                )
-                return formatted.isEmpty ? .failed : .cleaned(formatted)
-            } catch {
-                AppLogger.network.error("Failed to format transcription locally: \(error.localizedDescription, privacy: .public)")
-                return .failed
-            }
-        }
-
-        guard let apiKey = try? await KeychainService.shared.retrieve(for: .openRouterAPIKey),
-              !apiKey.isEmpty else {
-            AppLogger.network.debug("OpenRouter API key not configured; skipping cleanup")
+        let apiKey = (try? await KeychainService.shared.retrieve(for: .openRouterAPIKey)) ?? ""
+        // A local endpoint needs no key; a remote one does. Without a usable
+        // config the step can never succeed, so skip (deliver the raw transcript)
+        // rather than leaving it pending and spinning the UI forever.
+        guard !apiKey.isEmpty || OpenRouterService.isLocalEndpoint() else {
+            AppLogger.network.debug("AI provider API key not configured; skipping cleanup")
             return .skip
         }
 
         // Formatting has its own model choice, independent of titling.
         let model = UserDefaults.standard.string(forKey: "openrouter.formatModel") ?? ""
         guard !model.isEmpty else {
-            AppLogger.network.debug("OpenRouter formatting model not selected; skipping cleanup")
+            AppLogger.network.debug("Format model not selected; skipping cleanup")
             return .skip
         }
 
@@ -2019,11 +1982,13 @@ extension SyncService {
     nonisolated static func needsNetworkForManualSend(_ recording: Recording) -> Bool {
         let defaults = UserDefaults.standard
         let notionDatabaseId = defaults.string(forKey: "notion.databaseId") ?? ""
-        let needsOpenRouterLLM = AIEnhancementBackend.current(defaults: defaults) == .openRouter
+        // A local AI endpoint runs without network; only a remote one blocks
+        // manual send on connectivity.
+        let needsRemoteLLM = !OpenRouterService.isLocalEndpoint(defaults: defaults)
             && !remainingLLMSteps(for: recording).isEmpty
 
         return needsS3Upload(recording)
-            || needsOpenRouterLLM
+            || needsRemoteLLM
             || (defaults.bool(forKey: "notion.enabled") && !notionDatabaseId.isEmpty)
     }
 
@@ -2036,23 +2001,13 @@ extension SyncService {
         if needsS3Upload(recording) { steps.append(.s3) }
 
         if defaults.bool(forKey: "openrouter.enabled"), recording.llmProcessedAt == nil {
-            switch AIEnhancementBackend.current(defaults: defaults) {
-            case .openRouter:
-                let openRouterModel = defaults.string(forKey: "openrouter.model") ?? ""
-                if !openRouterModel.isEmpty { steps.append(.summary) }
-            case .localGGUF:
-                if LocalGGUFService.isConfigured(defaults: defaults) { steps.append(.summary) }
-            }
+            let model = defaults.string(forKey: "openrouter.model") ?? ""
+            if !model.isEmpty { steps.append(.summary) }
         }
 
         if defaults.bool(forKey: "openrouter.formatEnabled"), recording.formattingProcessedAt == nil {
-            switch AIEnhancementBackend.current(defaults: defaults) {
-            case .openRouter:
-                let formatModel = defaults.string(forKey: "openrouter.formatModel") ?? ""
-                if !formatModel.isEmpty { steps.append(.format) }
-            case .localGGUF:
-                if LocalGGUFService.isConfigured(defaults: defaults) { steps.append(.format) }
-            }
+            let formatModel = defaults.string(forKey: "openrouter.formatModel") ?? ""
+            if !formatModel.isEmpty { steps.append(.format) }
         }
 
         let notionEnabled = defaults.bool(forKey: "notion.enabled")

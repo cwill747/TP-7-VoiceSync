@@ -19,7 +19,7 @@ final class OfflineModePendingWorkTests: XCTestCase {
     private let keys = [
         "s3.enabled", "s3.bucket", "s3.backupAfterTranscription",
         "localaudio.enabled", "localaudio.folderPath",
-        "aiEnhancement.backend", "localgguf.serverPath", "localgguf.modelPath",
+        "openrouter.baseURL",
         "transcription.provider", "openrouter.enabled", "openrouter.model",
         "openrouter.formatEnabled", "openrouter.formatModel",
         "notion.enabled", "notion.databaseId",
@@ -176,11 +176,9 @@ final class OfflineModePendingWorkTests: XCTestCase {
     }
 
     @MainActor
-    func testLocalGGUFTitleStepDoesNotRequireOpenRouterModel() throws {
-        UserDefaults.standard.set(AIEnhancementBackend.localGGUF.rawValue, forKey: "aiEnhancement.backend")
-        UserDefaults.standard.set("/tmp/llama-server", forKey: "localgguf.serverPath")
-        UserDefaults.standard.set("/tmp/model.gguf", forKey: "localgguf.modelPath")
+    func testTitleStepPresentWhenModelSet() throws {
         UserDefaults.standard.set(true, forKey: "openrouter.enabled")
+        UserDefaults.standard.set("some-model", forKey: "openrouter.model")
 
         let recording = try makeRecording(status: .completed)
 
@@ -188,11 +186,9 @@ final class OfflineModePendingWorkTests: XCTestCase {
     }
 
     @MainActor
-    func testLocalGGUFFormatStepDoesNotRequireOpenRouterModel() throws {
-        UserDefaults.standard.set(AIEnhancementBackend.localGGUF.rawValue, forKey: "aiEnhancement.backend")
-        UserDefaults.standard.set("/tmp/llama-server", forKey: "localgguf.serverPath")
-        UserDefaults.standard.set("/tmp/model.gguf", forKey: "localgguf.modelPath")
+    func testFormatStepPresentWhenModelSet() throws {
         UserDefaults.standard.set(true, forKey: "openrouter.formatEnabled")
+        UserDefaults.standard.set("some-model", forKey: "openrouter.formatModel")
 
         let recording = try makeRecording(status: .completed)
 
@@ -200,15 +196,28 @@ final class OfflineModePendingWorkTests: XCTestCase {
     }
 
     @MainActor
-    func testManualSendDoesNotRequireNetworkForLocalGGUFTitleStep() throws {
-        UserDefaults.standard.set(AIEnhancementBackend.localGGUF.rawValue, forKey: "aiEnhancement.backend")
-        UserDefaults.standard.set("/tmp/llama-server", forKey: "localgguf.serverPath")
-        UserDefaults.standard.set("/tmp/model.gguf", forKey: "localgguf.modelPath")
+    func testManualSendDoesNotRequireNetworkForLocalEndpoint() throws {
+        // A local (127.0.0.1) OpenAI-compatible endpoint runs without network,
+        // so an outstanding title step shouldn't gate manual send on connectivity.
+        UserDefaults.standard.set("http://127.0.0.1:8088/v1", forKey: "openrouter.baseURL")
         UserDefaults.standard.set(true, forKey: "openrouter.enabled")
+        UserDefaults.standard.set("some-model", forKey: "openrouter.model")
 
         let recording = try makeRecording(status: .completed)
 
         XCTAssertFalse(SyncService.needsNetworkForManualSend(recording))
+    }
+
+    @MainActor
+    func testManualSendRequiresNetworkForRemoteEndpoint() throws {
+        // The default (OpenRouter) endpoint is remote, so an outstanding title
+        // step should require connectivity for a manual send.
+        UserDefaults.standard.set(true, forKey: "openrouter.enabled")
+        UserDefaults.standard.set("some-model", forKey: "openrouter.model")
+
+        let recording = try makeRecording(status: .completed)
+
+        XCTAssertTrue(SyncService.needsNetworkForManualSend(recording))
     }
 
     @MainActor

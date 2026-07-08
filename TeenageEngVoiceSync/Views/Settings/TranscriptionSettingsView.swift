@@ -37,13 +37,11 @@ struct TranscriptionSettingsView: View {
     @AppStorage("notion.databaseId") private var notionDatabaseId = ""
 
     // LLM settings
-    @AppStorage("aiEnhancement.backend") private var aiBackendRaw = AIEnhancementBackend.openRouter.rawValue
     @AppStorage("openrouter.enabled") private var llmEnabled = false
     @AppStorage("openrouter.model") private var selectedLLMModel = ""
-    @AppStorage("localgguf.serverPath") private var localGGUFServerPath = ""
-    @AppStorage("localgguf.modelPath") private var localGGUFModelPath = ""
-    @AppStorage("localgguf.port") private var localGGUFPort = 8088
-    @AppStorage("localgguf.contextTokens") private var localGGUFContextTokens = 8192
+    // OpenAI-compatible API base URL. Empty = OpenRouter default; set to e.g.
+    // http://127.0.0.1:8088/v1 for a local llama-server / LM Studio / Ollama.
+    @AppStorage(OpenRouterService.baseURLKey) private var apiBaseURL = ""
 
     // LLM transcript cleanup settings (separate model choice from titling)
     @AppStorage("openrouter.formatEnabled") private var formatEnabled = false
@@ -130,22 +128,21 @@ struct TranscriptionSettingsView: View {
         transcriptionEnabled && canTranscribe
     }
 
-    private var aiBackend: AIEnhancementBackend {
-        AIEnhancementBackend(rawValue: aiBackendRaw) ?? .openRouter
+    /// The effective base URL, falling back to OpenRouter when unset.
+    private var resolvedBaseURL: String {
+        let raw = apiBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        return raw.isEmpty ? OpenRouterService.defaultBaseURL : raw
     }
 
-    private var isLocalGGUFConfigured: Bool {
-        !localGGUFServerPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !localGGUFModelPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    /// A local endpoint (llama-server etc.) needs no API key.
+    private var isLocalEndpoint: Bool {
+        guard let host = URL(string: resolvedBaseURL)?.host?.lowercased() else { return false }
+        return host == "localhost" || host == "127.0.0.1" || host == "::1"
     }
 
-    private var canUseSelectedAIBackend: Bool {
-        switch aiBackend {
-        case .openRouter:
-            return hasOpenRouterKey
-        case .localGGUF:
-            return isLocalGGUFConfigured
-        }
+    /// AI steps can run when a key is configured or the endpoint is local.
+    private var canUseAI: Bool {
+        hasOpenRouterKey || isLocalEndpoint
     }
 
     var body: some View {
@@ -586,91 +583,59 @@ struct TranscriptionSettingsView: View {
                 }
             }
 
-            // MARK: - AI Enhancement Backend
-            Section("AI Enhancement Backend") {
-                Picker("Backend", selection: $aiBackendRaw) {
-                    ForEach(AIEnhancementBackend.allCases) { backend in
-                        Text(backend.displayName).tag(backend.rawValue)
+            // MARK: - AI Provider
+            Section("AI Provider") {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        TextField(OpenRouterService.defaultBaseURL, text: $apiBaseURL)
+                            .textFieldStyle(.roundedBorder)
+                            .onSubmit { Task { await loadModels() } }
+                        if !apiBaseURL.isEmpty {
+                            Button("Reset") { apiBaseURL = "" }
+                                .buttonStyle(.borderless)
+                        }
                     }
-                }
-                .pickerStyle(.segmented)
 
-                if aiBackend == .localGGUF {
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            TextField("llama-server path", text: $localGGUFServerPath)
-                                .textFieldStyle(.roundedBorder)
-                            Button("Choose") {
-                                chooseLocalGGUFServer()
-                            }
-                        }
-
-                        HStack {
-                            TextField("GGUF model path", text: $localGGUFModelPath)
-                                .textFieldStyle(.roundedBorder)
-                            Button("Choose") {
-                                chooseLocalGGUFModel()
-                            }
-                        }
-
-                        Stepper("Port: \(localGGUFPort)", value: $localGGUFPort, in: 1024...65535)
-                        Stepper("Context: \(localGGUFContextTokens) tokens", value: $localGGUFContextTokens, in: 1024...32768, step: 1024)
-
-                        if isLocalGGUFConfigured {
-                            Label("Local GGUF enhancement configured", systemImage: "checkmark.circle.fill")
-                                .foregroundStyle(.green)
-                                .font(.caption)
-                        } else {
-                            Label("Choose a llama-server executable and a GGUF model", systemImage: "exclamationmark.triangle")
-                                .foregroundStyle(.orange)
-                                .font(.caption)
-                        }
-
-                        Text("Runs llama.cpp locally through llama-server's OpenAI-compatible API. The app starts the server on 127.0.0.1 when an AI step runs.")
+                    if isLocalEndpoint {
+                        Label("Local endpoint — no API key required", systemImage: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
                             .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                } else {
-                    if hasOpenRouterKey {
-                        Label("OpenRouter API key configured", systemImage: "checkmark.circle.fill")
+                    } else if hasOpenRouterKey {
+                        Label("API key configured", systemImage: "checkmark.circle.fill")
                             .foregroundStyle(.green)
                             .font(.caption)
                     } else {
-                        Label("Configure OpenRouter API key in API Keys tab", systemImage: "exclamationmark.triangle")
+                        Label("Configure an API key in the API Keys tab", systemImage: "exclamationmark.triangle")
                             .foregroundStyle(.orange)
                             .font(.caption)
                     }
+
+                    Text("Any OpenAI-compatible chat API. Leave blank for OpenRouter, or point at a local server you run yourself — e.g. llama-server at http://127.0.0.1:8088/v1 (start it with: llama-server --model <model.gguf> --port 8088). Local endpoints need no API key.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
 
             // MARK: - LLM Title Generation
             Section("LLM Title Generation") {
                 Toggle("Enable AI-powered titles", isOn: $llmEnabled)
-                    .disabled(!canUseSelectedAIBackend)
+                    .disabled(!canUseAI)
                     .help("Generate intelligent titles for Apple Notes using AI")
 
-                if aiBackend == .openRouter && !hasOpenRouterKey {
-                    Label("Configure OpenRouter API key in API Keys tab", systemImage: "exclamationmark.triangle")
+                if !canUseAI {
+                    Label("Configure an API key in API Keys tab, or set a local endpoint above", systemImage: "exclamationmark.triangle")
                         .foregroundStyle(.orange)
-                        .font(.caption)
-                } else if aiBackend == .openRouter {
-                    Label("OpenRouter API key configured", systemImage: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
                         .font(.caption)
                 }
 
-                if aiBackend == .localGGUF {
-                    Text("Uses the selected local GGUF model.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } else if isLoadingModels {
+                if isLoadingModels {
                     HStack {
                         ProgressView()
                             .scaleEffect(0.7)
                         Text("Loading models...")
                             .foregroundStyle(.secondary)
                     }
-                } else if availableLLMModels.isEmpty && hasOpenRouterKey {
+                } else if availableLLMModels.isEmpty && canUseAI {
                     Text("Click 'Refresh Models' to load available models")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -703,7 +668,7 @@ struct TranscriptionSettingsView: View {
                     Task { await loadModels() }
                 }
                 .buttonStyle(.borderless)
-                .disabled(aiBackend != .openRouter || !hasOpenRouterKey || isLoadingModels)
+                .disabled(!canUseAI || isLoadingModels)
 
                 Text("Generates intelligent titles and summaries for your Apple Notes using AI. Configure the prompt in the Advanced tab.")
                     .font(.caption)
@@ -713,27 +678,23 @@ struct TranscriptionSettingsView: View {
             // MARK: - AI Transcript Cleanup
             Section("AI Transcript Cleanup") {
                 Toggle("Clean up transcripts with AI", isOn: $formatEnabled)
-                    .disabled(!canUseSelectedAIBackend)
+                    .disabled(!canUseAI)
                     .help("Add punctuation and fix likely transcription errors before saving")
 
-                if aiBackend == .openRouter && !hasOpenRouterKey {
-                    Label("Configure OpenRouter API key in API Keys tab", systemImage: "exclamationmark.triangle")
+                if !canUseAI {
+                    Label("Configure an API key in API Keys tab, or set a local endpoint above", systemImage: "exclamationmark.triangle")
                         .foregroundStyle(.orange)
                         .font(.caption)
                 }
 
-                if aiBackend == .localGGUF {
-                    Text("Uses the selected local GGUF model.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } else if isLoadingModels {
+                if isLoadingModels {
                     HStack {
                         ProgressView()
                             .scaleEffect(0.7)
                         Text("Loading models...")
                             .foregroundStyle(.secondary)
                     }
-                } else if availableLLMModels.isEmpty && hasOpenRouterKey {
+                } else if availableLLMModels.isEmpty && canUseAI {
                     Text("Click 'Refresh Models' above to load available models")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -785,7 +746,7 @@ struct TranscriptionSettingsView: View {
             refreshWhisperKitStatus()
             refreshParakeetStatus()
             refreshDiarizerStatus()
-            if aiBackend == .openRouter, hasOpenRouterKey {
+            if canUseAI {
                 await loadModels()
             }
         }
@@ -808,9 +769,6 @@ struct TranscriptionSettingsView: View {
 
     private func ensureTranscriptionDefaults() {
         let defaults = UserDefaults.standard
-        if defaults.string(forKey: "aiEnhancement.backend") == nil {
-            defaults.set(AIEnhancementBackend.openRouter.rawValue, forKey: "aiEnhancement.backend")
-        }
         if defaults.string(forKey: "transcription.provider") == nil {
             defaults.set(TranscriptionProviderKind.elevenLabs.rawValue, forKey: "transcription.provider")
         }
@@ -824,43 +782,6 @@ struct TranscriptionSettingsView: View {
             let legacyEnabled = defaults.bool(forKey: "elevenlabs.enabled")
             defaults.set(legacyEnabled, forKey: "transcription.enabled")
         }
-    }
-
-    private func chooseLocalGGUFServer() {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = false
-        panel.allowsMultipleSelection = false
-        panel.prompt = "Choose"
-
-        if !localGGUFServerPath.isEmpty {
-            panel.directoryURL = URL(fileURLWithPath: NSString(string: localGGUFServerPath).expandingTildeInPath)
-                .deletingLastPathComponent()
-        }
-
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        SecurityScopedBookmark.save(url: url, key: LocalGGUFService.serverPathKey)
-        localGGUFServerPath = url.path
-    }
-
-    private func chooseLocalGGUFModel() {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = false
-        panel.allowsMultipleSelection = false
-        panel.prompt = "Choose"
-        if let ggufType = UTType(filenameExtension: "gguf") {
-            panel.allowedContentTypes = [ggufType]
-        }
-
-        if !localGGUFModelPath.isEmpty {
-            panel.directoryURL = URL(fileURLWithPath: NSString(string: localGGUFModelPath).expandingTildeInPath)
-                .deletingLastPathComponent()
-        }
-
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        SecurityScopedBookmark.save(url: url, key: LocalGGUFService.modelPathKey)
-        localGGUFModelPath = url.path
     }
 
     private func refreshWhisperKitStatus() {
@@ -997,13 +918,13 @@ struct TranscriptionSettingsView: View {
     }
 
     private func loadModels() async {
-        guard aiBackend == .openRouter, hasOpenRouterKey else { return }
+        guard canUseAI else { return }
 
         isLoadingModels = true
         defer { isLoadingModels = false }
 
         do {
-            let apiKey = try await KeychainService.shared.retrieve(for: .openRouterAPIKey) ?? ""
+            let apiKey = (try? await KeychainService.shared.retrieve(for: .openRouterAPIKey)) ?? ""
             availableLLMModels = try await openRouterService.fetchModels(apiKey: apiKey)
 
             // If no model selected yet, try to select a reasonable default
