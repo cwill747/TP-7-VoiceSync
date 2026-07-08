@@ -1083,7 +1083,6 @@ struct TranscriptionSettingsView: View {
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
-        SecurityScopedBookmark.save(url: url, key: "markdown.folderPath")
         markdownInputPath = url.path
         validateMarkdownFolder()
     }
@@ -1107,7 +1106,8 @@ struct TranscriptionSettingsView: View {
         }
 
         // Try to write a test file
-        let testFile = URL(fileURLWithPath: expandedPath).appendingPathComponent(".tp7-test-\(UUID().uuidString)")
+        let folderURL = URL(fileURLWithPath: expandedPath, isDirectory: true)
+        let testFile = folderURL.appendingPathComponent(".tp7-test-\(UUID().uuidString)")
         do {
             try "test".write(to: testFile, atomically: true, encoding: .utf8)
             try FileManager.default.removeItem(at: testFile)
@@ -1116,9 +1116,16 @@ struct TranscriptionSettingsView: View {
             return
         }
 
-        // Success - save the path and bookmark
-        SecurityScopedBookmark.save(url: URL(fileURLWithPath: expandedPath), key: "markdown.folderPath")
-        markdownFolderPath = expandedPath
+        // Save the path and security-scoped bookmark together. Bail out if the
+        // bookmark can't be created rather than persisting a folder we can't reopen.
+        guard SecurityScopedBookmark.saveFolderSelection(url: folderURL, key: "markdown.folderPath") else {
+            markdownValidationStatus = .error("Couldn't get lasting access to this folder. Use Choose… to grant access.")
+            return
+        }
+
+        // Update the @AppStorage binding so the "Current:" label refreshes now (a
+        // direct UserDefaults write to a dotted key is not observed by @AppStorage).
+        markdownFolderPath = folderURL.path
         markdownValidationStatus = .success
     }
 }

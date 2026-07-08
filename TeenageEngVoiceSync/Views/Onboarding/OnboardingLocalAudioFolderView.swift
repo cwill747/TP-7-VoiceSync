@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import AppKit
 
 struct OnboardingLocalAudioFolderView: View {
     @Binding var isConfigured: Bool
@@ -52,6 +53,12 @@ struct OnboardingLocalAudioFolderView: View {
                         .onChange(of: inputPath) { _, _ in
                             validationStatus = nil
                         }
+
+                    Button("Choose…") {
+                        chooseFolder()
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(isValidating)
 
                     Button("Validate") {
                         validateFolder()
@@ -129,7 +136,8 @@ struct OnboardingLocalAudioFolderView: View {
         }
 
         // Try to write a test file
-        let testFile = URL(fileURLWithPath: expandedPath).appendingPathComponent(".tp7-test-\(UUID().uuidString)")
+        let folderURL = URL(fileURLWithPath: expandedPath, isDirectory: true)
+        let testFile = folderURL.appendingPathComponent(".tp7-test-\(UUID().uuidString)")
         do {
             try "test".write(to: testFile, atomically: true, encoding: .utf8)
             try FileManager.default.removeItem(at: testFile)
@@ -139,14 +147,40 @@ struct OnboardingLocalAudioFolderView: View {
             return
         }
 
-        // Success - save the path, bookmark, and enable local storage
-        SecurityScopedBookmark.save(url: URL(fileURLWithPath: expandedPath), key: "localaudio.folderPath")
-        folderPath = expandedPath
+        // Save the path and security-scoped bookmark together. Bail out if the
+        // bookmark can't be created rather than enabling a folder we can't reopen.
+        guard SecurityScopedBookmark.saveFolderSelection(url: folderURL, key: "localaudio.folderPath") else {
+            validationStatus = .error("Couldn't get lasting access to this folder. Click Choose… to grant access.")
+            isValidating = false
+            return
+        }
+
+        // Success - enable local storage. Update the @AppStorage binding so the
+        // view reflects the new path immediately (a direct UserDefaults write to
+        // a dotted key is not observed by @AppStorage).
+        folderPath = folderURL.path
         localAudioEnabled = true
         s3Enabled = false  // Disable S3 when local storage is enabled
         validationStatus = .success
         isConfigured = true
         isValidating = false
+    }
+
+    private func chooseFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Choose"
+
+        let startPath = inputPath.isEmpty ? folderPath : inputPath
+        if !startPath.isEmpty {
+            panel.directoryURL = URL(fileURLWithPath: NSString(string: startPath).expandingTildeInPath)
+        }
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        inputPath = url.path
+        validateFolder()
     }
 }
 

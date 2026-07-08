@@ -31,13 +31,14 @@ struct StorageSettingsView: View {
     @State private var testStatus: TestStatus?
     @State private var localInputPath = ""
     @State private var localValidationStatus: ValidationStatus?
+    @State private var s3ReloadTask: Task<Void, Never>?
 
     enum TestStatus {
         case success
         case error(String)
     }
 
-    enum ValidationStatus {
+    enum ValidationStatus: Equatable {
         case success
         case error(String)
     }
@@ -50,6 +51,10 @@ struct StorageSettingsView: View {
                     .onChange(of: s3Enabled) { _, _ in
                         appState.reloadServices()
                     }
+                    .onChange(of: providerRaw) { _, _ in scheduleS3Reload() }
+                    .onChange(of: bucket) { _, _ in scheduleS3Reload() }
+                    .onChange(of: region) { _, _ in scheduleS3Reload() }
+                    .onChange(of: prefix) { _, _ in scheduleS3Reload() }
 
                 if s3Enabled {
                     Picker("Provider", selection: Binding(
@@ -141,6 +146,14 @@ struct StorageSettingsView: View {
                                     localInputPath = localFolderPath
                                 }
                             }
+                            .onChange(of: localFolderPath) { _, newValue in
+                                if localInputPath.isEmpty || localValidationStatus == .success {
+                                    localInputPath = newValue
+                                }
+                            }
+                            .onChange(of: localInputPath) { _, _ in
+                                localValidationStatus = nil
+                            }
 
                         Button("Choose…") {
                             chooseLocalFolder()
@@ -207,6 +220,19 @@ struct StorageSettingsView: View {
 
     // MARK: - S3 Methods
 
+    /// Debounces service reloads while the user is editing S3 fields. Typing in
+    /// the bucket/region/prefix TextFields would otherwise tear down and rebuild
+    /// every service (incl. keychain reads) on each keystroke.
+    private func scheduleS3Reload() {
+        testStatus = nil
+        s3ReloadTask?.cancel()
+        s3ReloadTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(600))
+            guard !Task.isCancelled else { return }
+            appState.reloadServices()
+        }
+    }
+
     private func checkCredentials() async {
         do {
             let accessKey = try await KeychainService.shared.retrieve(for: .awsAccessKeyId)
@@ -267,7 +293,6 @@ struct StorageSettingsView: View {
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
-        SecurityScopedBookmark.save(url: url, key: "localaudio.folderPath")
         localInputPath = url.path
         validateLocalFolder()
     }
@@ -291,7 +316,8 @@ struct StorageSettingsView: View {
         }
 
         // Try to write a test file
-        let testFile = URL(fileURLWithPath: expandedPath).appendingPathComponent(".tp7-test-\(UUID().uuidString)")
+        let folderURL = URL(fileURLWithPath: expandedPath, isDirectory: true)
+        let testFile = folderURL.appendingPathComponent(".tp7-test-\(UUID().uuidString)")
         do {
             try "test".write(to: testFile, atomically: true, encoding: .utf8)
             try FileManager.default.removeItem(at: testFile)
@@ -300,9 +326,18 @@ struct StorageSettingsView: View {
             return
         }
 
-        // Success - save the path
-        localFolderPath = expandedPath
+        // Save the path and security-scoped bookmark together. Bail out if the
+        // bookmark can't be created rather than persisting a folder we can't reopen.
+        guard SecurityScopedBookmark.saveFolderSelection(url: folderURL, key: "localaudio.folderPath") else {
+            localValidationStatus = .error("Couldn't get lasting access to this folder. Use Choose… to grant access.")
+            return
+        }
+
+        // Update the @AppStorage binding so the "Current:" label refreshes now (a
+        // direct UserDefaults write to a dotted key is not observed by @AppStorage).
+        localFolderPath = folderURL.path
         localValidationStatus = .success
+        appState.reloadServices()
     }
 
     private var awsRegions: [String] {
