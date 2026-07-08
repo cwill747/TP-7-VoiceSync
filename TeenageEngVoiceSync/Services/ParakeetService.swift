@@ -13,7 +13,7 @@
 //
 
 import Foundation
-import AVFoundation
+@preconcurrency import AVFoundation
 import FluidAudio
 import os
 
@@ -121,6 +121,8 @@ actor ParakeetService: TranscriptionProvider {
     private let diarizationEnabled: Bool
     private var asrModels: AsrModels?
     private var manager: AsrManager?
+    private var ctcModels: CtcModels?
+    private var ctcTokenizer: CtcTokenizer?
     private var diarizer: DiarizerManager?
     /// Populated by SyncService before transcription runs.
     private var knownPersonProfiles: [KnownPersonProfile] = []
@@ -233,6 +235,7 @@ actor ParakeetService: TranscriptionProvider {
         let runDiarization = diarizationEnabled && !forceSingleSpeaker
 
         let url = URL(fileURLWithPath: localPath)
+        let languageCode = variant == .v2 ? "en" : "auto"
 
         let result: ASRResult
         var decodedSamples: [Float]?
@@ -270,9 +273,11 @@ actor ParakeetService: TranscriptionProvider {
             }
         }
 
+        finalText = await VocabularyStore.shared.applyDictionary(to: finalText)
+
         return TranscriptionResult(
             text: finalText,
-            languageCode: variant == .v2 ? "en" : "auto",
+            languageCode: languageCode,
             languageProbability: nil,
             transcriptionId: nil,
             words: nil,
@@ -303,9 +308,13 @@ actor ParakeetService: TranscriptionProvider {
         var perTrackEmbeddings: [[Float]] = []
 
         for path in trackPaths {
+            let url = URL(fileURLWithPath: path)
             var decoderState = TdtDecoderState.make()
-            let result = try await manager.transcribe(URL(fileURLWithPath: path), decoderState: &decoderState, language: language)
-            perTrackText.append(result.text.trimmingCharacters(in: .whitespacesAndNewlines))
+            let result = try await manager.transcribe(url, decoderState: &decoderState, language: language)
+            let boostedText = try await vocabularyBoostedSlidingWindowTextIfAvailable(
+                samples: AudioConverter().resampleAudioFile(url)
+            )
+            perTrackText.append((boostedText ?? result.text).trimmingCharacters(in: .whitespacesAndNewlines))
             perTrackWords.append(Self.buildWordSpans(from: result.tokenTimings ?? []))
             perTrackEmbeddings.append((try? await Self.extractEmbedding(from: path)) ?? [])
         }
@@ -315,7 +324,11 @@ actor ParakeetService: TranscriptionProvider {
         // that can't be confirmed (missing embeddings, a track that doesn't
         // match), which is the safe default for a genuine multi-speaker file.
         if allTracksSameSpeaker(perTrackEmbeddings) {
-            return Self.overdubResult(perTrackText: perTrackText, perTrackWords: perTrackWords, languageCode: variant == .v2 ? "en" : "auto")
+            var processedText: [String] = []
+            for text in perTrackText {
+                processedText.append(await VocabularyStore.shared.applyDictionary(to: text))
+            }
+            return Self.overdubResult(perTrackText: processedText, perTrackWords: perTrackWords, languageCode: variant == .v2 ? "en" : "auto")
         }
 
         let labels = Self.resolveTrackLabels(embeddings: perTrackEmbeddings, knownPersonProfiles: knownPersonProfiles)
@@ -369,8 +382,12 @@ actor ParakeetService: TranscriptionProvider {
         // rendered transcript reads as a single back-and-forth conversation.
         timedParagraphs.sort { $0.startTime < $1.startTime }
 
+        let multiTrackText = await VocabularyStore.shared.applyDictionary(
+            to: timedParagraphs.map(\.paragraph).joined(separator: "\n\n")
+        )
+
         return TranscriptionResult(
-            text: timedParagraphs.map(\.paragraph).joined(separator: "\n\n"),
+            text: multiTrackText,
             languageCode: variant == .v2 ? "en" : "auto",
             languageProbability: nil,
             transcriptionId: nil,
@@ -673,7 +690,10 @@ actor ParakeetService: TranscriptionProvider {
         let language: Language? = variant == .v2 ? .english : nil
 
         let result = try await manager.transcribe(url, decoderState: &decoderState, language: language)
-        let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let boostedText = try await vocabularyBoostedSlidingWindowTextIfAvailable(
+            samples: AudioConverter().resampleAudioFile(url)
+        )
+        let text = (boostedText ?? result.text).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return ("", 0) }
 
         let startTime = result.tokenTimings.flatMap { Self.buildWordSpans(from: $0).first?.startTime } ?? 0
@@ -720,6 +740,12 @@ actor ParakeetService: TranscriptionProvider {
             config: .default.applying(tdtConfig: TdtConfig(blankId: variant.asrVersion.blankId))
         )
         try await manager.loadModels(try await loadAsrModels())
+        if let vocabulary = try await vocabularyContextForBoosting() {
+            try await manager.configureVocabularyBoosting(
+                vocabulary: vocabulary,
+                ctcModels: try await loadCtcModels()
+            )
+        }
         return manager
     }
 
@@ -767,6 +793,62 @@ actor ParakeetService: TranscriptionProvider {
         buffer.frameLength = AVAudioFrameCount(samples.count)
         channelData.update(from: samples, count: samples.count)
         return buffer
+    }
+
+    private func vocabularyBoostedSlidingWindowTextIfAvailable(samples: [Float]) async throws -> String? {
+        guard try await vocabularyContextForBoosting() != nil else { return nil }
+
+        let result = try await transcribeSlidingWindow(samples)
+        let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? nil : text
+    }
+
+    private func vocabularyContextForBoosting() async throws -> CustomVocabularyContext? {
+        guard await VocabularyStore.isBoostingEnabled else {
+            return nil
+        }
+        guard let context = try await VocabularyStore.shared.buildVocabularyContext(),
+              !context.terms.isEmpty else {
+            return nil
+        }
+
+        let tokenizer = try await loadCtcTokenizer()
+        let tokenizedTerms = context.terms.compactMap { term -> CustomVocabularyTerm? in
+            let tokenIds = tokenizer.encode(term.text)
+            guard !tokenIds.isEmpty else { return nil }
+            return CustomVocabularyTerm(
+                text: term.text,
+                weight: term.weight,
+                aliases: term.aliases,
+                tokenIds: term.tokenIds,
+                ctcTokenIds: tokenIds
+            )
+        }
+        guard !tokenizedTerms.isEmpty else { return nil }
+
+        return CustomVocabularyContext(
+            terms: tokenizedTerms,
+            alpha: context.alpha,
+            minCtcScore: context.minCtcScore,
+            minSimilarity: context.minSimilarity,
+            minCombinedConfidence: context.minCombinedConfidence,
+            minTermLength: context.minTermLength
+        )
+    }
+
+    private func loadCtcModels() async throws -> CtcModels {
+        if let ctcModels { return ctcModels }
+        let ctcModels = try await CtcModels.downloadAndLoad(variant: .ctc110m)
+        self.ctcModels = ctcModels
+        return ctcModels
+    }
+
+    private func loadCtcTokenizer() async throws -> CtcTokenizer {
+        if let ctcTokenizer { return ctcTokenizer }
+        let modelDirectory = try await CtcModels.download(variant: .ctc110m)
+        let ctcTokenizer = try await CtcTokenizer.load(from: modelDirectory)
+        self.ctcTokenizer = ctcTokenizer
+        return ctcTokenizer
     }
 
     private func loadDiarizer() async throws -> DiarizerManager {
