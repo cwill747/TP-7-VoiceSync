@@ -19,6 +19,7 @@ final class OfflineModePendingWorkTests: XCTestCase {
     private let keys = [
         "s3.enabled", "s3.bucket", "s3.backupAfterTranscription",
         "localaudio.enabled", "localaudio.folderPath",
+        "aiEnhancement.backend", "localgguf.serverPath", "localgguf.modelPath",
         "transcription.provider", "openrouter.enabled", "openrouter.model",
         "openrouter.formatEnabled", "openrouter.formatModel",
         "notion.enabled", "notion.databaseId",
@@ -172,6 +173,30 @@ final class OfflineModePendingWorkTests: XCTestCase {
 
         let recording = try makeRecording(status: .completed)
         XCTAssertTrue(SyncService.hasPendingRemoteWork(recording))
+    }
+
+    @MainActor
+    func testLocalGGUFTitleStepDoesNotRequireOpenRouterModel() throws {
+        UserDefaults.standard.set(AIEnhancementBackend.localGGUF.rawValue, forKey: "aiEnhancement.backend")
+        UserDefaults.standard.set("/tmp/llama-server", forKey: "localgguf.serverPath")
+        UserDefaults.standard.set("/tmp/model.gguf", forKey: "localgguf.modelPath")
+        UserDefaults.standard.set(true, forKey: "openrouter.enabled")
+
+        let recording = try makeRecording(status: .completed)
+
+        XCTAssertTrue(SyncService.remainingRemoteSteps(for: recording).contains(.summary))
+    }
+
+    @MainActor
+    func testLocalGGUFFormatStepDoesNotRequireOpenRouterModel() throws {
+        UserDefaults.standard.set(AIEnhancementBackend.localGGUF.rawValue, forKey: "aiEnhancement.backend")
+        UserDefaults.standard.set("/tmp/llama-server", forKey: "localgguf.serverPath")
+        UserDefaults.standard.set("/tmp/model.gguf", forKey: "localgguf.modelPath")
+        UserDefaults.standard.set(true, forKey: "openrouter.formatEnabled")
+
+        let recording = try makeRecording(status: .completed)
+
+        XCTAssertTrue(SyncService.remainingRemoteSteps(for: recording).contains(.format))
     }
 
     @MainActor

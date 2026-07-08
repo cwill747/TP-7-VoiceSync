@@ -205,7 +205,7 @@ actor OpenRouterService {
         }
 
         // Parse the JSON response from the LLM
-        return try parseLLMResponse(content)
+        return try Self.parseLLMResponse(content)
     }
 
     /// Cleans up a raw transcription: adds punctuation and capitalization and
@@ -347,7 +347,7 @@ actor OpenRouterService {
         return remainder.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private func parseLLMResponse(_ content: String) throws -> LLMResult {
+    static func parseLLMResponse(_ content: String) throws -> LLMResult {
         // Try to find JSON in the response (LLM might include extra text)
         var jsonString = content
 
@@ -374,7 +374,7 @@ actor OpenRouterService {
         }
     }
 
-    private func extractManually(from content: String) throws -> LLMResult {
+    private static func extractManually(from content: String) throws -> LLMResult {
         // Fallback: try to extract title and summary from plain text
         let lines = content.components(separatedBy: .newlines).filter { !$0.isEmpty }
 

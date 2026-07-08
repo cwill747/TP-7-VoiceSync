@@ -71,6 +71,7 @@ final class SyncService {
     private var transcriptionProvider: (any TranscriptionProvider)?
     private var transcriptionProviderKind: TranscriptionProviderKind?
     private let openRouterService = OpenRouterService()
+    private let localGGUFService = LocalGGUFService()
     private let localAudioService = LocalAudioService()
 
     /// A not-yet-processed cache file's device origin, keyed by its local path.
@@ -1572,7 +1573,8 @@ final class SyncService {
     /// Runs the configured LLM passes immediately after ASR and before speaker
     /// assignment or destination delivery.
     private func finishPostTranscriptionProcessing(_ recording: Recording, transcription: TranscriptionResult) async {
-        guard reachability.isOnline else {
+        let backend = AIEnhancementBackend.current()
+        guard reachability.isOnline || backend == .localGGUF else {
             AppLogger.sync.debug("Offline: deferring LLM processing for \(recording.filename, privacy: .private)")
             return
         }
@@ -1625,7 +1627,8 @@ final class SyncService {
     /// but not yet fully uploaded. Triggered at launch, on offline→online, and via
     /// a manual "Retry now".
     func reconcilePendingWork() async {
-        guard reachability.isOnline, !isReconciling else { return }
+        let canProcessLocalLLMOffline = AIEnhancementBackend.current() == .localGGUF
+        guard reachability.isOnline || canProcessLocalLLMOffline, !isReconciling else { return }
         isReconciling = true
         let previousActivity = processingActivity
         processingActivity = .reconciling
@@ -1640,9 +1643,10 @@ final class SyncService {
         AppLogger.sync.info("Reconciling deferred remote work across \(recordings.count, privacy: .public) recordings")
 
         for recording in recordings {
-            guard reachability.isOnline else { break }
+            let isOnline = reachability.isOnline
 
             if recording.transcriptionStatus == .pending {
+                guard isOnline else { continue }
                 guard transcriptionProvider != nil else { continue }
                 // Cloud providers transcribe from S3; make sure the audio is
                 // uploaded first when that's the storage path.
@@ -1676,6 +1680,8 @@ final class SyncService {
                 continue
             }
 
+            guard isOnline else { continue }
+
             if recording.transcriptionStatus == .completed, recording.deletedFromDeviceAt == nil {
                 await deleteFromDeviceIfConfigured(recording)
             }
@@ -1693,6 +1699,26 @@ final class SyncService {
 
     /// Generates a title and summary using OpenRouter LLM
     private func generateLLMTitle(for transcription: String) async -> LLMResult? {
+        if AIEnhancementBackend.current() == .localGGUF {
+            guard LocalGGUFService.isConfigured() else {
+                AppLogger.network.debug("Local GGUF enhancement is not configured")
+                return nil
+            }
+
+            AppLogger.network.info("Generating title/summary with local GGUF")
+            do {
+                let result = try await localGGUFService.generateTitleAndSummary(
+                    transcription: transcription,
+                    customPrompt: UserDefaults.standard.string(forKey: "llm.customPrompt")
+                )
+                AppLogger.network.debug("Generated local title: \(result.title, privacy: .private)")
+                return result
+            } catch {
+                AppLogger.network.error("Failed to generate local title/summary: \(error.localizedDescription, privacy: .public)")
+                return nil
+            }
+        }
+
         guard let apiKey = try? await KeychainService.shared.retrieve(for: .openRouterAPIKey),
               !apiKey.isEmpty else {
             AppLogger.network.debug("OpenRouter API key not configured")
@@ -1739,6 +1765,35 @@ final class SyncService {
     /// Reformats a transcription via OpenRouter (punctuation + minor correction)
     /// using a separately-chosen model.
     private func formatLLMTranscription(_ transcription: String) async -> FormatOutcome {
+        let customPrompt = UserDefaults.standard.string(forKey: "llm.formatPrompt")
+        let defaults = UserDefaults.standard
+        let options = TranscriptFormatOptions(
+            removeFillerWords: defaults.bool(forKey: "openrouter.format.removeFillerWords"),
+            removeFalseStarts: defaults.bool(forKey: "openrouter.format.removeFalseStarts"),
+            splitParagraphs: defaults.bool(forKey: "openrouter.format.splitParagraphs"),
+            bulletPoints: defaults.bool(forKey: "openrouter.format.bulletPoints")
+        )
+
+        if AIEnhancementBackend.current() == .localGGUF {
+            guard LocalGGUFService.isConfigured() else {
+                AppLogger.network.debug("Local GGUF enhancement is not configured; skipping cleanup")
+                return .skip
+            }
+
+            AppLogger.network.info("Formatting transcription with local GGUF")
+            do {
+                let formatted = try await localGGUFService.formatTranscription(
+                    transcription: transcription,
+                    customPrompt: customPrompt,
+                    options: options
+                )
+                return formatted.isEmpty ? .failed : .cleaned(formatted)
+            } catch {
+                AppLogger.network.error("Failed to format transcription locally: \(error.localizedDescription, privacy: .public)")
+                return .failed
+            }
+        }
+
         guard let apiKey = try? await KeychainService.shared.retrieve(for: .openRouterAPIKey),
               !apiKey.isEmpty else {
             AppLogger.network.debug("OpenRouter API key not configured; skipping cleanup")
@@ -1753,15 +1808,6 @@ final class SyncService {
         }
 
         AppLogger.network.info("Formatting transcription (model=\(model, privacy: .public))")
-
-        let customPrompt = UserDefaults.standard.string(forKey: "llm.formatPrompt")
-        let defaults = UserDefaults.standard
-        let options = TranscriptFormatOptions(
-            removeFillerWords: defaults.bool(forKey: "openrouter.format.removeFillerWords"),
-            removeFalseStarts: defaults.bool(forKey: "openrouter.format.removeFalseStarts"),
-            splitParagraphs: defaults.bool(forKey: "openrouter.format.splitParagraphs"),
-            bulletPoints: defaults.bool(forKey: "openrouter.format.bulletPoints")
-        )
 
         do {
             let formatted = try await openRouterService.formatTranscription(
@@ -1979,16 +2025,24 @@ extension SyncService {
 
         if needsS3Upload(recording) { steps.append(.s3) }
 
-        let openRouterModel = defaults.string(forKey: "openrouter.model") ?? ""
-        if defaults.bool(forKey: "openrouter.enabled"), !openRouterModel.isEmpty,
-           recording.llmProcessedAt == nil {
-            steps.append(.summary)
+        if defaults.bool(forKey: "openrouter.enabled"), recording.llmProcessedAt == nil {
+            switch AIEnhancementBackend.current(defaults: defaults) {
+            case .openRouter:
+                let openRouterModel = defaults.string(forKey: "openrouter.model") ?? ""
+                if !openRouterModel.isEmpty { steps.append(.summary) }
+            case .localGGUF:
+                if LocalGGUFService.isConfigured(defaults: defaults) { steps.append(.summary) }
+            }
         }
 
-        let formatModel = defaults.string(forKey: "openrouter.formatModel") ?? ""
-        if defaults.bool(forKey: "openrouter.formatEnabled"), !formatModel.isEmpty,
-           recording.formattingProcessedAt == nil {
-            steps.append(.format)
+        if defaults.bool(forKey: "openrouter.formatEnabled"), recording.formattingProcessedAt == nil {
+            switch AIEnhancementBackend.current(defaults: defaults) {
+            case .openRouter:
+                let formatModel = defaults.string(forKey: "openrouter.formatModel") ?? ""
+                if !formatModel.isEmpty { steps.append(.format) }
+            case .localGGUF:
+                if LocalGGUFService.isConfigured(defaults: defaults) { steps.append(.format) }
+            }
         }
 
         let notionEnabled = defaults.bool(forKey: "notion.enabled")
