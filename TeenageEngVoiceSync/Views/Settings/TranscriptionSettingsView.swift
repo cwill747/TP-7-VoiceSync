@@ -39,6 +39,9 @@ struct TranscriptionSettingsView: View {
     // LLM settings
     @AppStorage("openrouter.enabled") private var llmEnabled = false
     @AppStorage("openrouter.model") private var selectedLLMModel = ""
+    // OpenAI-compatible API base URL. Empty = OpenRouter default; set to e.g.
+    // http://127.0.0.1:8088/v1 for a local llama-server / LM Studio / Ollama.
+    @AppStorage(OpenRouterService.baseURLKey) private var apiBaseURL = ""
 
     // LLM transcript cleanup settings (separate model choice from titling)
     @AppStorage("openrouter.formatEnabled") private var formatEnabled = false
@@ -123,6 +126,23 @@ struct TranscriptionSettingsView: View {
 
     private var transcriptionActive: Bool {
         transcriptionEnabled && canTranscribe
+    }
+
+    /// The effective base URL, falling back to OpenRouter when unset.
+    private var resolvedBaseURL: String {
+        let raw = apiBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        return raw.isEmpty ? OpenRouterService.defaultBaseURL : raw
+    }
+
+    /// A local endpoint (llama-server etc.) needs no API key.
+    private var isLocalEndpoint: Bool {
+        guard let host = URL(string: resolvedBaseURL)?.host?.lowercased() else { return false }
+        return host == "localhost" || host == "127.0.0.1" || host == "::1"
+    }
+
+    /// AI steps can run when a key is configured or the endpoint is local.
+    private var canUseAI: Bool {
+        hasOpenRouterKey || isLocalEndpoint
     }
 
     var body: some View {
@@ -563,19 +583,48 @@ struct TranscriptionSettingsView: View {
                 }
             }
 
+            // MARK: - AI Provider
+            Section("AI Provider") {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        TextField(OpenRouterService.defaultBaseURL, text: $apiBaseURL)
+                            .textFieldStyle(.roundedBorder)
+                            .onSubmit { Task { await loadModels() } }
+                        if !apiBaseURL.isEmpty {
+                            Button("Reset") { apiBaseURL = "" }
+                                .buttonStyle(.borderless)
+                        }
+                    }
+
+                    if isLocalEndpoint {
+                        Label("Local endpoint — no API key required", systemImage: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                            .font(.caption)
+                    } else if hasOpenRouterKey {
+                        Label("API key configured", systemImage: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                            .font(.caption)
+                    } else {
+                        Label("Configure an API key in the API Keys tab", systemImage: "exclamationmark.triangle")
+                            .foregroundStyle(.orange)
+                            .font(.caption)
+                    }
+
+                    Text("Any OpenAI-compatible chat API. Leave blank for OpenRouter, or point at a local server you run yourself — e.g. llama-server at http://127.0.0.1:8088/v1 (start it with: llama-server --model <model.gguf> --port 8088). Local endpoints need no API key.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
             // MARK: - LLM Title Generation
             Section("LLM Title Generation") {
                 Toggle("Enable AI-powered titles", isOn: $llmEnabled)
-                    .disabled(!hasOpenRouterKey)
+                    .disabled(!canUseAI)
                     .help("Generate intelligent titles for Apple Notes using AI")
 
-                if !hasOpenRouterKey {
-                    Label("Configure OpenRouter API key in API Keys tab", systemImage: "exclamationmark.triangle")
+                if !canUseAI {
+                    Label("Configure an API key in API Keys tab, or set a local endpoint above", systemImage: "exclamationmark.triangle")
                         .foregroundStyle(.orange)
-                        .font(.caption)
-                } else {
-                    Label("OpenRouter API key configured", systemImage: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
                         .font(.caption)
                 }
 
@@ -586,7 +635,7 @@ struct TranscriptionSettingsView: View {
                         Text("Loading models...")
                             .foregroundStyle(.secondary)
                     }
-                } else if availableLLMModels.isEmpty && hasOpenRouterKey {
+                } else if availableLLMModels.isEmpty && canUseAI {
                     Text("Click 'Refresh Models' to load available models")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -619,7 +668,7 @@ struct TranscriptionSettingsView: View {
                     Task { await loadModels() }
                 }
                 .buttonStyle(.borderless)
-                .disabled(!hasOpenRouterKey || isLoadingModels)
+                .disabled(!canUseAI || isLoadingModels)
 
                 Text("Generates intelligent titles and summaries for your Apple Notes using AI. Configure the prompt in the Advanced tab.")
                     .font(.caption)
@@ -629,11 +678,11 @@ struct TranscriptionSettingsView: View {
             // MARK: - AI Transcript Cleanup
             Section("AI Transcript Cleanup") {
                 Toggle("Clean up transcripts with AI", isOn: $formatEnabled)
-                    .disabled(!hasOpenRouterKey)
+                    .disabled(!canUseAI)
                     .help("Add punctuation and fix likely transcription errors before saving")
 
-                if !hasOpenRouterKey {
-                    Label("Configure OpenRouter API key in API Keys tab", systemImage: "exclamationmark.triangle")
+                if !canUseAI {
+                    Label("Configure an API key in API Keys tab, or set a local endpoint above", systemImage: "exclamationmark.triangle")
                         .foregroundStyle(.orange)
                         .font(.caption)
                 }
@@ -645,7 +694,7 @@ struct TranscriptionSettingsView: View {
                         Text("Loading models...")
                             .foregroundStyle(.secondary)
                     }
-                } else if availableLLMModels.isEmpty && hasOpenRouterKey {
+                } else if availableLLMModels.isEmpty && canUseAI {
                     Text("Click 'Refresh Models' above to load available models")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -697,7 +746,7 @@ struct TranscriptionSettingsView: View {
             refreshWhisperKitStatus()
             refreshParakeetStatus()
             refreshDiarizerStatus()
-            if hasOpenRouterKey {
+            if canUseAI {
                 await loadModels()
             }
         }
@@ -869,13 +918,13 @@ struct TranscriptionSettingsView: View {
     }
 
     private func loadModels() async {
-        guard hasOpenRouterKey else { return }
+        guard canUseAI else { return }
 
         isLoadingModels = true
         defer { isLoadingModels = false }
 
         do {
-            let apiKey = try await KeychainService.shared.retrieve(for: .openRouterAPIKey) ?? ""
+            let apiKey = (try? await KeychainService.shared.retrieve(for: .openRouterAPIKey)) ?? ""
             availableLLMModels = try await openRouterService.fetchModels(apiKey: apiKey)
 
             // If no model selected yet, try to select a reasonable default

@@ -185,4 +185,8 @@ final class AppState {
             await syncService.reloadServices()
         }
     }
+
+    func shutdown() {
+        syncService?.stop()
+    }
 }

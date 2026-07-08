@@ -52,7 +52,31 @@ nonisolated struct OpenRouterModel: Identifiable, Sendable {
 }
 
 actor OpenRouterService {
-    private let baseURL = "https://openrouter.ai/api/v1"
+    /// UserDefaults key holding the OpenAI-compatible API base URL. Empty means
+    /// use the OpenRouter default; set it to e.g. `http://127.0.0.1:8088/v1` to
+    /// point at a local llama-server / LM Studio / Ollama instance.
+    static let baseURLKey = "openrouter.baseURL"
+    static let defaultBaseURL = "https://openrouter.ai/api/v1"
+
+    /// Resolves the configured base URL, falling back to OpenRouter and trimming
+    /// a trailing slash so path joins stay well-formed.
+    nonisolated static func resolvedBaseURL(defaults: UserDefaults = .standard) -> String {
+        let raw = (defaults.string(forKey: baseURLKey) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let base = raw.isEmpty ? defaultBaseURL : raw
+        return base.hasSuffix("/") ? String(base.dropLast()) : base
+    }
+
+    /// True when the endpoint is on the local machine — such servers need no API
+    /// key and can run while the app is otherwise offline.
+    nonisolated static func isLocalEndpoint(defaults: UserDefaults = .standard) -> Bool {
+        guard let host = URL(string: resolvedBaseURL(defaults: defaults))?.host?.lowercased() else {
+            return false
+        }
+        return host == "localhost" || host == "127.0.0.1" || host == "::1"
+    }
+
+    private var baseURL: String { Self.resolvedBaseURL() }
     private let session: URLSession
 
     /// Default prompt template for title and summary generation
@@ -102,13 +126,11 @@ actor OpenRouterService {
 
     /// Fetches available models from OpenRouter API
     func fetchModels(apiKey: String) async throws -> [OpenRouterModel] {
-        guard !apiKey.isEmpty else {
-            throw OpenRouterError.invalidAPIKey
-        }
-
         var request = URLRequest(url: URL(string: "\(baseURL)/models")!)
         request.httpMethod = "GET"
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        if !apiKey.isEmpty {
+            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        }
 
         let (data, response) = try await session.data(for: request)
 
@@ -149,10 +171,6 @@ actor OpenRouterService {
         apiKey: String,
         customPrompt: String? = nil
     ) async throws -> LLMResult {
-        guard !apiKey.isEmpty else {
-            throw OpenRouterError.invalidAPIKey
-        }
-
         guard !transcription.isEmpty else {
             throw OpenRouterError.emptyTranscription
         }
@@ -168,7 +186,9 @@ actor OpenRouterService {
 
         var request = URLRequest(url: URL(string: "\(baseURL)/chat/completions")!)
         request.httpMethod = "POST"
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        if !apiKey.isEmpty {
+            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        }
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("TP-7-VoiceSync", forHTTPHeaderField: "HTTP-Referer")
         request.setValue("TP-7 Voice Sync", forHTTPHeaderField: "X-Title")
@@ -205,7 +225,7 @@ actor OpenRouterService {
         }
 
         // Parse the JSON response from the LLM
-        return try parseLLMResponse(content)
+        return try Self.parseLLMResponse(content)
     }
 
     /// Cleans up a raw transcription: adds punctuation and capitalization and
@@ -223,10 +243,6 @@ actor OpenRouterService {
         customPrompt: String? = nil,
         options: TranscriptFormatOptions = TranscriptFormatOptions()
     ) async throws -> String {
-        guard !apiKey.isEmpty else {
-            throw OpenRouterError.invalidAPIKey
-        }
-
         guard !transcription.isEmpty else {
             throw OpenRouterError.emptyTranscription
         }
@@ -245,7 +261,9 @@ actor OpenRouterService {
 
         var request = URLRequest(url: URL(string: "\(baseURL)/chat/completions")!)
         request.httpMethod = "POST"
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        if !apiKey.isEmpty {
+            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        }
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("TP-7-VoiceSync", forHTTPHeaderField: "HTTP-Referer")
         request.setValue("TP-7 Voice Sync", forHTTPHeaderField: "X-Title")
@@ -347,7 +365,7 @@ actor OpenRouterService {
         return remainder.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private func parseLLMResponse(_ content: String) throws -> LLMResult {
+    static func parseLLMResponse(_ content: String) throws -> LLMResult {
         // Try to find JSON in the response (LLM might include extra text)
         var jsonString = content
 
@@ -374,7 +392,7 @@ actor OpenRouterService {
         }
     }
 
-    private func extractManually(from content: String) throws -> LLMResult {
+    private static func extractManually(from content: String) throws -> LLMResult {
         // Fallback: try to extract title and summary from plain text
         let lines = content.components(separatedBy: .newlines).filter { !$0.isEmpty }
 

@@ -153,6 +153,7 @@ final class SyncService {
 
     func stop() {
         deviceWatch.stopWatching()
+        reachability.stop()
         Task {
             await debouncer.stopProcessing()
         }
@@ -1572,7 +1573,9 @@ final class SyncService {
     /// Runs the configured LLM passes immediately after ASR and before speaker
     /// assignment or destination delivery.
     private func finishPostTranscriptionProcessing(_ recording: Recording, transcription: TranscriptionResult) async {
-        guard reachability.isOnline else {
+        // A local (on-device) AI endpoint can run while the app is offline;
+        // a remote one can't.
+        guard reachability.isOnline || OpenRouterService.isLocalEndpoint() else {
             AppLogger.sync.debug("Offline: deferring LLM processing for \(recording.filename, privacy: .private)")
             return
         }
@@ -1625,7 +1628,8 @@ final class SyncService {
     /// but not yet fully uploaded. Triggered at launch, on offline→online, and via
     /// a manual "Retry now".
     func reconcilePendingWork() async {
-        guard reachability.isOnline, !isReconciling else { return }
+        let canProcessLocalLLMOffline = OpenRouterService.isLocalEndpoint()
+        guard reachability.isOnline || canProcessLocalLLMOffline, !isReconciling else { return }
         isReconciling = true
         let previousActivity = processingActivity
         processingActivity = .reconciling
@@ -1640,9 +1644,10 @@ final class SyncService {
         AppLogger.sync.info("Reconciling deferred remote work across \(recordings.count, privacy: .public) recordings")
 
         for recording in recordings {
-            guard reachability.isOnline else { break }
+            let isOnline = reachability.isOnline
 
             if recording.transcriptionStatus == .pending {
+                guard isOnline else { continue }
                 guard transcriptionProvider != nil else { continue }
                 // Cloud providers transcribe from S3; make sure the audio is
                 // uploaded first when that's the storage path.
@@ -1676,6 +1681,8 @@ final class SyncService {
                 continue
             }
 
+            guard isOnline else { continue }
+
             if recording.transcriptionStatus == .completed, recording.deletedFromDeviceAt == nil {
                 await deleteFromDeviceIfConfigured(recording)
             }
@@ -1691,17 +1698,18 @@ final class SyncService {
         pendingRemoteCount = all.filter { Self.hasPendingRemoteWork($0) }.count
     }
 
-    /// Generates a title and summary using OpenRouter LLM
+    /// Generates a title and summary via the configured OpenAI-compatible API.
     private func generateLLMTitle(for transcription: String) async -> LLMResult? {
-        guard let apiKey = try? await KeychainService.shared.retrieve(for: .openRouterAPIKey),
-              !apiKey.isEmpty else {
-            AppLogger.network.debug("OpenRouter API key not configured")
+        let apiKey = (try? await KeychainService.shared.retrieve(for: .openRouterAPIKey)) ?? ""
+        // A local endpoint needs no key; a remote one does.
+        guard !apiKey.isEmpty || OpenRouterService.isLocalEndpoint() else {
+            AppLogger.network.debug("AI provider API key not configured")
             return nil
         }
 
         let model = UserDefaults.standard.string(forKey: "openrouter.model") ?? ""
         guard !model.isEmpty else {
-            AppLogger.network.debug("OpenRouter model not selected")
+            AppLogger.network.debug("AI model not selected")
             return nil
         }
 
@@ -1739,21 +1747,6 @@ final class SyncService {
     /// Reformats a transcription via OpenRouter (punctuation + minor correction)
     /// using a separately-chosen model.
     private func formatLLMTranscription(_ transcription: String) async -> FormatOutcome {
-        guard let apiKey = try? await KeychainService.shared.retrieve(for: .openRouterAPIKey),
-              !apiKey.isEmpty else {
-            AppLogger.network.debug("OpenRouter API key not configured; skipping cleanup")
-            return .skip
-        }
-
-        // Formatting has its own model choice, independent of titling.
-        let model = UserDefaults.standard.string(forKey: "openrouter.formatModel") ?? ""
-        guard !model.isEmpty else {
-            AppLogger.network.debug("OpenRouter formatting model not selected; skipping cleanup")
-            return .skip
-        }
-
-        AppLogger.network.info("Formatting transcription (model=\(model, privacy: .public))")
-
         let customPrompt = UserDefaults.standard.string(forKey: "llm.formatPrompt")
         let defaults = UserDefaults.standard
         let options = TranscriptFormatOptions(
@@ -1762,6 +1755,24 @@ final class SyncService {
             splitParagraphs: defaults.bool(forKey: "openrouter.format.splitParagraphs"),
             bulletPoints: defaults.bool(forKey: "openrouter.format.bulletPoints")
         )
+
+        let apiKey = (try? await KeychainService.shared.retrieve(for: .openRouterAPIKey)) ?? ""
+        // A local endpoint needs no key; a remote one does. Without a usable
+        // config the step can never succeed, so skip (deliver the raw transcript)
+        // rather than leaving it pending and spinning the UI forever.
+        guard !apiKey.isEmpty || OpenRouterService.isLocalEndpoint() else {
+            AppLogger.network.debug("AI provider API key not configured; skipping cleanup")
+            return .skip
+        }
+
+        // Formatting has its own model choice, independent of titling.
+        let model = UserDefaults.standard.string(forKey: "openrouter.formatModel") ?? ""
+        guard !model.isEmpty else {
+            AppLogger.network.debug("Format model not selected; skipping cleanup")
+            return .skip
+        }
+
+        AppLogger.network.info("Formatting transcription (model=\(model, privacy: .public))")
 
         do {
             let formatted = try await openRouterService.formatTranscription(
@@ -1812,10 +1823,7 @@ final class SyncService {
         AppLogger.notes.info("Manual sendToDestinations called for \(recording.filename, privacy: .private)")
 
         let notionDatabaseId = UserDefaults.standard.string(forKey: "notion.databaseId") ?? ""
-        let needsNetwork = Self.needsS3Upload(recording)
-            || UserDefaults.standard.bool(forKey: "openrouter.enabled")
-            || (UserDefaults.standard.bool(forKey: "notion.enabled") && !notionDatabaseId.isEmpty)
-        guard !needsNetwork || reachability.isOnline else {
+        guard !Self.needsNetworkForManualSend(recording) || reachability.isOnline else {
             throw AppleNotesError.executionFailed("Connect to the network before sending to destinations.")
         }
         guard recording.transcriptionStatus == .completed,
@@ -1971,6 +1979,19 @@ extension SyncService {
         return true
     }
 
+    nonisolated static func needsNetworkForManualSend(_ recording: Recording) -> Bool {
+        let defaults = UserDefaults.standard
+        let notionDatabaseId = defaults.string(forKey: "notion.databaseId") ?? ""
+        // A local AI endpoint runs without network; only a remote one blocks
+        // manual send on connectivity.
+        let needsRemoteLLM = !OpenRouterService.isLocalEndpoint(defaults: defaults)
+            && !remainingLLMSteps(for: recording).isEmpty
+
+        return needsS3Upload(recording)
+            || needsRemoteLLM
+            || (defaults.bool(forKey: "notion.enabled") && !notionDatabaseId.isEmpty)
+    }
+
     /// The post-transcription remote steps a recording still owes, given current
     /// settings. Only meaningful for a recording whose transcript exists.
     nonisolated static func remainingRemoteSteps(for recording: Recording) -> [RemoteStep] {
@@ -1979,16 +2000,14 @@ extension SyncService {
 
         if needsS3Upload(recording) { steps.append(.s3) }
 
-        let openRouterModel = defaults.string(forKey: "openrouter.model") ?? ""
-        if defaults.bool(forKey: "openrouter.enabled"), !openRouterModel.isEmpty,
-           recording.llmProcessedAt == nil {
-            steps.append(.summary)
+        if defaults.bool(forKey: "openrouter.enabled"), recording.llmProcessedAt == nil {
+            let model = defaults.string(forKey: "openrouter.model") ?? ""
+            if !model.isEmpty { steps.append(.summary) }
         }
 
-        let formatModel = defaults.string(forKey: "openrouter.formatModel") ?? ""
-        if defaults.bool(forKey: "openrouter.formatEnabled"), !formatModel.isEmpty,
-           recording.formattingProcessedAt == nil {
-            steps.append(.format)
+        if defaults.bool(forKey: "openrouter.formatEnabled"), recording.formattingProcessedAt == nil {
+            let formatModel = defaults.string(forKey: "openrouter.formatModel") ?? ""
+            if !formatModel.isEmpty { steps.append(.format) }
         }
 
         let notionEnabled = defaults.bool(forKey: "notion.enabled")

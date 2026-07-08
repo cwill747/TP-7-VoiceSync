@@ -130,6 +130,9 @@ struct TeenageEngVoiceSyncApp: App {
                         openWindow(id: "onboarding")
                     }
                 }
+                .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+                    appState.shutdown()
+                }
         }
         .defaultSize(width: 960, height: 640)
         .commands {
