@@ -43,6 +43,15 @@ Parakeet is the recommended engine. It runs [Parakeet TDT](https://huggingface.c
 - **Download the model** — click "Download Model" and it fetches automatically, caching under `~/.cache/fluidaudio`
 - **Speaker diarization (optional)** — enable it to split transcripts into per-speaker turns entirely on-device. This downloads a separate, small diarization model. See [Speakers & People](#speakers--people).
 
+### Parakeet Unified (native punctuation, English)
+
+Parakeet Unified is a separate FluidAudio model that adds **punctuation and capitalization natively**, so transcripts come out already formatted and you can turn off the AI cleanup pass. It also runs on the Apple Neural Engine.
+
+- **Choose Parakeet Unified (Local, English)** in the Setup Wizard or **Settings > Transcription**, then click "Download Model"
+- **English only** — for other languages, use Parakeet TDT v3
+- **Trade-offs:** no speaker diarization, no per-speaker splitting of multi-track TP-7 `/recordings`, no overdub notes for multi-track `/memo` files, and no vocabulary boosting (dictionary trigger→replacement still applies). Single-track memos — the common TP-7 case — are unaffected.
+- **AI cleanup becomes optional** — since punctuation is native, you can disable transcript cleanup under **Settings > Transcription**. The LLM is still useful for false-start removal, paragraphing, bullet points, and titles/summaries.
+
 ### WhisperKit (alternative local engine)
 
 [WhisperKit](https://github.com/argmaxinc/WhisperKit) by [Argmax](https://www.argmaxinc.com/) is also supported if you prefer Whisper models.

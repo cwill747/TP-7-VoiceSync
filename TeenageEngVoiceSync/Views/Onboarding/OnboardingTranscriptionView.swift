@@ -26,6 +26,10 @@ struct OnboardingTranscriptionView: View {
     @State private var whisperKitDownloadProgress = 0.0
     @State private var whisperKitDownloadError: String?
 
+    @State private var parakeetUnifiedDownloadState: WhisperKitDownloadState = .notDownloaded
+    @State private var parakeetUnifiedDownloadProgress = 0.0
+    @State private var parakeetUnifiedDownloadError: String?
+
     enum VerificationStatus {
         case success(String)
         case error(String)
@@ -92,6 +96,10 @@ struct OnboardingTranscriptionView: View {
                     whisperKitSection
                 }
 
+                if transcriptionProvider == .parakeetUnified {
+                    parakeetUnifiedSection
+                }
+
                 if isConfigured {
                     Toggle("Enable automatic transcription", isOn: $transcriptionEnabled)
                 }
@@ -104,6 +112,7 @@ struct OnboardingTranscriptionView: View {
             ensureDefaults()
             await loadExistingKey()
             refreshWhisperKitStatus()
+            refreshParakeetUnifiedStatus()
             updateConfiguredState()
         }
     }
@@ -221,6 +230,54 @@ struct OnboardingTranscriptionView: View {
         }
     }
 
+    private var parakeetUnifiedSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Parakeet Unified Model")
+                .font(.headline)
+
+            HStack {
+                Button("Download Model") {
+                    downloadParakeetUnifiedModel()
+                }
+                .disabled(parakeetUnifiedDownloadState == .downloading)
+
+                if parakeetUnifiedDownloadState == .downloading {
+                    ProgressView(value: parakeetUnifiedDownloadProgress)
+                        .frame(width: 120)
+                }
+            }
+
+            if let errorMessage = parakeetUnifiedDownloadError {
+                Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.red)
+                    .font(.caption)
+            } else {
+                switch parakeetUnifiedDownloadState {
+                case .notDownloaded:
+                    Label("Model not downloaded yet", systemImage: "icloud.and.arrow.down")
+                        .foregroundStyle(.secondary)
+                        .font(.caption)
+                case .downloading:
+                    Label("Downloading model...", systemImage: "arrow.down.circle")
+                        .foregroundStyle(.secondary)
+                        .font(.caption)
+                case .ready:
+                    Label("Model downloaded", systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                        .font(.caption)
+                }
+            }
+
+            if s3Enabled {
+                Toggle("Backup audio to S3", isOn: $whisperKitBackupToS3)
+            }
+
+            Text("Runs locally on the Apple Neural Engine with native punctuation and capitalization (English only). First transcription downloads the model if you skip this.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
     @ViewBuilder
     private func statusLabel(for status: VerificationStatus) -> some View {
         switch status {
@@ -306,6 +363,8 @@ struct OnboardingTranscriptionView: View {
             isConfigured = whisperKitDownloadState == .ready
         case .parakeet:
             isConfigured = true
+        case .parakeetUnified:
+            isConfigured = true
         }
     }
 
@@ -331,6 +390,38 @@ struct OnboardingTranscriptionView: View {
                 await MainActor.run {
                     whisperKitDownloadState = .notDownloaded
                     whisperKitDownloadError = error.localizedDescription
+                    isConfigured = false
+                }
+            }
+        }
+    }
+
+    private func refreshParakeetUnifiedStatus() {
+        parakeetUnifiedDownloadError = nil
+        parakeetUnifiedDownloadState = ParakeetUnifiedService.cachedModelExists() ? .ready : .notDownloaded
+    }
+
+    private func downloadParakeetUnifiedModel() {
+        parakeetUnifiedDownloadError = nil
+        parakeetUnifiedDownloadProgress = 0
+        parakeetUnifiedDownloadState = .downloading
+
+        Task {
+            do {
+                try await ParakeetUnifiedService.downloadModel { status in
+                    Task { @MainActor in
+                        parakeetUnifiedDownloadProgress = status.fractionCompleted
+                    }
+                }
+                await MainActor.run {
+                    parakeetUnifiedDownloadState = .ready
+                    isConfigured = true
+                    transcriptionEnabled = true
+                }
+            } catch {
+                await MainActor.run {
+                    parakeetUnifiedDownloadState = .notDownloaded
+                    parakeetUnifiedDownloadError = error.localizedDescription
                     isConfigured = false
                 }
             }

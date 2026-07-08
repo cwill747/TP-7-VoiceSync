@@ -11,6 +11,7 @@ enum TranscriptionProviderKind: String, CaseIterable, Identifiable {
     case elevenLabs = "elevenlabs"
     case whisperKit = "whisperkit"
     case parakeet = "parakeet"
+    case parakeetUnified = "parakeet-unified"
 
     var id: String { rawValue }
 
@@ -22,6 +23,8 @@ enum TranscriptionProviderKind: String, CaseIterable, Identifiable {
             return "WhisperKit (Local)"
         case .parakeet:
             return "Parakeet (Local, ANE)"
+        case .parakeetUnified:
+            return "Parakeet Unified (Local, English)"
         }
     }
 
@@ -33,6 +36,8 @@ enum TranscriptionProviderKind: String, CaseIterable, Identifiable {
             return "WhisperKit"
         case .parakeet:
             return "Parakeet"
+        case .parakeetUnified:
+            return "Parakeet Unified"
         }
     }
 
@@ -44,6 +49,8 @@ enum TranscriptionProviderKind: String, CaseIterable, Identifiable {
             return "On-device transcription with optional offline model downloads."
         case .parakeet:
             return "On-device Parakeet TDT via FluidAudio, runs on the Apple Neural Engine."
+        case .parakeetUnified:
+            return "On-device Parakeet Unified via FluidAudio. Adds punctuation and capitalization natively (English only). No speaker diarization, multi-track splitting, or vocabulary boosting."
         }
     }
 }
