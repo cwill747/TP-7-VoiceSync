@@ -173,6 +173,14 @@ actor LocalGGUFService {
         }
     }
 
+    func shutdown() {
+        stopServer()
+    }
+
+    deinit {
+        stopServer()
+    }
+
     private func stopServer() {
         guard let process else { return }
         if process.isRunning {

@@ -200,6 +200,18 @@ final class OfflineModePendingWorkTests: XCTestCase {
     }
 
     @MainActor
+    func testManualSendDoesNotRequireNetworkForLocalGGUFTitleStep() throws {
+        UserDefaults.standard.set(AIEnhancementBackend.localGGUF.rawValue, forKey: "aiEnhancement.backend")
+        UserDefaults.standard.set("/tmp/llama-server", forKey: "localgguf.serverPath")
+        UserDefaults.standard.set("/tmp/model.gguf", forKey: "localgguf.modelPath")
+        UserDefaults.standard.set(true, forKey: "openrouter.enabled")
+
+        let recording = try makeRecording(status: .completed)
+
+        XCTAssertFalse(SyncService.needsNetworkForManualSend(recording))
+    }
+
+    @MainActor
     func testCompletedWithNothingEnabledIsNotWaiting() throws {
         let recording = try makeRecording(status: .completed)
         XCTAssertFalse(SyncService.hasPendingRemoteWork(recording))

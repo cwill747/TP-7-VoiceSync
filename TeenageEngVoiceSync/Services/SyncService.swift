@@ -154,8 +154,10 @@ final class SyncService {
 
     func stop() {
         deviceWatch.stopWatching()
+        reachability.stop()
         Task {
             await debouncer.stopProcessing()
+            await localGGUFService.shutdown()
         }
     }
 
@@ -1858,10 +1860,7 @@ final class SyncService {
         AppLogger.notes.info("Manual sendToDestinations called for \(recording.filename, privacy: .private)")
 
         let notionDatabaseId = UserDefaults.standard.string(forKey: "notion.databaseId") ?? ""
-        let needsNetwork = Self.needsS3Upload(recording)
-            || UserDefaults.standard.bool(forKey: "openrouter.enabled")
-            || (UserDefaults.standard.bool(forKey: "notion.enabled") && !notionDatabaseId.isEmpty)
-        guard !needsNetwork || reachability.isOnline else {
+        guard !Self.needsNetworkForManualSend(recording) || reachability.isOnline else {
             throw AppleNotesError.executionFailed("Connect to the network before sending to destinations.")
         }
         guard recording.transcriptionStatus == .completed,
@@ -2015,6 +2014,17 @@ extension SyncService {
         guard defaults.bool(forKey: "s3.enabled"),
               !(defaults.string(forKey: "s3.bucket") ?? "").isEmpty else { return false }
         return true
+    }
+
+    nonisolated static func needsNetworkForManualSend(_ recording: Recording) -> Bool {
+        let defaults = UserDefaults.standard
+        let notionDatabaseId = defaults.string(forKey: "notion.databaseId") ?? ""
+        let needsOpenRouterLLM = AIEnhancementBackend.current(defaults: defaults) == .openRouter
+            && !remainingLLMSteps(for: recording).isEmpty
+
+        return needsS3Upload(recording)
+            || needsOpenRouterLLM
+            || (defaults.bool(forKey: "notion.enabled") && !notionDatabaseId.isEmpty)
     }
 
     /// The post-transcription remote steps a recording still owes, given current
