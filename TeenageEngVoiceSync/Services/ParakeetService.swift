@@ -13,6 +13,7 @@
 //
 
 import Foundation
+import AVFoundation
 import FluidAudio
 import os
 
@@ -54,11 +55,13 @@ actor ParakeetService: TranscriptionProvider {
 
     enum ParakeetServiceError: LocalizedError {
         case invalidURL
+        case audioBufferCreationFailed
         case emptyResult
 
         var errorDescription: String? {
             switch self {
             case .invalidURL: return "Invalid audio URL"
+            case .audioBufferCreationFailed: return "Failed to create audio buffer"
             case .emptyResult: return "Parakeet returned no transcription"
             }
         }
@@ -116,6 +119,7 @@ actor ParakeetService: TranscriptionProvider {
 
     private let variant: ParakeetModelVariant
     private let diarizationEnabled: Bool
+    private var asrModels: AsrModels?
     private var manager: AsrManager?
     private var diarizer: DiarizerManager?
     /// Populated by SyncService before transcription runs.
@@ -167,7 +171,7 @@ actor ParakeetService: TranscriptionProvider {
     }
 
     /// Maps a FluidAudio download phase to the label shown in the settings UI.
-    private static func phaseDescription(for phase: DownloadUtils.DownloadPhase) -> String {
+    private static func phaseDescription(for phase: DownloadPhase) -> String {
         switch phase {
         case .listing:
             return "Listing files…"
@@ -226,21 +230,22 @@ actor ParakeetService: TranscriptionProvider {
     ///   "speaker" diarization might detect there would be a misattribution,
     ///   not a real second speaker. /recordings has no such guarantee.
     func transcribe(localPath: String, forceSingleSpeaker: Bool) async throws -> TranscriptionResult {
-        let manager = try await loadManager()
         let runDiarization = diarizationEnabled && !forceSingleSpeaker
 
         let url = URL(fileURLWithPath: localPath)
-        var decoderState = TdtDecoderState.make()
-        let language: Language? = variant == .v2 ? .english : nil
 
         let result: ASRResult
         var decodedSamples: [Float]?
         if runDiarization {
+            let manager = try await loadManager()
+            var decoderState = TdtDecoderState.make()
+            let language: Language? = variant == .v2 ? .english : nil
             let samples = try AudioConverter().resampleAudioFile(url)
             decodedSamples = samples
             result = try await manager.transcribe(samples, decoderState: &decoderState, language: language)
         } else {
-            result = try await manager.transcribe(url, decoderState: &decoderState, language: language)
+            let samples = try AudioConverter().resampleAudioFile(url)
+            result = try await transcribeSlidingWindow(samples)
         }
 
         let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -692,14 +697,76 @@ actor ParakeetService: TranscriptionProvider {
 
     // MARK: - Model loading (once per actor instance)
 
+    private func loadAsrModels() async throws -> AsrModels {
+        if let asrModels { return asrModels }
+
+        let models = try await AsrModels.downloadAndLoad(version: variant.asrVersion)
+        self.asrModels = models
+        return models
+    }
+
     private func loadManager() async throws -> AsrManager {
         if let manager { return manager }
 
-        let models = try await AsrModels.downloadAndLoad(version: variant.asrVersion)
+        let models = try await loadAsrModels()
         let manager = AsrManager(config: .default)
         try await manager.loadModels(models)
         self.manager = manager
         return manager
+    }
+
+    private func loadSlidingWindowManager() async throws -> SlidingWindowAsrManager {
+        let manager = SlidingWindowAsrManager(
+            config: .default.applying(tdtConfig: TdtConfig(blankId: variant.asrVersion.blankId))
+        )
+        try await manager.loadModels(try await loadAsrModels())
+        return manager
+    }
+
+    private func transcribeSlidingWindow(_ samples: [Float]) async throws -> ASRResult {
+        let startTime = Date()
+        let manager = try await loadSlidingWindowManager()
+        try await manager.startStreaming(source: .microphone)
+
+        var offset = 0
+        while offset < samples.count {
+            try Task.checkCancellation()
+            let end = min(offset + Self.slidingWindowChunkSampleCount, samples.count)
+            let buffer = try Self.makePCMBuffer(samples: Array(samples[offset..<end]))
+            await manager.streamAudio(buffer)
+            offset = end
+        }
+
+        let text = try await manager.finish()
+        return ASRResult(
+            text: text,
+            confidence: 1,
+            duration: TimeInterval(samples.count) / 16_000,
+            processingTime: Date().timeIntervalSince(startTime),
+            tokenTimings: nil
+        )
+    }
+
+    private static let slidingWindowChunkSampleCount = 16_000 * 5
+
+    private static func makePCMBuffer(samples: [Float]) throws -> AVAudioPCMBuffer {
+        guard let format = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 16_000,
+            channels: 1,
+            interleaved: false
+        ),
+        let buffer = AVAudioPCMBuffer(
+            pcmFormat: format,
+            frameCapacity: AVAudioFrameCount(samples.count)
+        ),
+        let channelData = buffer.floatChannelData?[0] else {
+            throw ParakeetServiceError.audioBufferCreationFailed
+        }
+
+        buffer.frameLength = AVAudioFrameCount(samples.count)
+        channelData.update(from: samples, count: samples.count)
+        return buffer
     }
 
     private func loadDiarizer() async throws -> DiarizerManager {
