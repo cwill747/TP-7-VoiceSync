@@ -5,7 +5,8 @@ nonisolated enum SecurityScopedBookmark {
 
     private static let logger = Logger(subsystem: "com.tp7sync", category: "bookmark")
 
-    static func save(url: URL, key: String) {
+    @discardableResult
+    static func save(url: URL, key: String) -> Bool {
         do {
             let data = try url.bookmarkData(
                 options: .withSecurityScope,
@@ -14,9 +15,21 @@ nonisolated enum SecurityScopedBookmark {
             )
             UserDefaults.standard.set(data, forKey: "\(key).bookmark")
             logger.info("Saved bookmark for \(key, privacy: .public)")
+            return true
         } catch {
             logger.error("Failed to save bookmark for \(key, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            return false
         }
+    }
+
+    /// Saves a security-scoped bookmark and, only if that succeeds, records the
+    /// folder path. Returns `false` (and stores nothing) when the bookmark can't
+    /// be created, so callers never persist a path they can't reopen after relaunch.
+    @discardableResult
+    static func saveFolderSelection(url: URL, key: String) -> Bool {
+        guard save(url: url, key: key) else { return false }
+        UserDefaults.standard.set(url.path, forKey: key)
+        return true
     }
 
     static func resolve(key: String) -> URL? {
