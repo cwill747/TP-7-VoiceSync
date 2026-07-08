@@ -30,12 +30,17 @@ struct SettingsView: View {
                     Label("Transcription", systemImage: "text.bubble")
                 }
 
+            VocabularySettingsView()
+                .tabItem {
+                    Label("Dictionary", systemImage: "text.book.closed")
+                }
+
             AdvancedSettingsView()
                 .tabItem {
                     Label("Advanced", systemImage: "slider.horizontal.3")
                 }
         }
-        .frame(width: 550, height: 500)
+        .frame(width: 550, height: 540)
     }
 }
 

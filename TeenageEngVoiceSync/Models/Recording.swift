@@ -241,7 +241,7 @@ struct OverdubNote: Codable, Sendable, Identifiable {
     var startTime: TimeInterval
     var text: String
 
-    init(trackIndex: Int, startTime: TimeInterval, text: String) {
+    nonisolated init(trackIndex: Int, startTime: TimeInterval, text: String) {
         self.id = UUID()
         self.trackIndex = trackIndex
         self.startTime = startTime
