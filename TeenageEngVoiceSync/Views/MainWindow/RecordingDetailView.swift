@@ -18,11 +18,11 @@ struct RecordingDetailView: View {
     @State private var isRetranscribing = false
     @State private var isDeleting = false
     @State private var showDeleteConfirmation = false
-    @State private var isSendingToNotes = false
-    @State private var notesStatus: NotesStatus?
+    @State private var isSendingToDestinations = false
+    @State private var destinationStatus: DestinationStatus?
     @State private var showRawTranscript = false
 
-    enum NotesStatus {
+    enum DestinationStatus {
         case success
         case error(String)
     }
@@ -247,6 +247,14 @@ struct RecordingDetailView: View {
         case .completed:
             if let _ = recording.transcriptionText {
                 VStack(alignment: .leading, spacing: 8) {
+                    if SyncService.hasPendingLLMProcessing(recording) {
+                        HStack {
+                            ProgressView()
+                                .scaleEffect(0.8)
+                            Text("Processing with LLM...")
+                                .foregroundStyle(.secondary)
+                        }
+                    } else {
                     // Show diarized correction view if segment data is available
                     if let segData = recording.speakerSegmentsData,
                        let segments = try? JSONDecoder().decode([StoredSpeakerSegment].self, from: segData),
@@ -298,6 +306,7 @@ struct RecordingDetailView: View {
                             language: recording.transcriptionLanguage
                         )
                     }
+                    }
 
                     if let notesData = recording.overdubNotesData,
                        let overdubNotes = try? JSONDecoder().decode([OverdubNote].self, from: notesData),
@@ -308,22 +317,28 @@ struct RecordingDetailView: View {
                     HStack {
                         Spacer()
                         Button {
-                            sendToNotes()
+                            sendToDestinations()
                         } label: {
-                            if isSendingToNotes {
+                            if isSendingToDestinations {
                                 ProgressView()
                                     .scaleEffect(0.7)
                             } else {
-                                Label("Send to Notes", systemImage: "note.text")
+                                Label("Send to Destinations", systemImage: "paperplane")
                             }
                         }
-                        .disabled(isSendingToNotes)
+                        .disabled(isSendingToDestinations || SyncService.hasPendingLLMProcessing(recording) || SyncService.needsSpeakerAssignment(recording))
                     }
 
-                    if let status = notesStatus {
+                    if SyncService.needsSpeakerAssignment(recording) && !SyncService.hasPendingLLMProcessing(recording) {
+                        Label("Choose speakers before sending", systemImage: "person.2.badge.gearshape")
+                            .foregroundStyle(.orange)
+                            .font(.caption)
+                    }
+
+                    if let status = destinationStatus {
                         switch status {
                         case .success:
-                            Label("Note created", systemImage: "checkmark.circle.fill")
+                            Label("Sent to destinations", systemImage: "checkmark.circle.fill")
                                 .foregroundStyle(.green)
                                 .font(.caption)
                         case .error(let message):
@@ -369,22 +384,22 @@ struct RecordingDetailView: View {
         }
     }
 
-    private func sendToNotes() {
+    private func sendToDestinations() {
         guard let syncService = appState.syncService else { return }
-        isSendingToNotes = true
-        notesStatus = nil
+        isSendingToDestinations = true
+        destinationStatus = nil
 
         Task {
             do {
-                try await syncService.sendToAppleNotes(recording)
+                try await syncService.sendToDestinations(recording)
                 await MainActor.run {
-                    notesStatus = .success
-                    isSendingToNotes = false
+                    destinationStatus = .success
+                    isSendingToDestinations = false
                 }
             } catch {
                 await MainActor.run {
-                    notesStatus = .error(error.localizedDescription)
-                    isSendingToNotes = false
+                    destinationStatus = .error(error.localizedDescription)
+                    isSendingToDestinations = false
                 }
             }
         }

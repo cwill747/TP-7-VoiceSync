@@ -563,9 +563,7 @@ final class SyncService {
             recording.formattedTranscriptionText = nil
             recording.formattingProcessedAt = nil
 
-            // Regenerate summary/notes via deliverRemote so the Work Offline
-            // guard is honoured; reconciliation finishes deferred steps later.
-            await deliverRemote(recording, transcription: result)
+            await finishPostTranscriptionProcessing(recording, transcription: result)
 
             // Notify
             if UserDefaults.standard.bool(forKey: "notify.onSync") {
@@ -955,48 +953,23 @@ final class SyncService {
         }
 
         let provider = transcriptionProviderKind ?? .elevenLabs
-        let backupToS3 = UserDefaults.standard.bool(forKey: "s3.backupAfterTranscription")
-        let isLocalProvider = provider == .whisperKit || provider == .parakeet
-        let shouldTranscribeFirst = isLocalProvider && transcriptionProvider != nil
+        if !reachability.isOnline && provider == .elevenLabs {
+            _ = await storeRecording(recording, allowS3Upload: false)
+            recording.transcriptionStatus = (transcriptionProvider != nil) ? .pending : .none
+            recording.updatedAt = Date()
+            try? modelContext.save()
+            AppLogger.sync.info("Offline: deferring cloud transcription for \(recording.filename, privacy: .private)")
+            await refreshPendingCount()
+            return
+        }
 
-        if shouldTranscribeFirst {
-            // Local ASR (Parakeet/WhisperKit) works offline: transcribe now, then
-            // store + deliver. storeRecording defers S3 when offline; deliverRemote
-            // is a no-op when offline and gets retried by reconciliation later.
-            let transcriptionResult = await transcribeRecording(recording, provider: provider)
-            _ = await storeRecording(recording, allowS3Upload: backupToS3)
+        let transcriptionResult = await transcribeRecording(recording, provider: provider)
+        _ = await storeRecording(recording, allowS3Upload: false)
 
-            if let transcriptionResult {
-                await deliverRemote(recording, transcription: transcriptionResult)
-                if reachability.isOnline, UserDefaults.standard.bool(forKey: "notify.onSync") {
-                    await notificationService.transcriptionComplete(preview: transcriptionResult.text)
-                }
-            }
-        } else {
-            // Cloud transcription (or storage-first) needs the network. When
-            // offline, preserve a local copy first (if configured) so the
-            // archival file is written regardless, then defer the rest until
-            // reconciliation brings us back online.
-            if !reachability.isOnline {
-                _ = await storeRecording(recording, allowS3Upload: false)
-                recording.transcriptionStatus = (transcriptionProvider != nil) ? .pending : .none
-                recording.updatedAt = Date()
-                try? modelContext.save()
-                AppLogger.sync.info("Offline: deferring cloud processing for \(recording.filename, privacy: .private)")
-                await refreshPendingCount()
-                return
-            }
-
-            let allowS3Upload = !isLocalProvider || backupToS3
-            let storageOk = await storeRecording(recording, allowS3Upload: allowS3Upload)
-            guard storageOk else { return }
-
-            let transcriptionResult = await transcribeRecording(recording, provider: provider)
-            if let transcriptionResult {
-                await deliverRemote(recording, transcription: transcriptionResult)
-                if UserDefaults.standard.bool(forKey: "notify.onSync") {
-                    await notificationService.transcriptionComplete(preview: transcriptionResult.text)
-                }
+        if let transcriptionResult {
+            await finishPostTranscriptionProcessing(recording, transcription: transcriptionResult)
+            if UserDefaults.standard.bool(forKey: "notify.onSync") {
+                await notificationService.transcriptionComplete(preview: transcriptionResult.text)
             }
         }
 
@@ -1073,7 +1046,16 @@ final class SyncService {
     /// reconciliation, so it must be idempotent.
     private func uploadToS3IfPossible(_ recording: Recording) async {
         guard recording.s3Key == nil, let s3 = s3Service else { return }
-        guard FileManager.default.fileExists(atPath: recording.localPath) else {
+        let fm = FileManager.default
+        let uploadPath: String?
+        if !recording.localPath.isEmpty, fm.fileExists(atPath: recording.localPath) {
+            uploadPath = recording.localPath
+        } else if let copy = recording.localCopyPath, fm.fileExists(atPath: copy) {
+            uploadPath = copy
+        } else {
+            uploadPath = nil
+        }
+        guard let uploadPath else {
             AppLogger.sync.debug("Deferred S3 upload skipped: no local audio for \(recording.filename, privacy: .private)")
             return
         }
@@ -1081,7 +1063,7 @@ final class SyncService {
         processingActivity = .uploading
         defer { processingActivity = previousActivity }
         do {
-            let result = try await s3.upload(fileURL: URL(fileURLWithPath: recording.localPath))
+            let result = try await s3.upload(fileURL: URL(fileURLWithPath: uploadPath))
             recording.s3Key = result.s3Key
             recording.s3UploadedAt = result.uploadedAt
             recording.updatedAt = Date()
@@ -1571,7 +1553,14 @@ final class SyncService {
         guard recording.llmProcessedAt == nil else { return }
         guard UserDefaults.standard.bool(forKey: "openrouter.enabled") else { return }
 
-        guard let result = await generateLLMTitle(for: text) else { return }
+        guard let result = await generateLLMTitle(for: text) else {
+            // LLM failed (missing key, network error, etc.); mark processed anyway
+            // so delivery isn't permanently blocked — a date-based title is used instead.
+            recording.llmProcessedAt = Date()
+            recording.updatedAt = Date()
+            try? modelContext.save()
+            return
+        }
         recording.llmTitle = result.title
         recording.llmSummary = result.summary
         recording.llmProcessedAt = Date()
@@ -1580,44 +1569,15 @@ final class SyncService {
         AppLogger.notes.debug("Stored LLM title: \(result.title, privacy: .private)")
     }
 
-    /// Runs the network-dependent delivery stages (S3 upload, LLM summary, Notion
-    /// page, note creation) for a transcribed recording. Each stage is guarded by
-    /// its own idempotency check, so this is safe to re-run. A no-op when offline —
-    /// reconciliation retries it once connectivity returns.
-    private func deliverRemote(_ recording: Recording, transcription: TranscriptionResult) async {
+    /// Runs the configured LLM passes immediately after ASR and before speaker
+    /// assignment or destination delivery.
+    private func finishPostTranscriptionProcessing(_ recording: Recording, transcription: TranscriptionResult) async {
         guard reachability.isOnline else {
-            AppLogger.sync.debug("Offline: deferring remote delivery for \(recording.filename, privacy: .private)")
+            AppLogger.sync.debug("Offline: deferring LLM processing for \(recording.filename, privacy: .private)")
             return
-        }
-
-        let previousActivity = processingActivity
-        processingActivity = .delivering
-        defer { processingActivity = previousActivity }
-        if Self.needsS3Upload(recording) {
-            await uploadToS3IfPossible(recording)
-            guard !Self.needsS3Upload(recording) else {
-                AppLogger.sync.info("Deferring remote delivery until required S3 upload completes for \(recording.filename, privacy: .private)")
-                await refreshPendingCount()
-                return
-            }
         }
         await generateAndStoreSummary(for: recording, text: transcription.text)
-
         await formatTranscriptionIfEnabled(for: recording, text: transcription.text)
-        // If cleanup is configured but hasn't succeeded yet (e.g. a transient
-        // OpenRouter failure), defer note/Notion delivery. Those steps set their
-        // own "created" timestamps and are never revisited, so publishing now
-        // would permanently ship the raw transcript instead of the cleaned one.
-        // Reconciliation retries the cleanup, then finishes delivery.
-        guard !Self.remainingRemoteSteps(for: recording).contains(.format) else {
-            AppLogger.sync.info("Deferring note/Notion delivery until transcript cleanup completes for \(recording.filename, privacy: .private)")
-            await refreshPendingCount()
-            return
-        }
-
-        await createNotionPage(for: recording, transcription: transcription)
-        await createAppleNote(for: recording, transcription: transcription)
-        await deleteFromDeviceIfConfigured(recording)
         await refreshPendingCount()
     }
 
@@ -1691,13 +1651,13 @@ final class SyncService {
                 }
                 let provider = transcriptionProviderKind ?? .elevenLabs
                 if let result = await transcribeRecording(recording, provider: provider) {
-                    await deliverRemote(recording, transcription: result)
+                    await finishPostTranscriptionProcessing(recording, transcription: result)
                 }
                 continue
             }
 
             if recording.transcriptionStatus == .completed,
-               !Self.remainingRemoteSteps(for: recording).isEmpty,
+               !Self.remainingLLMSteps(for: recording).isEmpty,
                let text = recording.transcriptionText {
                 var overdubNotes: [OverdubNote]?
                 if let data = recording.overdubNotesData {
@@ -1712,7 +1672,7 @@ final class SyncService {
                     speakerSegments: nil,
                     overdubNotes: overdubNotes
                 )
-                await deliverRemote(recording, transcription: transcription)
+                await finishPostTranscriptionProcessing(recording, transcription: transcription)
                 continue
             }
 
@@ -1846,88 +1806,74 @@ final class SyncService {
         }
     }
 
-    /// Manually send a transcribed recording to Apple Notes
-    func sendToAppleNotes(_ recording: Recording) async throws {
-        AppLogger.notes.info("Manual sendToAppleNotes called for \(recording.filename, privacy: .private)")
+    /// Manually send a finished recording to configured destinations: S3 audio,
+    /// S3 transcript text, Notion, Markdown, and/or Apple Notes.
+    func sendToDestinations(_ recording: Recording) async throws {
+        AppLogger.notes.info("Manual sendToDestinations called for \(recording.filename, privacy: .private)")
 
-        guard let text = recording.transcriptionText else {
+        let notionDatabaseId = UserDefaults.standard.string(forKey: "notion.databaseId") ?? ""
+        let needsNetwork = Self.needsS3Upload(recording)
+            || UserDefaults.standard.bool(forKey: "openrouter.enabled")
+            || (UserDefaults.standard.bool(forKey: "notion.enabled") && !notionDatabaseId.isEmpty)
+        guard !needsNetwork || reachability.isOnline else {
+            throw AppleNotesError.executionFailed("Connect to the network before sending to destinations.")
+        }
+        guard recording.transcriptionStatus == .completed,
+              let text = recording.transcriptionText else {
             throw AppleNotesError.executionFailed("No transcription text available")
         }
-
-        guard let s3 = s3Service else {
-            throw AppleNotesError.executionFailed("S3 service not configured")
+        guard !Self.needsSpeakerAssignment(recording) else {
+            throw AppleNotesError.executionFailed("Choose speakers before sending to destinations.")
         }
-
-        guard let s3Key = recording.s3Key else {
-            throw AppleNotesError.executionFailed("Recording not uploaded to S3")
-        }
-
-        let folder = UserDefaults.standard.string(forKey: "applenotes.folder") ?? "TP-7 Transcripts"
-        let expiryString = UserDefaults.standard.string(forKey: "applenotes.linkExpiry") ?? "7d"
-        let expiry = Self.parseLinkExpiry(expiryString)
-
-        // Generate LLM title if enabled and not already generated
-        var customTitle = recording.llmTitle
-        var summary = recording.llmSummary
-
-        if customTitle == nil && UserDefaults.standard.bool(forKey: "openrouter.enabled") {
-            let llmResult = await generateLLMTitle(for: text)
-            if let result = llmResult {
-                customTitle = result.title
-                summary = result.summary
-
-                // Store in recording
-                recording.llmTitle = result.title
-                recording.llmSummary = result.summary
-                recording.llmProcessedAt = Date()
-                recording.updatedAt = Date()
-                try? modelContext.save()
-
-                AppLogger.notes.debug("Using LLM-generated title: \(result.title, privacy: .private)")
-            }
-        }
-
-        // Clean up the transcript if enabled and not already done. If cleanup is
-        // configured but hasn't succeeded yet (e.g. a transient OpenRouter
-        // failure), bail before creating the note — otherwise we'd stamp
-        // appleNoteCreatedAt against the raw transcript and reconciliation would
-        // never revisit it to apply the cleaned text.
-        await formatTranscriptionIfEnabled(for: recording, text: text)
-        guard !Self.remainingRemoteSteps(for: recording).contains(.format) else {
-            throw AppleNotesError.executionFailed("Transcript cleanup did not complete — try again in a moment.")
-        }
-        let transcriptText = recording.formattedTranscriptionText ?? text
-
-        let playURL = try s3.generatePresignedURL(s3Key: s3Key, expiry: expiry)
-        let downloadURL = try s3.generateDownloadURL(s3Key: s3Key, filename: recording.filename, expiry: expiry)
 
         var overdubNotes: [OverdubNote]?
         if let data = recording.overdubNotesData {
             overdubNotes = try? JSONDecoder().decode([OverdubNote].self, from: data)
         }
-
-        let notesService = AppleNotesService()
-        try await notesService.createTranscriptionNote(
-            transcription: transcriptText,
-            filename: recording.filename,
-            tpDeviceFilename: recording.filename,
-            recordedAt: recording.recordedAt,
-            fileSize: recording.fileSize,
-            language: recording.transcriptionLanguage ?? "unknown",
-            playURL: playURL.absoluteString,
-            downloadURL: downloadURL.absoluteString,
-            folder: folder,
-            customTitle: customTitle,
-            summary: summary,
+        let transcription = TranscriptionResult(
+            text: text,
+            languageCode: recording.transcriptionLanguage ?? "en",
+            languageProbability: nil,
+            transcriptionId: nil,
+            words: nil,
+            speakerSegments: nil,
             overdubNotes: overdubNotes
         )
 
-        // Track that a note was created
-        recording.appleNoteCreatedAt = Date()
-        recording.updatedAt = Date()
-        try? modelContext.save()
+        await finishPostTranscriptionProcessing(recording, transcription: transcription)
+        guard Self.remainingLLMSteps(for: recording).isEmpty else {
+            throw AppleNotesError.executionFailed("LLM processing did not complete. Try again in a moment.")
+        }
 
-        AppLogger.notes.info("Successfully created note for \(recording.filename, privacy: .private)")
+        _ = await storeRecording(recording, allowS3Upload: Self.needsS3Upload(recording))
+        if Self.needsS3Upload(recording) {
+            throw AppleNotesError.executionFailed("S3 upload did not complete. Try again in a moment.")
+        }
+        try await uploadTranscriptToS3IfPossible(recording)
+
+        let notionConfigured = UserDefaults.standard.bool(forKey: "notion.enabled") && !notionDatabaseId.isEmpty
+        await createNotionPage(for: recording, transcription: transcription)
+        if notionConfigured, recording.notionPageCreatedAt == nil {
+            throw AppleNotesError.executionFailed(lastError ?? "Notion delivery failed.")
+        }
+
+        let notesConfigured = UserDefaults.standard.bool(forKey: "markdown.enabled")
+            || UserDefaults.standard.bool(forKey: "applenotes.enabled")
+        await createAppleNote(for: recording, transcription: transcription)
+        if notesConfigured, recording.appleNoteCreatedAt == nil {
+            throw AppleNotesError.executionFailed(lastError ?? "Note creation failed.")
+        }
+
+        await deleteFromDeviceIfConfigured(recording)
+        await refreshPendingCount()
+    }
+
+    private func uploadTranscriptToS3IfPossible(_ recording: Recording) async throws {
+        guard let s3 = s3Service else { return }
+        let transcript = recording.formattedTranscriptionText ?? recording.transcriptionText ?? ""
+        guard !transcript.isEmpty else { return }
+        _ = try await s3.uploadText(filename: recording.filename, text: transcript)
+        AppLogger.sync.info("Uploaded transcript text to S3: \(recording.filename, privacy: .private)")
     }
 
     private func registerTranscriptionDefaults() {
@@ -2016,19 +1962,13 @@ extension SyncService {
         }
     }
 
-    /// Whether a recording still needs its audio uploaded to S3, mirroring the
-    /// conditions in `storeRecording`: S3 and local-folder storage run
-    /// independently, so local storage no longer precludes S3; for local ASR
-    /// providers S3 is opt-in via the backup flag; cloud providers always need it.
+    /// Whether a recording still needs its audio uploaded to S3.
     nonisolated static func needsS3Upload(_ recording: Recording) -> Bool {
         guard recording.s3Key == nil else { return false }
         let defaults = UserDefaults.standard
         guard defaults.bool(forKey: "s3.enabled"),
               !(defaults.string(forKey: "s3.bucket") ?? "").isEmpty else { return false }
-        let providerRaw = defaults.string(forKey: "transcription.provider") ?? TranscriptionProviderKind.elevenLabs.rawValue
-        let provider = TranscriptionProviderKind(rawValue: providerRaw) ?? .elevenLabs
-        let isLocalProvider = provider == .whisperKit || provider == .parakeet
-        return isLocalProvider ? defaults.bool(forKey: "s3.backupAfterTranscription") : true
+        return true
     }
 
     /// The post-transcription remote steps a recording still owes, given current
@@ -2069,6 +2009,31 @@ extension SyncService {
         return steps
     }
 
+    nonisolated static func remainingLLMSteps(for recording: Recording) -> [RemoteStep] {
+        remainingRemoteSteps(for: recording).filter { $0 == .summary || $0 == .format }
+    }
+
+    nonisolated static func hasPendingLLMProcessing(_ recording: Recording) -> Bool {
+        recording.transcriptionStatus == .completed && !remainingLLMSteps(for: recording).isEmpty
+    }
+
+    nonisolated static func needsSpeakerAssignment(_ recording: Recording) -> Bool {
+        guard let data = recording.speakerSegmentsData,
+              let segments = try? JSONDecoder().decode([StoredSpeakerSegment].self, from: data) else {
+            return false
+        }
+
+        let speakerHashes = Set(segments.map(\.effectiveSpeakerHash))
+        guard speakerHashes.count > 1 else { return false }
+
+        return speakerHashes.contains { speakerHash in
+            segments.contains {
+                $0.effectiveSpeakerHash == speakerHash
+                    && (($0.assignedPersonId ?? "").isEmpty || ($0.assignedPersonName ?? "").isEmpty)
+            }
+        }
+    }
+
     /// True when a recording has deferred remote work — either it still needs
     /// transcription (captured offline) or its transcript exists but has
     /// unfinished remote steps. Drives the "N waiting" count and the per-row badge.
@@ -2078,7 +2043,7 @@ extension SyncService {
         case .pending:
             return true
         case .completed:
-            return !remainingRemoteSteps(for: recording).isEmpty
+            return !remainingLLMSteps(for: recording).isEmpty
         default:
             return false
         }
