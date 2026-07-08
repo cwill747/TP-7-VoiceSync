@@ -527,7 +527,7 @@ final class SyncService {
                 } else {
                     result = try await transcriber.transcribe(localPath: recording.localPath)
                 }
-            case .whisperKit, .parakeet:
+            case .whisperKit, .parakeet, .parakeetUnified:
                 guard let audio = await resolveLocalAudioPath(for: recording) else {
                     throw SyncTranscriptionError.noAudioSource
                 }
@@ -689,6 +689,8 @@ final class SyncService {
                         diarizationEnabled: diarizationEnabled,
                         knownPersonProfiles: profiles
                     )
+                case .parakeetUnified:
+                    transcriptionProvider = ParakeetUnifiedService()
                 }
             }
         } catch {
@@ -1263,7 +1265,7 @@ final class SyncService {
                     result = try await transcriber.transcribe(localPath: recording.localPath)
                     AppLogger.sync.debug("Transcribed via device file")
                 }
-            case .whisperKit, .parakeet:
+            case .whisperKit, .parakeet, .parakeetUnified:
                 guard let audio = await resolveLocalAudioPath(for: recording) else {
                     throw SyncTranscriptionError.noAudioSource
                 }

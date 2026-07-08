@@ -67,6 +67,11 @@ struct TranscriptionSettingsView: View {
     @State private var diarizerDownloadError: String?
     @State private var diarizerDownloadPhaseText: String?
     @State private var diarizerDownloadTask: Task<Void, Never>?
+    @State private var parakeetUnifiedDownloadState: ModelDownloadState = .notDownloaded
+    @State private var parakeetUnifiedDownloadProgress = 0.0
+    @State private var parakeetUnifiedDownloadError: String?
+    @State private var parakeetUnifiedDownloadPhaseText: String?
+    @State private var parakeetUnifiedDownloadTask: Task<Void, Never>?
     @State private var availableLLMModels: [OpenRouterModel] = []
     @State private var isLoadingModels = false
     @State private var isTestingNote = false
@@ -120,6 +125,8 @@ struct TranscriptionSettingsView: View {
         case .whisperKit:
             return true
         case .parakeet:
+            return true
+        case .parakeetUnified:
             return true
         }
     }
@@ -370,6 +377,50 @@ struct TranscriptionSettingsView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
+                }
+
+                if transcriptionProvider == .parakeetUnified {
+                    HStack {
+                        Button("Download Model") {
+                            downloadParakeetUnifiedModel()
+                        }
+                        .disabled(parakeetUnifiedDownloadState == .downloading)
+
+                        if parakeetUnifiedDownloadState == .downloading {
+                            ProgressView(value: parakeetUnifiedDownloadProgress)
+                                .frame(width: 120)
+
+                            Button("Cancel") {
+                                cancelParakeetUnifiedDownload()
+                            }
+                            .buttonStyle(.borderless)
+                        }
+                    }
+
+                    if let errorMessage = parakeetUnifiedDownloadError {
+                        Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.red)
+                            .font(.caption)
+                    } else {
+                        switch parakeetUnifiedDownloadState {
+                        case .notDownloaded:
+                            Label("Model not downloaded yet", systemImage: "icloud.and.arrow.down")
+                                .foregroundStyle(.secondary)
+                                .font(.caption)
+                        case .downloading:
+                            Label(parakeetUnifiedDownloadPhaseText ?? "Downloading model...", systemImage: "arrow.down.circle")
+                                .foregroundStyle(.secondary)
+                                .font(.caption)
+                        case .ready:
+                            Label("Model downloaded", systemImage: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                                .font(.caption)
+                        }
+                    }
+
+                    Text("Runs locally on the Apple Neural Engine and adds punctuation and capitalization natively, so you can turn off AI cleanup below. English only; no speaker diarization, multi-track splitting, or vocabulary boosting.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
 
@@ -745,6 +796,7 @@ struct TranscriptionSettingsView: View {
             await loadNotionSettings()
             refreshWhisperKitStatus()
             refreshParakeetStatus()
+            refreshParakeetUnifiedStatus()
             refreshDiarizerStatus()
             if canUseAI {
                 await loadModels()
@@ -843,6 +895,56 @@ struct TranscriptionSettingsView: View {
 
     private func cancelParakeetDownload() {
         parakeetDownloadTask?.cancel()
+    }
+
+    private func refreshParakeetUnifiedStatus() {
+        parakeetUnifiedDownloadError = nil
+        parakeetUnifiedDownloadState = ParakeetUnifiedService.cachedModelExists() ? .ready : .notDownloaded
+    }
+
+    private func downloadParakeetUnifiedModel() {
+        parakeetUnifiedDownloadError = nil
+        parakeetUnifiedDownloadProgress = 0
+        parakeetUnifiedDownloadPhaseText = "Listing files…"
+        parakeetUnifiedDownloadState = .downloading
+
+        parakeetUnifiedDownloadTask = Task {
+            do {
+                try await ParakeetUnifiedService.downloadModel { status in
+                    Task { @MainActor in
+                        parakeetUnifiedDownloadProgress = status.fractionCompleted
+                        parakeetUnifiedDownloadPhaseText = status.phaseDescription
+                    }
+                }
+                await MainActor.run {
+                    parakeetUnifiedDownloadState = .ready
+                    parakeetUnifiedDownloadPhaseText = nil
+                    appState.reloadServices()
+                }
+            } catch is CancellationError {
+                await MainActor.run {
+                    parakeetUnifiedDownloadState = .notDownloaded
+                    parakeetUnifiedDownloadPhaseText = nil
+                }
+            } catch {
+                if (error as? URLError)?.code == .cancelled {
+                    await MainActor.run {
+                        parakeetUnifiedDownloadState = .notDownloaded
+                        parakeetUnifiedDownloadPhaseText = nil
+                    }
+                    return
+                }
+                await MainActor.run {
+                    parakeetUnifiedDownloadState = .notDownloaded
+                    parakeetUnifiedDownloadError = error.localizedDescription
+                    parakeetUnifiedDownloadPhaseText = nil
+                }
+            }
+        }
+    }
+
+    private func cancelParakeetUnifiedDownload() {
+        parakeetUnifiedDownloadTask?.cancel()
     }
 
     private func refreshDiarizerStatus() {
