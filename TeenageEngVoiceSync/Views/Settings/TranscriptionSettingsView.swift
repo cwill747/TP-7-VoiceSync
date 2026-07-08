@@ -645,6 +645,12 @@ struct TranscriptionSettingsView: View {
                             Button("Reset") { apiBaseURL = "" }
                                 .buttonStyle(.borderless)
                         }
+                        Button {
+                            Task { await loadModels() }
+                        } label: {
+                            Label("Refresh Models", systemImage: "arrow.clockwise")
+                        }
+                        .disabled(!canUseAI || isLoadingModels)
                     }
 
                     if isLocalEndpoint {
@@ -714,12 +720,6 @@ struct TranscriptionSettingsView: View {
                         }
                     }
                 }
-
-                Button("Refresh Models") {
-                    Task { await loadModels() }
-                }
-                .buttonStyle(.borderless)
-                .disabled(!canUseAI || isLoadingModels)
 
                 Text("Generates intelligent titles and summaries for your Apple Notes using AI. Configure the prompt in the Advanced tab.")
                     .font(.caption)
@@ -1029,16 +1029,19 @@ struct TranscriptionSettingsView: View {
             let apiKey = (try? await KeychainService.shared.retrieve(for: .openRouterAPIKey)) ?? ""
             availableLLMModels = try await openRouterService.fetchModels(apiKey: apiKey)
 
-            // If no model selected yet, try to select a reasonable default
-            if let defaultModel = availableLLMModels.first(where: {
+            // Stored OpenRouter selections are invalid after switching to a
+            // local server. Replace missing selections so SwiftUI's Picker and
+            // subsequent completion requests always use an available model.
+            let availableIDs = Set(availableLLMModels.map(\.id))
+            let defaultModel = availableLLMModels.first(where: {
                 $0.id.contains("gpt-4o-mini") || $0.id.contains("claude-3-haiku")
-            }) {
-                if selectedLLMModel.isEmpty {
-                    selectedLLMModel = defaultModel.id
-                }
-                if formatModel.isEmpty {
-                    formatModel = defaultModel.id
-                }
+            }) ?? availableLLMModels.first
+
+            if !availableIDs.contains(selectedLLMModel) {
+                selectedLLMModel = defaultModel?.id ?? ""
+            }
+            if !availableIDs.contains(formatModel) {
+                formatModel = defaultModel?.id ?? ""
             }
         } catch {
             AppLogger.app.error("Failed to load OpenRouter models: \(String(describing: error), privacy: .public)")

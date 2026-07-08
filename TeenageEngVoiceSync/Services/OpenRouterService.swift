@@ -57,6 +57,8 @@ actor OpenRouterService {
     /// point at a local llama-server / LM Studio / Ollama instance.
     static let baseURLKey = "openrouter.baseURL"
     static let defaultBaseURL = "https://openrouter.ai/api/v1"
+    static let remoteCompletionTimeout: TimeInterval = 300
+    static let localCompletionTimeout: TimeInterval = 3600
 
     /// Resolves the configured base URL, falling back to OpenRouter and trimming
     /// a trailing slash so path joins stay well-formed.
@@ -64,7 +66,17 @@ actor OpenRouterService {
         let raw = (defaults.string(forKey: baseURLKey) ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let base = raw.isEmpty ? defaultBaseURL : raw
-        return base.hasSuffix("/") ? String(base.dropLast()) : base
+        let trimmed = base.hasSuffix("/") ? String(base.dropLast()) : base
+
+        // URLSession may resolve localhost to IPv6 first. llama-server commonly
+        // listens only on IPv4, which makes an otherwise healthy local endpoint
+        // fail with a refused ::1 connection.
+        guard var components = URLComponents(string: trimmed),
+              components.host?.lowercased() == "localhost" else {
+            return trimmed
+        }
+        components.host = "127.0.0.1"
+        return components.string ?? trimmed
     }
 
     /// True when the endpoint is on the local machine — such servers need no API
@@ -74,6 +86,10 @@ actor OpenRouterService {
             return false
         }
         return host == "localhost" || host == "127.0.0.1" || host == "::1"
+    }
+
+    nonisolated static func completionTimeout(defaults: UserDefaults = .standard) -> TimeInterval {
+        isLocalEndpoint(defaults: defaults) ? localCompletionTimeout : remoteCompletionTimeout
     }
 
     private var baseURL: String { Self.resolvedBaseURL() }
@@ -119,8 +135,8 @@ actor OpenRouterService {
         let config = URLSessionConfiguration.default
         // Formatting a long transcript can generate a lot of tokens, so allow
         // more headroom than short title/summary requests need.
-        config.timeoutIntervalForRequest = 120
-        config.timeoutIntervalForResource = 180
+        config.timeoutIntervalForRequest = Self.remoteCompletionTimeout
+        config.timeoutIntervalForResource = Self.localCompletionTimeout
         self.session = URLSession(configuration: config)
     }
 
@@ -145,16 +161,22 @@ actor OpenRouterService {
             throw OpenRouterError.apiError(statusCode: httpResponse.statusCode)
         }
 
+        return try Self.decodeModels(from: data)
+    }
+
+    /// Decodes both OpenRouter's model schema and the smaller OpenAI-compatible
+    /// schema returned by llama-server.
+    nonisolated static func decodeModels(from data: Data) throws -> [OpenRouterModel] {
         let modelsResponse = try JSONDecoder().decode(ModelsResponse.self, from: data)
 
         return modelsResponse.data.map { model in
             OpenRouterModel(
                 id: model.id,
-                name: model.name,
+                name: model.name ?? model.id,
                 description: model.description ?? "",
-                contextLength: model.contextLength,
-                promptPrice: model.pricing.prompt,
-                completionPrice: model.pricing.completion
+                contextLength: model.contextLength ?? model.meta?.contextLength ?? 0,
+                promptPrice: model.pricing?.prompt ?? "0",
+                completionPrice: model.pricing?.completion ?? "0"
             )
         }.sorted { $0.name < $1.name }
     }
@@ -185,6 +207,7 @@ actor OpenRouterService {
         """
 
         var request = URLRequest(url: URL(string: "\(baseURL)/chat/completions")!)
+        request.timeoutInterval = Self.completionTimeout()
         request.httpMethod = "POST"
         if !apiKey.isEmpty {
             request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
@@ -260,6 +283,7 @@ actor OpenRouterService {
         """
 
         var request = URLRequest(url: URL(string: "\(baseURL)/chat/completions")!)
+        request.timeoutInterval = Self.completionTimeout()
         request.httpMethod = "POST"
         if !apiKey.isEmpty {
             request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
@@ -436,14 +460,23 @@ private nonisolated struct ModelsResponse: Codable {
 
 private nonisolated struct ModelData: Codable {
     let id: String
-    let name: String
+    let name: String?
     let description: String?
-    let contextLength: Int
-    let pricing: ModelPricing
+    let contextLength: Int?
+    let pricing: ModelPricing?
+    let meta: ModelMeta?
 
     enum CodingKeys: String, CodingKey {
-        case id, name, description, pricing
+        case id, name, description, pricing, meta
         case contextLength = "context_length"
+    }
+}
+
+private nonisolated struct ModelMeta: Codable {
+    let contextLength: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case contextLength = "n_ctx"
     }
 }
 
