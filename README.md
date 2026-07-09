@@ -205,10 +205,12 @@ The app adds any of these properties that don't already exist — it never modif
 | `Filename` | Rich text | TP-7 device filename                                        |
 | `Duration` | Rich text | Recording length (mm:ss)                                    |
 | `Language` | Rich text | Detected language                                            |
+| `Size`     | Rich text | Audio file size                                              |
 | `Audio`    | URL       | Playback/download link (only set if S3 is enabled)          |
+| `File`     | Rich text | Download URL or local file path                              |
 | `Summary`  | Rich text | LLM-generated summary (only set if OpenRouter is enabled)   |
 
-The full transcript is written into the page body, not a property. If a property name already exists with an incompatible type (e.g. you already have a `Duration` number column), the app creates an alternate `TP7 Duration` column instead and shows a warning.
+Only the transcript and overdubbed notes are written into the page body. Summary and recording details are stored in properties. If a property name already exists with an incompatible type (e.g. you already have a `Duration` number column), the app creates an alternate `TP7 Duration` column instead and shows a warning.
 
 ## Startup Recovery
 

@@ -11,7 +11,7 @@
 //   2. Share your target database with that integration (••• → Connections).
 //   3. Call provisionDatabase(apiKey:databaseId:) — it adds any of the
 //      properties below that are missing (Date, Filename, Duration,
-//      Language, Audio, Summary) and adopts whatever the database's
+//      Language, Size, Audio, File, Summary) and adopts whatever the database's
 //      existing title column is called. The full transcript is written
 //      into the page BODY (not a property), chunked to respect Notion's
 //      2000-char-per-rich-text limit.
@@ -34,12 +34,33 @@ actor NotionService {
         var filename = "Filename"
         var duration = "Duration"
         var language = "Language"
+        var size = "Size"
         var audio = "Audio"
+        var file = "File"
         var summary = "Summary"
 
         static let `default` = PropertyNames()
 
         private static let storageKey = "notion.propertyNames"
+
+        enum CodingKeys: String, CodingKey {
+            case title, date, filename, duration, language, size, audio, file, summary
+        }
+
+        init() {}
+
+        init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            title = try values.decodeIfPresent(String.self, forKey: .title) ?? "Name"
+            date = try values.decodeIfPresent(String.self, forKey: .date) ?? "Date"
+            filename = try values.decodeIfPresent(String.self, forKey: .filename) ?? "Filename"
+            duration = try values.decodeIfPresent(String.self, forKey: .duration) ?? "Duration"
+            language = try values.decodeIfPresent(String.self, forKey: .language) ?? "Language"
+            size = try values.decodeIfPresent(String.self, forKey: .size) ?? "Size"
+            audio = try values.decodeIfPresent(String.self, forKey: .audio) ?? "Audio"
+            file = try values.decodeIfPresent(String.self, forKey: .file) ?? "File"
+            summary = try values.decodeIfPresent(String.self, forKey: .summary) ?? "Summary"
+        }
 
         static func loadStored() -> PropertyNames {
             guard let data = UserDefaults.standard.data(forKey: storageKey),
@@ -173,7 +194,9 @@ actor NotionService {
             (\.filename, desired.filename, "rich_text", ["rich_text": [String: Any]()]),
             (\.duration, desired.duration, "rich_text", ["rich_text": [String: Any]()]),
             (\.language, desired.language, "rich_text", ["rich_text": [String: Any]()]),
+            (\.size, desired.size, "rich_text", ["rich_text": [String: Any]()]),
             (\.audio, desired.audio, "url", ["url": [String: Any]()]),
+            (\.file, desired.file, "rich_text", ["rich_text": [String: Any]()]),
             (\.summary, desired.summary, "rich_text", ["rich_text": [String: Any]()])
         ]
 
@@ -347,7 +370,8 @@ actor NotionService {
             ],
             props.filename: richText(tpFilename),
             props.duration: richText(durationStr),
-            props.language: richText(language)
+            props.language: richText(language),
+            props.size: richText(ByteCountFormatter.string(fromByteCount: fileSize, countStyle: .file))
         ]
         // Notion's URL property only accepts http(s). A local file:// link
         // (when S3 backup is off) would 400 the whole request, so only set it
@@ -355,18 +379,15 @@ actor NotionService {
         if playURL.hasPrefix("http") {
             properties[props.audio] = ["url": playURL]
         }
+        if !downloadURL.isEmpty {
+            properties[props.file] = richText(downloadURL)
+        }
         if let summary, !summary.isEmpty {
             properties[props.summary] = richText(summary)
         }
 
         // MARK: Page body (children blocks)
         var children: [[String: Any]] = []
-
-        if let summary, !summary.isEmpty {
-            children.append(headingBlock("Summary"))
-            children.append(contentsOf: paragraphBlocks(summary))
-            children.append(dividerBlock())
-        }
 
         children.append(headingBlock("Transcript"))
         children.append(contentsOf: paragraphBlocks(transcription))
@@ -376,21 +397,6 @@ actor NotionService {
             for note in overdubNotes.sorted(by: { $0.startTime < $1.startTime }) {
                 children.append(calloutBlock("\(formatTimestamp(note.startTime)) — \(note.text)"))
             }
-        }
-
-        children.append(dividerBlock())
-        children.append(headingBlock("Details"))
-        var details = "TP-7 File: \(tpFilename)\n"
-            + "Size: \(ByteCountFormatter.string(fromByteCount: fileSize, countStyle: .file))\n"
-            + "Language: \(language)"
-        // For local-only recordings, include the path as text (bookmark blocks
-        // also require http(s)).
-        if !downloadURL.isEmpty, !downloadURL.hasPrefix("http") {
-            details += "\nLocal file: \(downloadURL)"
-        }
-        children.append(contentsOf: paragraphBlocks(details))
-        if downloadURL.hasPrefix("http") {
-            children.append(bookmarkBlock(downloadURL))
         }
 
         return (properties, children)
@@ -694,14 +700,6 @@ actor NotionService {
                 "rich_text": [["type": "text", "text": ["content": text]]]
             ]
         ]
-    }
-
-    private func dividerBlock() -> [String: Any] {
-        ["object": "block", "type": "divider", "divider": [:]]
-    }
-
-    private func bookmarkBlock(_ url: String) -> [String: Any] {
-        ["object": "block", "type": "bookmark", "bookmark": ["url": url]]
     }
 
     /// A single callout block whose text is split into multiple rich_text

@@ -73,6 +73,11 @@ final class SyncService {
     private let openRouterService = OpenRouterService()
     private let localAudioService = LocalAudioService()
 
+    /// Databases whose schema has been checked during this app session.
+    /// Provisioning is repeated after relaunch so newly required properties
+    /// are added before the first page delivery.
+    private var provisionedNotionDatabaseIds: Set<String> = []
+
     /// A not-yet-processed cache file's device origin, keyed by its local path.
     /// Populated when a device download is queued (the debouncer only tracks
     /// paths); consumed and removed once `createRecording` runs. Internal (not
@@ -1344,8 +1349,21 @@ final class SyncService {
         // Prefer the LLM-cleaned transcript when cleanup produced one.
         let transcriptText = recording.formattedTranscriptionText ?? transcription.text
 
-        let service = NotionService(apiKey: apiKey, databaseId: databaseId, props: .loadStored())
         do {
+            let cleanDatabaseId = databaseId.replacingOccurrences(of: "-", with: "")
+            var notionProps = NotionService.PropertyNames.loadStored()
+            if !provisionedNotionDatabaseIds.contains(cleanDatabaseId) {
+                let result = try await NotionService.provisionDatabase(
+                    apiKey: apiKey,
+                    databaseId: databaseId
+                )
+                notionProps = result.props
+                notionProps.store()
+                provisionedNotionDatabaseIds.insert(cleanDatabaseId)
+                AppLogger.notes.info("Provisioned Notion database schema for this session")
+            }
+            let service = NotionService(apiKey: apiKey, databaseId: databaseId, props: notionProps)
+
             // Update the existing page in place when we know its ID (e.g. after a
             // retranscribe, which resets notionPageCreatedAt to re-trigger delivery
             // but keeps the page ID), otherwise create a fresh page and record its
