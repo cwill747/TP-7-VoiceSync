@@ -598,6 +598,14 @@ struct DiarizedTranscriptView: View {
             guard let data = candidate.speakerSegmentsData,
                   var segments = try? JSONDecoder().decode([StoredSpeakerSegment].self, from: data) else { continue }
 
+            if let cleanedTranscript = candidate.formattedTranscriptionText {
+                candidate.formattedTranscriptionText = StoredSpeakerSegment.relabelTranscript(
+                    cleanedTranscript,
+                    matching: speakerHash,
+                    in: segments,
+                    to: personName
+                )
+            }
             let changed = StoredSpeakerSegment.applyAssignment(
                 to: &segments,
                 matching: speakerHash,
@@ -609,10 +617,6 @@ struct DiarizedTranscriptView: View {
 
             candidate.speakerSegmentsData = try? JSONEncoder().encode(segments)
             candidate.transcriptionText = StoredSpeakerSegment.transcript(from: segments)
-            // The cleaned transcript is derived from the old text, so it's now stale.
-            // Drop it (leaving formattingProcessedAt set so we don't re-queue cleanup)
-            // — the edited, relabeled transcript is authoritative for delivery.
-            candidate.formattedTranscriptionText = nil
             candidate.updatedAt = Date()
             recordingsToRefresh.append(candidate)
         }
@@ -620,7 +624,6 @@ struct DiarizedTranscriptView: View {
         if recordingsToRefresh.isEmpty {
             recording.speakerSegmentsData = try? JSONEncoder().encode(localSegments)
             recording.transcriptionText = StoredSpeakerSegment.transcript(from: localSegments)
-            recording.formattedTranscriptionText = nil
             recording.updatedAt = Date()
             recordingsToRefresh.append(recording)
         }

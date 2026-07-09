@@ -227,6 +227,30 @@ nonisolated struct StoredSpeakerSegment: Codable, Identifiable, Sendable {
             }
             .joined(separator: "\n\n")
     }
+
+    static func relabelTranscript(
+        _ transcript: String,
+        matching speakerHash: String,
+        in segments: [StoredSpeakerSegment],
+        to personName: String
+    ) -> String {
+        let oldLabels = Set(
+            segments
+                .filter { $0.effectiveSpeakerHash == speakerHash }
+                .map { $0.assignedPersonName ?? $0.rawSpeakerId }
+        )
+        guard !oldLabels.isEmpty else { return transcript }
+
+        return transcript
+            .components(separatedBy: "\n")
+            .map { line in
+                guard let oldLabel = oldLabels.first(where: { line.hasPrefix("\($0):") }) else {
+                    return line
+                }
+                return personName + line.dropFirst(oldLabel.count)
+            }
+            .joined(separator: "\n")
+    }
 }
 
 /// A transcribed overdub layer on top of a TP-7 /memo recording's base track.

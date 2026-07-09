@@ -94,4 +94,44 @@ final class SpeakerAssignmentTests: XCTestCase {
         )
         XCTAssertEqual(StoredSpeakerSegment.hash(for: [], fallback: "fallback"), "fallback")
     }
+
+    func testRelabelTranscriptPreservesCleanedText() {
+        let segments = [
+            StoredSpeakerSegment(
+                startTime: 0,
+                endTime: 1,
+                rawSpeakerId: "Speaker 1",
+                speakerHash: "hash-a",
+                text: "raw first",
+                embedding: []
+            ),
+            StoredSpeakerSegment(
+                startTime: 1,
+                endTime: 2,
+                rawSpeakerId: "Speaker 2",
+                speakerHash: "hash-b",
+                text: "raw second",
+                embedding: []
+            ),
+            StoredSpeakerSegment(
+                startTime: 2,
+                endTime: 3,
+                rawSpeakerId: "Speaker 1",
+                speakerHash: "hash-a",
+                text: "raw third",
+                embedding: []
+            )
+        ]
+        let cleaned = "Speaker 1: Cleaned first.\n\nSpeaker 2: Cleaned second.\n\nSpeaker 1: Cleaned third."
+
+        XCTAssertEqual(
+            StoredSpeakerSegment.relabelTranscript(
+                cleaned,
+                matching: "hash-a",
+                in: segments,
+                to: "Alex"
+            ),
+            "Alex: Cleaned first.\n\nSpeaker 2: Cleaned second.\n\nAlex: Cleaned third."
+        )
+    }
 }

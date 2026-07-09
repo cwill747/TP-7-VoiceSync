@@ -50,6 +50,7 @@ struct OnboardingTranscriptionView: View {
             get: { transcriptionProvider },
             set: { newValue in
                 transcriptionProviderRaw = newValue.rawValue
+                UserDefaults.standard.synchronize()
                 refreshWhisperKitStatus()
                 updateConfiguredState()
             }

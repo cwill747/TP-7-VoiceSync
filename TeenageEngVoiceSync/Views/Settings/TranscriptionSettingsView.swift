@@ -112,6 +112,9 @@ struct TranscriptionSettingsView: View {
             get: { transcriptionProvider },
             set: { newValue in
                 transcriptionProviderRaw = newValue.rawValue
+                // Persist before rebuilding services. The app can be quit while
+                // that asynchronous reload is still running.
+                UserDefaults.standard.synchronize()
                 refreshWhisperKitStatus()
                 appState.reloadServices()
             }
