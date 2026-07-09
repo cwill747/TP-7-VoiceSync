@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: macos-15
+    runs-on: macos-26
 
     steps:
       - name: Checkout code
@@ -195,7 +195,7 @@ jobs:
             **Note:** On first launch, you may need to right-click and select "Open" to bypass Gatekeeper.
 
             ## Requirements
-            - macOS 14.0 (Sonoma) or later
+            - macOS 26.0 (Tahoe) or later
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

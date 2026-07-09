@@ -16,6 +16,7 @@ struct OnboardingLocalMarkdownFolderView: View {
     @AppStorage("applenotes.enabled") private var appleNotesEnabled = false
 
     @State private var inputPath = ""
+    @State private var selectedFolderURL: URL?
     @State private var isValidating = false
     @State private var validationStatus: ValidationStatus?
 
@@ -50,7 +51,10 @@ struct OnboardingLocalMarkdownFolderView: View {
                 HStack {
                     TextField("e.g. /Users/you/Downloads/TP7-Notes", text: $inputPath)
                         .textFieldStyle(.roundedBorder)
-                        .onChange(of: inputPath) { _, _ in
+                        .onChange(of: inputPath) { _, newValue in
+                            if selectedFolderURL?.path != newValue {
+                                selectedFolderURL = nil
+                            }
                             validationStatus = nil
                         }
 
@@ -121,6 +125,19 @@ struct OnboardingLocalMarkdownFolderView: View {
         // Expand ~ to home directory
         let expandedPath = NSString(string: path).expandingTildeInPath
 
+        let folderURL: URL
+        if let selectedFolderURL, selectedFolderURL.path == expandedPath {
+            folderURL = selectedFolderURL
+        } else {
+            folderURL = URL(fileURLWithPath: expandedPath, isDirectory: true)
+        }
+        let scoped = folderURL.startAccessingSecurityScopedResource()
+        defer {
+            if scoped {
+                folderURL.stopAccessingSecurityScopedResource()
+            }
+        }
+
         // Check if folder exists
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: expandedPath, isDirectory: &isDirectory) else {
@@ -136,7 +153,6 @@ struct OnboardingLocalMarkdownFolderView: View {
         }
 
         // Try to write a test file
-        let folderURL = URL(fileURLWithPath: expandedPath, isDirectory: true)
         let testFile = folderURL.appendingPathComponent(".tp7-test-\(UUID().uuidString)")
         do {
             try "test".write(to: testFile, atomically: true, encoding: .utf8)
@@ -179,6 +195,7 @@ struct OnboardingLocalMarkdownFolderView: View {
         }
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        selectedFolderURL = url
         inputPath = url.path
         validateFolder()
     }
