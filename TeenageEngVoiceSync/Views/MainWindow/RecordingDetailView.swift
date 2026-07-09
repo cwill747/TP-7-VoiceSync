@@ -16,8 +16,6 @@ struct RecordingDetailView: View {
     @Environment(AppState.self) private var appState
     @Environment(\.modelContext) private var modelContext
     @State private var isRetranscribing = false
-    @State private var isDeleting = false
-    @State private var showDeleteConfirmation = false
     @State private var isSendingToDestinations = false
     @State private var destinationStatus: DestinationStatus?
     @State private var showRawTranscript = false
@@ -38,6 +36,32 @@ struct RecordingDetailView: View {
             return URL(fileURLWithPath: copy)
         }
         return nil
+    }
+
+    private var canRetranscribe: Bool {
+        guard SyncService.hasAudioSource(recording) else { return false }
+        switch recording.transcriptionStatus {
+        case .none, .completed, .failed: return true
+        case .pending, .processing: return false
+        }
+    }
+
+    private var retranscribeLabel: String {
+        switch recording.transcriptionStatus {
+        case .none: return "Transcribe"
+        case .failed: return "Retry Transcription"
+        default: return "Retranscribe"
+        }
+    }
+
+    private var canSend: Bool {
+        recording.transcriptionStatus == .completed && recording.transcriptionText != nil
+    }
+
+    private var sendDisabled: Bool {
+        isSendingToDestinations
+            || SyncService.hasPendingLLMProcessing(recording)
+            || SyncService.needsSpeakerAssignment(recording)
     }
 
     var body: some View {
@@ -79,24 +103,8 @@ struct RecordingDetailView: View {
 
                 // Transcription
                 VStack(alignment: .leading, spacing: 12) {
-                    HStack {
-                        Text("Transcription")
-                            .font(.headline)
-
-                        Spacer()
-
-                        // Only offer retranscription when there's audio to work
-                        // from — Notion-only recoveries have no audio source, and
-                        // retranscribing would just fail and hide the transcript.
-                        if recording.isTranscribed, SyncService.hasAudioSource(recording) {
-                            Button {
-                                retranscribe()
-                            } label: {
-                                Label("Retranscribe", systemImage: "arrow.clockwise")
-                            }
-                            .disabled(isRetranscribing)
-                        }
-                    }
+                    Text("Transcription")
+                        .font(.headline)
 
                     transcriptionContent
                 }
@@ -156,36 +164,36 @@ struct RecordingDetailView: View {
                     .textSelection(.enabled)
                 }
 
-                Divider()
-
-                // Delete button
-                HStack {
-                    Spacer()
-                    Button(role: .destructive) {
-                        showDeleteConfirmation = true
-                    } label: {
-                        if isDeleting {
-                            ProgressView()
-                                .scaleEffect(0.8)
-                        } else {
-                            Label("Delete Recording", systemImage: "trash")
-                        }
-                    }
-                    .disabled(isDeleting)
-                }
-
                 Spacer()
             }
             .padding(24)
         }
         .frame(minWidth: 400)
-        .confirmationDialog("Delete Recording?", isPresented: $showDeleteConfirmation) {
-            Button("Delete", role: .destructive) {
-                deleteRecording()
+        .toolbar {
+            ToolbarItemGroup(placement: .primaryAction) {
+                if canRetranscribe {
+                    Button {
+                        retranscribe()
+                    } label: {
+                        Label(retranscribeLabel, systemImage: "arrow.clockwise")
+                            .symbolEffect(.rotate, options: .repeating, isActive: isRetranscribing)
+                    }
+                    .disabled(isRetranscribing)
+                    .help(retranscribeLabel)
+                }
+
+                if canSend {
+                    Button {
+                        sendToDestinations()
+                    } label: {
+                        Label("Send to Destinations", systemImage: "paperplane")
+                            .symbolEffect(.pulse, isActive: isSendingToDestinations)
+                    }
+                    .buttonStyle(.glassProminent)
+                    .disabled(sendDisabled)
+                    .help("Send to Destinations")
+                }
             }
-            Button("Cancel", role: .cancel) { }
-        } message: {
-            Text("This will delete the recording from S3 and mark it as deleted. The file may remain on your TP-7 device if it couldn't be removed.")
         }
         .onChange(of: recording.persistentModelID) { _, _ in
             showRawTranscript = false
@@ -206,29 +214,9 @@ struct RecordingDetailView: View {
     private var transcriptionContent: some View {
         switch recording.transcriptionStatus {
         case .none:
-            HStack {
-                Text("Not transcribed")
-                    .foregroundStyle(.secondary)
-                    .italic()
-
-                Spacer()
-
-                // Recordings restored by startup recovery have audio (in S3 or a
-                // local copy) but no transcription yet — let the user kick it off.
-                if SyncService.hasAudioSource(recording) {
-                    Button {
-                        retranscribe()
-                    } label: {
-                        if isRetranscribing {
-                            ProgressView()
-                                .scaleEffect(0.7)
-                        } else {
-                            Label("Transcribe", systemImage: "arrow.clockwise")
-                        }
-                    }
-                    .disabled(isRetranscribing)
-                }
-            }
+            Text("Not transcribed")
+                .foregroundStyle(.secondary)
+                .italic()
 
         case .pending:
             HStack {
@@ -315,21 +303,6 @@ struct RecordingDetailView: View {
                         OverdubNotesView(notes: overdubNotes)
                     }
 
-                    HStack {
-                        Spacer()
-                        Button {
-                            sendToDestinations()
-                        } label: {
-                            if isSendingToDestinations {
-                                ProgressView()
-                                    .scaleEffect(0.7)
-                            } else {
-                                Label("Send to Destinations", systemImage: "paperplane")
-                            }
-                        }
-                        .disabled(isSendingToDestinations || SyncService.hasPendingLLMProcessing(recording) || SyncService.needsSpeakerAssignment(recording))
-                    }
-
                     if SyncService.needsSpeakerAssignment(recording) && !SyncService.hasPendingLLMProcessing(recording) {
                         Label("Choose speakers before sending", systemImage: "person.2.badge.gearshape")
                             .foregroundStyle(.orange)
@@ -352,24 +325,8 @@ struct RecordingDetailView: View {
             }
 
         case .failed:
-            HStack {
-                Label("Transcription failed", systemImage: "exclamationmark.triangle")
-                    .foregroundStyle(.red)
-
-                Spacer()
-
-                Button {
-                    retranscribe()
-                } label: {
-                    if isRetranscribing {
-                        ProgressView()
-                            .scaleEffect(0.7)
-                    } else {
-                        Label("Retry", systemImage: "arrow.clockwise")
-                    }
-                }
-                .disabled(isRetranscribing)
-            }
+            Label("Transcription failed", systemImage: "exclamationmark.triangle")
+                .foregroundStyle(.red)
         }
     }
 
@@ -402,19 +359,6 @@ struct RecordingDetailView: View {
                     destinationStatus = .error(error.localizedDescription)
                     isSendingToDestinations = false
                 }
-            }
-        }
-    }
-
-    private func deleteRecording() {
-        guard let syncService = appState.syncService else { return }
-        isDeleting = true
-
-        Task {
-            await syncService.deleteRecording(recording)
-            await MainActor.run {
-                isDeleting = false
-                selectedRecording = nil
             }
         }
     }
@@ -778,6 +722,7 @@ struct AudioPlayerView: View {
                 } label: {
                     Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
                         .font(.system(size: 44))
+                        .contentTransition(.symbolEffect(.replace))
                 }
                 .buttonStyle(.plain)
 
@@ -790,7 +735,7 @@ struct AudioPlayerView: View {
             }
         }
         .padding()
-        .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
+        .glassEffect(.regular, in: .rect(cornerRadius: 12))
         .onAppear {
             setupPlayer()
         }

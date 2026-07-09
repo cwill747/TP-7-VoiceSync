@@ -76,6 +76,7 @@ struct ContentView: View {
 
     @State private var selectedSection: SidebarItem = .recordings
     @State private var selectedRecording: Recording?
+    @State private var selectedRecordings: Set<Recording> = []
     @State private var selectedPerson: Person?
     @State private var selectedSettingsSection: SettingsSection = .general
     @State private var searchText = ""
@@ -94,7 +95,8 @@ struct ContentView: View {
             case .recordings:
                 RecordingsListView(
                     recordings: filteredRecordings,
-                    selectedRecording: $selectedRecording
+                    selectedRecording: $selectedRecording,
+                    selectedRecordings: $selectedRecordings
                 )
                 .navigationSplitViewColumnWidth(min: 250, ideal: 300, max: 400)
             case .people:
@@ -137,10 +139,12 @@ struct ContentView: View {
             ToolbarItem(placement: .status) {
                 StatusToolbarItem(appState: appState)
             }
+            .sharedBackgroundVisibility(.hidden)
         }
         .onChange(of: selectedSection) { _, _ in
             // Reset detail selections when switching sections
             selectedRecording = nil
+            selectedRecordings.removeAll()
             selectedPerson = nil
         }
         .onChange(of: appState.navigationTarget) { _, target in
@@ -187,25 +191,27 @@ struct StatusToolbarItem: View {
     let appState: AppState
 
     var body: some View {
-        HStack(spacing: 5) {
+        HStack(spacing: 6) {
             if let statusIcon {
                 Image(systemName: statusIcon)
-                    .font(.caption2.weight(.semibold))
+                    .imageScale(.medium)
                     .foregroundStyle(statusIconColor)
+                    .contentTransition(.symbolEffect(.replace))
+                    .symbolEffect(.variableColor, isActive: appState.isDownloadingFromDevice)
+                    .symbolEffect(.pulse, isActive: appState.processingActivity != nil)
             } else {
                 Circle()
                     .fill(statusColor)
-                    .frame(width: 7, height: 7)
+                    .frame(width: 9, height: 9)
                     .shadow(color: statusColor.opacity(0.6), radius: 2)
             }
 
             Text(appState.statusText)
-                .font(.caption)
+                .font(.callout)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .fixedSize(horizontal: true, vertical: false)
         }
-        .padding(.horizontal, 2)
         .animation(.easeInOut(duration: 0.2), value: appState.statusText)
     }
 
