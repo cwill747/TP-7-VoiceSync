@@ -95,7 +95,7 @@ The [Teenage Engineering TP-7](https://teenage.engineering/products/tp-7) is a p
 
 ## Requirements
 
-- **macOS 14.0 (Sonoma)** or later (Apple Silicon recommended for Parakeet)
+- **macOS 26.0 (Tahoe)** or later (Apple Silicon recommended for Parakeet)
 - **Transcription** (pick one):
   - **Parakeet** (local, free, ANE) — download a model once, then transcribe offline (recommended)
   - **WhisperKit** (local, free) — download a model once, then transcribe offline

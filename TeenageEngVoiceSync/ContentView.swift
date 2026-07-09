@@ -106,7 +106,7 @@ struct ContentView: View {
                     Label(section.label, systemImage: section.systemImage)
                         .tag(section)
                 }
-                .navigationSplitViewColumnWidth(min: 150, ideal: 170, max: 220)
+                .navigationSplitViewColumnWidth(min: 150, ideal: 200, max: 250)
             }
         } detail: {
             switch selectedSection {

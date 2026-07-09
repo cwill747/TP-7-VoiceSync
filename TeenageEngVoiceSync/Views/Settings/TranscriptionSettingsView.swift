@@ -77,6 +77,7 @@ struct TranscriptionSettingsView: View {
     @State private var isTestingNote = false
     @State private var testNoteStatus: TestStatus?
     @State private var markdownInputPath = ""
+    @State private var selectedMarkdownFolderURL: URL?
     @State private var markdownValidationStatus: ValidationStatus?
     @State private var notionAPIKey = ""
     @State private var showNotionKey = false
@@ -501,6 +502,12 @@ struct TranscriptionSettingsView: View {
                     HStack {
                         TextField("e.g. ~/Downloads/TP7-Notes", text: $markdownInputPath)
                             .textFieldStyle(.roundedBorder)
+                            .onChange(of: markdownInputPath) { _, newValue in
+                                if selectedMarkdownFolderURL?.path != newValue {
+                                    selectedMarkdownFolderURL = nil
+                                }
+                                markdownValidationStatus = nil
+                            }
                             .onAppear {
                                 if !markdownFolderPath.isEmpty {
                                     markdownInputPath = markdownFolderPath
@@ -1112,6 +1119,7 @@ struct TranscriptionSettingsView: View {
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
+        selectedMarkdownFolderURL = url
         markdownInputPath = url.path
         validateMarkdownFolder()
     }
@@ -1121,6 +1129,19 @@ struct TranscriptionSettingsView: View {
 
         let path = markdownInputPath.trimmingCharacters(in: .whitespacesAndNewlines)
         let expandedPath = NSString(string: path).expandingTildeInPath
+
+        let folderURL: URL
+        if let selectedMarkdownFolderURL, selectedMarkdownFolderURL.path == expandedPath {
+            folderURL = selectedMarkdownFolderURL
+        } else {
+            folderURL = URL(fileURLWithPath: expandedPath, isDirectory: true)
+        }
+        let scoped = folderURL.startAccessingSecurityScopedResource()
+        defer {
+            if scoped {
+                folderURL.stopAccessingSecurityScopedResource()
+            }
+        }
 
         // Check if folder exists
         var isDirectory: ObjCBool = false
@@ -1135,7 +1156,6 @@ struct TranscriptionSettingsView: View {
         }
 
         // Try to write a test file
-        let folderURL = URL(fileURLWithPath: expandedPath, isDirectory: true)
         let testFile = folderURL.appendingPathComponent(".tp7-test-\(UUID().uuidString)")
         do {
             try "test".write(to: testFile, atomically: true, encoding: .utf8)

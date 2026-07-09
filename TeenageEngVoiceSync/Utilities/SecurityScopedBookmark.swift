@@ -27,9 +27,16 @@ nonisolated enum SecurityScopedBookmark {
     /// be created, so callers never persist a path they can't reopen after relaunch.
     @discardableResult
     static func saveFolderSelection(url: URL, key: String) -> Bool {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+
         guard save(url: url, key: key) else { return false }
         UserDefaults.standard.set(url.path, forKey: key)
         return true
+    }
+
+    static func hasBookmark(key: String) -> Bool {
+        UserDefaults.standard.data(forKey: "\(key).bookmark") != nil
     }
 
     static func resolve(key: String) -> URL? {

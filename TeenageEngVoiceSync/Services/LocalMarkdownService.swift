@@ -170,6 +170,10 @@ actor LocalMarkdownService {
             return (url, true)
         }
 
+        if SecurityScopedBookmark.hasBookmark(key: "markdown.folderPath") {
+            throw MarkdownError.folderBookmarkInvalid
+        }
+
         let folderPath = UserDefaults.standard.string(forKey: "markdown.folderPath") ?? ""
         guard !folderPath.isEmpty else {
             throw MarkdownError.folderNotConfigured
@@ -190,6 +194,7 @@ actor LocalMarkdownService {
 enum MarkdownError: LocalizedError {
     case folderNotConfigured
     case folderAccessDenied
+    case folderBookmarkInvalid
     case writeError(String)
 
     var errorDescription: String? {
@@ -198,6 +203,8 @@ enum MarkdownError: LocalizedError {
             return "Markdown folder not configured"
         case .folderAccessDenied:
             return "Cannot access the configured folder"
+        case .folderBookmarkInvalid:
+            return "Cannot access the configured Markdown folder. Choose the folder again in Settings."
         case .writeError(let message):
             return "Failed to write markdown file: \(message)"
         }
