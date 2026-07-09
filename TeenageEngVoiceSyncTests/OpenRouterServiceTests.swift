@@ -32,6 +32,18 @@ final class OpenRouterServiceTests: XCTestCase {
         XCTAssertEqual(OpenRouterService.localCompletionTimeout, 3600)
     }
 
+    func testPrivateLanCompletionsAllowLongRunningInference() throws {
+        let suiteName = "OpenRouterServiceTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set("http://192.168.100.44:8088/v1", forKey: OpenRouterService.baseURLKey)
+
+        XCTAssertEqual(
+            OpenRouterService.completionTimeout(defaults: defaults),
+            OpenRouterService.localCompletionTimeout
+        )
+    }
+
     func testRemoteCompletionsKeepABoundedTimeout() throws {
         let suiteName = "OpenRouterServiceTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
