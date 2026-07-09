@@ -193,6 +193,8 @@ final class OfflineModePendingWorkTests: XCTestCase {
         let recording = try makeRecording(status: .completed)
 
         XCTAssertTrue(SyncService.remainingRemoteSteps(for: recording).contains(.format))
+        XCTAssertFalse(SyncService.remainingBlockingRemoteSteps(for: recording).contains(.format))
+        XCTAssertFalse(SyncService.remainingBlockingLLMSteps(for: recording).contains(.format))
     }
 
     @MainActor
@@ -218,6 +220,20 @@ final class OfflineModePendingWorkTests: XCTestCase {
         let recording = try makeRecording(status: .completed)
 
         XCTAssertTrue(SyncService.needsNetworkForManualSend(recording))
+    }
+
+    @MainActor
+    func testManualSendDoesNotRequireNetworkForOnlyRemoteFormatting() throws {
+        // Formatting is background cleanup. It should stay pending/retriable,
+        // but raw transcript delivery can proceed.
+        UserDefaults.standard.set(true, forKey: "openrouter.formatEnabled")
+        UserDefaults.standard.set("some-model", forKey: "openrouter.formatModel")
+
+        let recording = try makeRecording(status: .completed)
+
+        XCTAssertTrue(SyncService.remainingRemoteSteps(for: recording).contains(.format))
+        XCTAssertTrue(SyncService.hasPendingRemoteWork(recording))
+        XCTAssertFalse(SyncService.needsNetworkForManualSend(recording))
     }
 
     @MainActor

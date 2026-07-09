@@ -79,13 +79,27 @@ actor OpenRouterService {
         return components.string ?? trimmed
     }
 
-    /// True when the endpoint is on the local machine — such servers need no API
-    /// key and can run while the app is otherwise offline.
+    /// True when the endpoint is on the local machine or private LAN — such
+    /// servers need no API key and can run while the app is otherwise offline.
     nonisolated static func isLocalEndpoint(defaults: UserDefaults = .standard) -> Bool {
         guard let host = URL(string: resolvedBaseURL(defaults: defaults))?.host?.lowercased() else {
             return false
         }
-        return host == "localhost" || host == "127.0.0.1" || host == "::1"
+        return host == "localhost" || host == "127.0.0.1" || host == "::1" || isPrivateIPv4(host)
+    }
+
+    nonisolated private static func isPrivateIPv4(_ host: String) -> Bool {
+        let parts = host.split(separator: ".")
+        guard parts.count == 4,
+              let first = Int(parts[0]),
+              let second = Int(parts[1]),
+              parts.dropFirst(2).allSatisfy({ Int($0) != nil }) else {
+            return false
+        }
+
+        return first == 10
+            || (first == 172 && (16...31).contains(second))
+            || (first == 192 && second == 168)
     }
 
     nonisolated static func completionTimeout(defaults: UserDefaults = .standard) -> TimeInterval {

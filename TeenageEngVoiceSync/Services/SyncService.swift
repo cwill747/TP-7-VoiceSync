@@ -1590,8 +1590,9 @@ final class SyncService {
         AppLogger.notes.debug("Stored LLM title: \(result.title, privacy: .private)")
     }
 
-    /// Runs the configured LLM passes immediately after ASR and before speaker
-    /// assignment or destination delivery.
+    /// Runs LLM title/summary immediately after ASR. Transcript cleanup runs as
+    /// background remote work so slow local models don't block destination
+    /// delivery.
     private func finishPostTranscriptionProcessing(_ recording: Recording, transcription: TranscriptionResult) async {
         // A local (on-device) AI endpoint can run while the app is offline;
         // a remote one can't.
@@ -1600,20 +1601,31 @@ final class SyncService {
             return
         }
         await generateAndStoreSummary(for: recording, text: transcription.text)
-        await formatTranscriptionIfEnabled(for: recording, text: transcription.text)
+        startBackgroundFormattingIfNeeded(for: recording, text: transcription.text)
         await refreshPendingCount()
+    }
+
+    private func startBackgroundFormattingIfNeeded(for recording: Recording, text: String) {
+        guard recording.formattingProcessedAt == nil else { return }
+        guard UserDefaults.standard.bool(forKey: "openrouter.formatEnabled") else { return }
+
+        Task { [weak self, weak recording] in
+            guard let self, let recording else { return }
+            await self.formatTranscriptionIfEnabled(for: recording, text: text)
+            await self.refreshPendingCount()
+        }
     }
 
     /// Removes the recording's audio from the TP-7 over MTP once it has been
     /// fully transferred and transcribed, when the user has opted into
-    /// "delete after processing". Only runs once all remote delivery steps
-    /// (S3, summary, format, Notion, note) have completed, so the source file
+    /// "delete after processing". Only runs once all blocking remote delivery
+    /// steps (S3, summary, Notion, note) have completed, so the source file
     /// isn't removed from the device before the app has a durable copy.
     private func deleteFromDeviceIfConfigured(_ recording: Recording) async {
         guard UserDefaults.standard.bool(forKey: "devicewatch.deleteAfterProcessing") else { return }
         guard recording.deletedAt == nil, recording.deletedFromDeviceAt == nil else { return }
         guard recording.transcriptionStatus == .completed else { return }
-        guard Self.remainingRemoteSteps(for: recording).isEmpty else { return }
+        guard Self.remainingBlockingRemoteSteps(for: recording).isEmpty else { return }
         // `remainingRemoteSteps` omits `.note` when there's no durable audio
         // copy to build a note from — that state can never resolve on its own,
         // so treating it as "satisfied" there is fine for the pending-count
@@ -1869,7 +1881,7 @@ final class SyncService {
         )
 
         await finishPostTranscriptionProcessing(recording, transcription: transcription)
-        guard Self.remainingLLMSteps(for: recording).isEmpty else {
+        guard Self.remainingBlockingLLMSteps(for: recording).isEmpty else {
             throw AppleNotesError.executionFailed("LLM processing did not complete. Try again in a moment.")
         }
 
@@ -2002,10 +2014,10 @@ extension SyncService {
     nonisolated static func needsNetworkForManualSend(_ recording: Recording) -> Bool {
         let defaults = UserDefaults.standard
         let notionDatabaseId = defaults.string(forKey: "notion.databaseId") ?? ""
-        // A local AI endpoint runs without network; only a remote one blocks
-        // manual send on connectivity.
+        // A local AI endpoint runs without network; only remote blocking LLM
+        // work gates manual send on connectivity.
         let needsRemoteLLM = !OpenRouterService.isLocalEndpoint(defaults: defaults)
-            && !remainingLLMSteps(for: recording).isEmpty
+            && !remainingBlockingLLMSteps(for: recording).isEmpty
 
         return needsS3Upload(recording)
             || needsRemoteLLM
@@ -2050,6 +2062,14 @@ extension SyncService {
 
     nonisolated static func remainingLLMSteps(for recording: Recording) -> [RemoteStep] {
         remainingRemoteSteps(for: recording).filter { $0 == .summary || $0 == .format }
+    }
+
+    nonisolated static func remainingBlockingRemoteSteps(for recording: Recording) -> [RemoteStep] {
+        remainingRemoteSteps(for: recording).filter { $0 != .format }
+    }
+
+    nonisolated static func remainingBlockingLLMSteps(for recording: Recording) -> [RemoteStep] {
+        remainingRemoteSteps(for: recording).filter { $0 == .summary }
     }
 
     nonisolated static func hasPendingLLMProcessing(_ recording: Recording) -> Bool {
