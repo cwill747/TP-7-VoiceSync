@@ -105,6 +105,13 @@ final class Recording {
     var isUploaded: Bool { s3Key != nil }
     var isTranscribed: Bool { transcriptionStatus == .completed }
     var isDeleted: Bool { deletedAt != nil }
+    var displayTitle: String {
+        guard let llmTitle,
+              !llmTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return filename
+        }
+        return llmTitle
+    }
 
     var formattedFileSize: String {
         let formatter = ByteCountFormatter()

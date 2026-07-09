@@ -45,9 +45,9 @@ struct RecordingDetailView: View {
             VStack(alignment: .leading, spacing: 24) {
                 // Header
                 VStack(alignment: .leading, spacing: 8) {
-                    Text(recording.filename)
+                    Text(recording.displayTitle)
                         .font(.title)
-                        .fontDesign(.monospaced)
+                        .textSelection(.enabled)
 
                     HStack(spacing: 16) {
                         Label(recording.formattedDuration, systemImage: "clock")
@@ -153,6 +153,7 @@ struct RecordingDetailView: View {
                         }
                     }
                     .font(.callout)
+                    .textSelection(.enabled)
                 }
 
                 Divider()

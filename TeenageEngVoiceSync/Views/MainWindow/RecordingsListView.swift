@@ -36,8 +36,8 @@ struct RecordingRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
-                Text(recording.filename)
-                    .font(.system(.body, design: .monospaced))
+                Text(recording.displayTitle)
+                    .font(.body)
                     .lineLimit(1)
 
                 Spacer()
