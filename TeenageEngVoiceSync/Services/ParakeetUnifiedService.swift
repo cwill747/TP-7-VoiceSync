@@ -95,6 +95,8 @@ actor ParakeetUnifiedService: TranscriptionProvider {
     // MARK: - TranscriptionProvider
 
     func transcribe(localPath: String) async throws -> TranscriptionResult {
+        beginWork()
+        defer { armIdleUnload() }
         let url = URL(fileURLWithPath: localPath)
         let samples = try AudioConverter().resampleAudioFile(url)
 
@@ -143,5 +145,37 @@ actor ParakeetUnifiedService: TranscriptionProvider {
         try await manager.loadModels()
         self.manager = manager
         return manager
+    }
+
+    // MARK: - Idle model unloading
+
+    /// See `ParakeetService.modelIdleTimeout` — same rationale: the loaded
+    /// CoreML/ANE model is the dominant resident cost for a background app that
+    /// transcribes in short bursts, so it's released after a quiet period and
+    /// lazily reloaded on the next transcription.
+    private static let modelIdleTimeout: Duration = .seconds(180)
+    private var idleUnloadTask: Task<Void, Never>?
+
+    private func beginWork() {
+        idleUnloadTask?.cancel()
+        idleUnloadTask = nil
+    }
+
+    private func armIdleUnload() {
+        idleUnloadTask?.cancel()
+        idleUnloadTask = Task { [weak self] in
+            try? await Task.sleep(for: Self.modelIdleTimeout)
+            guard !Task.isCancelled else { return }
+            await self?.unloadModels()
+        }
+    }
+
+    func unloadModels() async {
+        guard let manager else { return }
+        idleUnloadTask?.cancel()
+        idleUnloadTask = nil
+        await manager.cleanup()
+        self.manager = nil
+        AppLogger.app.info("Parakeet Unified model unloaded after idle timeout")
     }
 }

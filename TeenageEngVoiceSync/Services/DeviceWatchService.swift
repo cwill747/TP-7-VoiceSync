@@ -40,6 +40,17 @@ final class DeviceWatchService {
     /// /recordings are tracked independently.
     private var knownFilenames: Set<String> = []
 
+    /// Teenage Engineering vendor ID (0x2367) and the TP-7's MTP product ID
+    /// (0x0019). Used to wake the watch loop only when this exact device is
+    /// attached/detached rather than on every USB event.
+    private static let tp7VendorID = 0x2367
+    private static let tp7ProductID = 0x0019
+
+    private var usbMonitor: USBDeviceMonitor?
+    /// Lets the USB monitor (running on its own queue) cut the watch loop's
+    /// heartbeat sleep short so an attach/detach is handled immediately.
+    private let wakeGate = WakeGate()
+
     // Callbacks
     var onDeviceConnected: ((String) -> Void)?
     var onDeviceDisconnected: ((String) -> Void)?
@@ -51,6 +62,17 @@ final class DeviceWatchService {
 
         AppLogger.device.info("Starting device watch")
 
+        // Wake the loop the instant a TP-7 is plugged in or unplugged, so we
+        // don't have to poll the USB bus to notice. `wakeGate` is Sendable and
+        // shared with the loop; capturing it (not `self`) keeps the callback
+        // free of the non-Sendable service reference.
+        let gate = wakeGate
+        let monitor = USBDeviceMonitor(vendorID: Self.tp7VendorID, productID: Self.tp7ProductID) {
+            gate.wake()
+        }
+        monitor.start()
+        usbMonitor = monitor
+
         watchTask = Task { [weak self] in
             await self?.watchLoop()
         }
@@ -58,8 +80,11 @@ final class DeviceWatchService {
 
     /// Stop watching
     func stopWatching() {
+        usbMonitor?.stop()
+        usbMonitor = nil
         watchTask?.cancel()
         watchTask = nil
+        wakeGate.wake()  // break the heartbeat sleep so the loop sees the cancel
         closeSession()
     }
 
@@ -72,9 +97,43 @@ final class DeviceWatchService {
             }
 
             guard !Task.isCancelled else { break }
-            let interval: Duration = isConnected ? .seconds(10) : .seconds(2)
-            try? await Task.sleep(for: interval)
+
+            // A USB attach/detach wakes us instantly, so this sleep is a
+            // fallback. Its length depends on what we're waiting for:
+            //  - connected: short, to re-scan for new files the TP-7 can't
+            //    push a notification for;
+            //  - disconnected but the device is physically present: short, to
+            //    retry the MTP connect (right after power-on the device can be
+            //    enumerated but not yet ready for an MTP session, so the first
+            //    open() attempt often fails);
+            //  - disconnected and no device present: long — nothing to do until
+            //    one is plugged in, and the USB event will wake us when it is.
+            let interval: Duration
+            if isConnected {
+                interval = .seconds(15)
+            } else if USBDeviceMonitor.isDevicePresent(vendorID: Self.tp7VendorID, productID: Self.tp7ProductID) {
+                interval = .seconds(2)
+            } else {
+                interval = .seconds(300)
+            }
+            await interruptibleSleep(interval)
         }
+    }
+
+    /// Sleeps for `duration`, but returns early if `wakeGate.wake()` is called
+    /// (a USB attach/detach event, or `stopWatching`). Returns immediately if a
+    /// wake arrived since the last sleep, so an event that lands in the gap
+    /// between sleeps is never lost.
+    private func interruptibleSleep(_ duration: Duration) async {
+        let sleep = Task<Void, Never> {
+            do { try await Task.sleep(for: duration) } catch { }
+        }
+        guard wakeGate.beginSleep(sleep) else {
+            sleep.cancel()  // a wake was already pending — skip this sleep
+            return
+        }
+        await sleep.value
+        wakeGate.endSleep()
     }
 
     /// Attempts to open a fresh session when no device is currently connected.
@@ -83,7 +142,12 @@ final class DeviceWatchService {
             TP7MTPSession.open()
         }.value
 
-        guard case .success(let newSession) = result else { return }
+        guard case .success(let newSession) = result else {
+            if case .failure(let error) = result {
+                AppLogger.device.debug("Connect attempt failed: \(error.localizedDescription, privacy: .public)")
+            }
+            return
+        }
 
         session = newSession
         isConnected = true
@@ -287,5 +351,42 @@ final class DeviceWatchService {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
 
         return dir.appendingPathComponent(Self.localFilename(forDeviceFilename: safeName, folder: folder))
+    }
+}
+
+/// Thread-safe coordinator that lets the USB monitor's callback (on its own
+/// queue) wake the watch loop early. It also *latches* a wake that arrives while
+/// the loop isn't sleeping, so an attach/detach event landing in the gap between
+/// two sleeps is applied to the next sleep instead of being lost. The two
+/// guarded fields make `@unchecked Sendable` sound.
+final class WakeGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var sleepTask: Task<Void, Never>?
+    private var pendingWake = false
+
+    /// Registers `task` as the active sleep. Returns `false` (and consumes the
+    /// latch) if a wake is already pending, meaning the caller should not sleep.
+    func beginSleep(_ task: Task<Void, Never>) -> Bool {
+        lock.withLock {
+            if pendingWake {
+                pendingWake = false
+                return false
+            }
+            sleepTask = task
+            return true
+        }
+    }
+
+    func endSleep() {
+        lock.withLock { sleepTask = nil }
+    }
+
+    /// Wakes the current sleep (if any) and latches the event for the next
+    /// `beginSleep`, so it can't be dropped between sleeps.
+    func wake() {
+        lock.withLock {
+            pendingWake = true
+            sleepTask?.cancel()
+        }
     }
 }

@@ -63,9 +63,6 @@ actor ElevenLabsTranscriptionService: TranscriptionProvider {
 
     func transcribe(fileURL: URL) async throws -> TranscriptionResult {
         let url = baseURL.appendingPathComponent("speech-to-text")
-
-        // Read the audio file data
-        let audioData = try Data(contentsOf: fileURL)
         let filename = fileURL.lastPathComponent
 
         // Determine MIME type based on extension
@@ -79,34 +76,54 @@ actor ElevenLabsTranscriptionService: TranscriptionProvider {
         default: mimeType = "audio/wav"
         }
 
-        // Create multipart form data
+        // Assemble the multipart body on disk and stream it, rather than holding
+        // the whole recording (plus a second copy inside the request body) in
+        // memory — a large WAV would otherwise spike peak usage to ~2× its size.
         let boundary = UUID().uuidString
-        var body = Data()
+        let bodyURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("multipart")
+        defer { try? FileManager.default.removeItem(at: bodyURL) }
 
-        // Add model_id field
-        body.append("--\(boundary)\r\n".data(using: .utf8)!)
-        body.append("Content-Disposition: form-data; name=\"model_id\"\r\n\r\n".data(using: .utf8)!)
-        body.append("\(modelID)\r\n".data(using: .utf8)!)
+        var preamble = Data()
+        preamble.append("--\(boundary)\r\n".data(using: .utf8)!)
+        preamble.append("Content-Disposition: form-data; name=\"model_id\"\r\n\r\n".data(using: .utf8)!)
+        preamble.append("\(modelID)\r\n".data(using: .utf8)!)
+        // Audio file part (field name must be "file" per ElevenLabs API)
+        preamble.append("--\(boundary)\r\n".data(using: .utf8)!)
+        preamble.append("Content-Disposition: form-data; name=\"file\"; filename=\"\(filename)\"\r\n".data(using: .utf8)!)
+        preamble.append("Content-Type: \(mimeType)\r\n\r\n".data(using: .utf8)!)
 
-        // Add audio file (field name must be "file" per ElevenLabs API)
-        body.append("--\(boundary)\r\n".data(using: .utf8)!)
-        body.append("Content-Disposition: form-data; name=\"file\"; filename=\"\(filename)\"\r\n".data(using: .utf8)!)
-        body.append("Content-Type: \(mimeType)\r\n\r\n".data(using: .utf8)!)
-        body.append(audioData)
-        body.append("\r\n".data(using: .utf8)!)
+        let epilogue = "\r\n--\(boundary)--\r\n".data(using: .utf8)!
 
-        // Close boundary
-        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+        FileManager.default.createFile(atPath: bodyURL.path, contents: nil)
+        let writer = try FileHandle(forWritingTo: bodyURL)
+        do {
+            try writer.write(contentsOf: preamble)
+            let reader = try FileHandle(forReadingFrom: fileURL)
+            defer { try? reader.close() }
+            while autoreleasepool(invoking: {
+                guard let chunk = try? reader.read(upToCount: 256 * 1024), !chunk.isEmpty else {
+                    return false
+                }
+                try? writer.write(contentsOf: chunk)
+                return true
+            }) {}
+            try writer.write(contentsOf: epilogue)
+            try writer.close()
+        } catch {
+            try? writer.close()
+            throw error
+        }
 
         // Create request
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue(apiKey, forHTTPHeaderField: "xi-api-key")
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        request.httpBody = body
 
-        // Execute request
-        let (data, response) = try await session.data(for: request)
+        // Execute — streams the body from disk instead of buffering it in memory.
+        let (data, response) = try await session.upload(for: request, fromFile: bodyURL)
 
         // Check response
         guard let httpResponse = response as? HTTPURLResponse else {

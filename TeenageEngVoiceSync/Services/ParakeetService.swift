@@ -103,6 +103,7 @@ actor ParakeetService: TranscriptionProvider {
         let models = try await DiarizerModels.downloadIfNeeded()
         let diarizer = DiarizerManager(config: .default)
         diarizer.initialize(models: models)
+        defer { diarizer.cleanup() }
 
         return try diarizer.extractSpeakerEmbedding(from: samples)
     }
@@ -232,6 +233,8 @@ actor ParakeetService: TranscriptionProvider {
     ///   "speaker" diarization might detect there would be a misattribution,
     ///   not a real second speaker. /recordings has no such guarantee.
     func transcribe(localPath: String, forceSingleSpeaker: Bool) async throws -> TranscriptionResult {
+        beginWork()
+        defer { armIdleUnload() }
         let runDiarization = diarizationEnabled && !forceSingleSpeaker
 
         let url = URL(fileURLWithPath: localPath)
@@ -300,6 +303,8 @@ actor ParakeetService: TranscriptionProvider {
     ///   `OverdubNote`s, matching the /memo overdub shape, since labelling one
     ///   speaker's own overdub as "Speaker 2" would be a misattribution.
     func transcribeMultiTrack(trackPaths: [String]) async throws -> TranscriptionResult {
+        beginWork()
+        defer { armIdleUnload() }
         let manager = try await loadManager()
         let language: Language? = variant == .v2 ? .english : nil
 
@@ -684,6 +689,8 @@ actor ParakeetService: TranscriptionProvider {
     /// place the note on the base memo's timeline, since every track shares that
     /// timeline (all tracks in the source file are the same length).
     func transcribeOverdubTrack(localPath: String) async throws -> (text: String, startTime: TimeInterval) {
+        beginWork()
+        defer { armIdleUnload() }
         let manager = try await loadManager()
         let url = URL(fileURLWithPath: localPath)
         var decoderState = TdtDecoderState.make()
@@ -874,6 +881,53 @@ actor ParakeetService: TranscriptionProvider {
 
         self.diarizer = diarizer
         return diarizer
+    }
+
+    // MARK: - Idle model unloading
+
+    /// How long the loaded ASR/CTC/diarizer models stay resident after the last
+    /// piece of work before they're released. The app transcribes in short
+    /// bursts when a TP-7 connects and then idles for long stretches; the loaded
+    /// CoreML/ANE models are its largest resident cost (hundreds of MB), so we
+    /// drop them once a burst is clearly over and lazily reload (a few-second
+    /// cost) on the next one. The window is generous enough to span the gaps
+    /// between recordings in a batch (S3 upload, title/Notion round-trips)
+    /// without thrashing.
+    private static let modelIdleTimeout: Duration = .seconds(180)
+    private var idleUnloadTask: Task<Void, Never>?
+
+    /// Keep models resident while work is in flight; call at the start of every
+    /// public transcription entry point.
+    private func beginWork() {
+        idleUnloadTask?.cancel()
+        idleUnloadTask = nil
+    }
+
+    /// (Re)arm the idle-unload timer; call when a transcription finishes.
+    private func armIdleUnload() {
+        idleUnloadTask?.cancel()
+        idleUnloadTask = Task { [weak self] in
+            try? await Task.sleep(for: Self.modelIdleTimeout)
+            guard !Task.isCancelled else { return }
+            await self?.unloadModels()
+        }
+    }
+
+    /// Releases every loaded model so the RAM/ANE they hold is reclaimed. Safe to
+    /// call anytime; the next transcription lazily reloads only what it needs.
+    func unloadModels() async {
+        guard manager != nil || asrModels != nil || ctcModels != nil
+            || ctcTokenizer != nil || diarizer != nil else { return }
+        idleUnloadTask?.cancel()
+        idleUnloadTask = nil
+        if let manager { await manager.cleanup() }
+        diarizer?.cleanup()
+        manager = nil
+        asrModels = nil
+        ctcModels = nil
+        ctcTokenizer = nil
+        diarizer = nil
+        AppLogger.app.info("Parakeet models unloaded after idle timeout")
     }
 }
 

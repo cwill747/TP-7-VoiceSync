@@ -85,6 +85,8 @@ actor WhisperKitService: TranscriptionProvider {
     }
 
     func transcribe(localPath: String) async throws -> TranscriptionResult {
+        beginWork()
+        defer { armIdleUnload() }
         let pipe = try await loadPipe()
         let options = DecodingOptions(
             task: .transcribe,
@@ -151,5 +153,36 @@ actor WhisperKitService: TranscriptionProvider {
         }
         self.pipe = pipe
         return pipe
+    }
+
+    // MARK: - Idle model unloading
+
+    /// See `ParakeetService.modelIdleTimeout`. WhisperKit models are the largest
+    /// (tiny 75 MB … large-v3 3 GB); releasing them after a quiet period is the
+    /// single biggest memory saving for a background app that transcribes in
+    /// short bursts. The next transcription lazily reloads via `loadPipe()`.
+    private static let modelIdleTimeout: Duration = .seconds(180)
+    private var idleUnloadTask: Task<Void, Never>?
+
+    private func beginWork() {
+        idleUnloadTask?.cancel()
+        idleUnloadTask = nil
+    }
+
+    private func armIdleUnload() {
+        idleUnloadTask?.cancel()
+        idleUnloadTask = Task { [weak self] in
+            try? await Task.sleep(for: Self.modelIdleTimeout)
+            guard !Task.isCancelled else { return }
+            await self?.unloadModels()
+        }
+    }
+
+    func unloadModels() async {
+        guard let pipe else { return }
+        idleUnloadTask?.cancel()
+        idleUnloadTask = nil
+        await pipe.unloadModels()
+        self.pipe = nil
     }
 }
