@@ -74,6 +74,7 @@ struct TranscriptionSettingsView: View {
     @State private var parakeetUnifiedDownloadTask: Task<Void, Never>?
     @State private var availableLLMModels: [OpenRouterModel] = []
     @State private var isLoadingModels = false
+    @State private var modelLoadError: String?
     @State private var isTestingNote = false
     @State private var testNoteStatus: TestStatus?
     @State private var markdownInputPath = ""
@@ -147,8 +148,7 @@ struct TranscriptionSettingsView: View {
 
     /// A local endpoint (llama-server etc.) needs no API key.
     private var isLocalEndpoint: Bool {
-        guard let host = URL(string: resolvedBaseURL)?.host?.lowercased() else { return false }
-        return host == "localhost" || host == "127.0.0.1" || host == "::1"
+        OpenRouterService.isLocalEndpoint()
     }
 
     /// AI steps can run when a key is configured or the endpoint is local.
@@ -650,6 +650,9 @@ struct TranscriptionSettingsView: View {
                     HStack {
                         TextField(OpenRouterService.defaultBaseURL, text: $apiBaseURL)
                             .textFieldStyle(.roundedBorder)
+                            .onChange(of: apiBaseURL) { _, _ in
+                                modelLoadError = nil
+                            }
                             .onSubmit { Task { await loadModels() } }
                         if !apiBaseURL.isEmpty {
                             Button("Reset") { apiBaseURL = "" }
@@ -674,6 +677,12 @@ struct TranscriptionSettingsView: View {
                     } else {
                         Label("Configure an API key in the API Keys tab", systemImage: "exclamationmark.triangle")
                             .foregroundStyle(.orange)
+                            .font(.caption)
+                    }
+
+                    if let modelLoadError {
+                        Label(modelLoadError, systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.red)
                             .font(.caption)
                     }
 
@@ -702,6 +711,10 @@ struct TranscriptionSettingsView: View {
                         Text("Loading models...")
                             .foregroundStyle(.secondary)
                     }
+                } else if let modelLoadError {
+                    Label(modelLoadError, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.red)
                 } else if availableLLMModels.isEmpty && canUseAI {
                     Text("Click 'Refresh Models' to load available models")
                         .font(.caption)
@@ -755,6 +768,10 @@ struct TranscriptionSettingsView: View {
                         Text("Loading models...")
                             .foregroundStyle(.secondary)
                     }
+                } else if let modelLoadError {
+                    Label(modelLoadError, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.red)
                 } else if availableLLMModels.isEmpty && canUseAI {
                     Text("Click 'Refresh Models' above to load available models")
                         .font(.caption)
@@ -1033,11 +1050,13 @@ struct TranscriptionSettingsView: View {
         guard canUseAI else { return }
 
         isLoadingModels = true
+        modelLoadError = nil
         defer { isLoadingModels = false }
 
         do {
             let apiKey = (try? await KeychainService.shared.retrieve(for: .openRouterAPIKey)) ?? ""
             availableLLMModels = try await openRouterService.fetchModels(apiKey: apiKey)
+            modelLoadError = nil
 
             // Stored OpenRouter selections are invalid after switching to a
             // local server. Replace missing selections so SwiftUI's Picker and
@@ -1054,8 +1073,23 @@ struct TranscriptionSettingsView: View {
                 formatModel = defaultModel?.id ?? ""
             }
         } catch {
+            availableLLMModels = []
+            modelLoadError = modelLoadErrorMessage(for: error)
             AppLogger.app.error("Failed to load OpenRouter models: \(String(describing: error), privacy: .public)")
         }
+    }
+
+    private func modelLoadErrorMessage(for error: Error) -> String {
+        if let urlError = error as? URLError {
+            switch urlError.code {
+            case .cannotConnectToHost, .cannotFindHost, .networkConnectionLost, .timedOut, .notConnectedToInternet:
+                return "Could not reach \(resolvedBaseURL). Check that the AI server is running and reachable, then refresh models."
+            default:
+                break
+            }
+        }
+
+        return "Failed to load models: \(error.localizedDescription)"
     }
 
     private func loadNotionSettings() async {
