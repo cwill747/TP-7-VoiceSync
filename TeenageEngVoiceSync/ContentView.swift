@@ -186,6 +186,7 @@ struct ContentView: View {
     private var filteredRecordings: [Recording] {
         guard !searchText.isEmpty else { return recordings }
         return recordings.filter { recording in
+            recording.displayTitle.localizedCaseInsensitiveContains(searchText) ||
             recording.filename.localizedCaseInsensitiveContains(searchText) ||
             (recording.transcriptionText?.localizedCaseInsensitiveContains(searchText) ?? false)
         }
