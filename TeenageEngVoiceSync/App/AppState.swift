@@ -53,6 +53,10 @@ final class AppState {
         syncService?.deviceWatch.downloadingCount ?? 0
     }
 
+    var deviceDownloadingFiles: [DeviceDownloadProgress] {
+        syncService?.deviceWatch.downloadingFiles ?? []
+    }
+
     var processingActivity: ProcessingActivity? {
         syncService?.processingActivity
     }

@@ -39,6 +39,29 @@ struct TP7MTPFileEntry: Decodable {
     let modTime: Int64
 }
 
+/// Boxes a Swift progress closure so it can be handed across the cgo
+/// boundary as an opaque `void*` context pointer (see `tp7mtpProgressTrampoline`).
+/// `nonisolated`: instances are created on whatever thread calls `download`
+/// and read back from the download's own background thread inside
+/// `tp7mtp_download_recording`'s blocking call - never touched from the main
+/// actor.
+private nonisolated final class ProgressBox {
+    let callback: (Int64, Int64) -> Void
+    nonisolated init(_ callback: @escaping (Int64, Int64) -> Void) {
+        self.callback = callback
+    }
+}
+
+/// The actual C function pointer passed to `tp7mtp_download_recording`.
+/// Must be a capture-free, nonisolated function to bridge to
+/// `tp7mtp_progress_cb`; the `context` parameter carries the `ProgressBox`
+/// instead. Invoked from the download's background thread.
+private nonisolated func tp7mtpProgressTrampoline(bytesSent: Int64, bytesTotal: Int64, context: UnsafeMutableRawPointer?) {
+    guard let context else { return }
+    let box = Unmanaged<ProgressBox>.fromOpaque(context).takeUnretainedValue()
+    box.callback(bytesSent, bytesTotal)
+}
+
 private nonisolated struct TP7MTPResponse: Decodable {
     let ok: Bool
     let error: String?
@@ -84,11 +107,28 @@ nonisolated final class TP7MTPSession: @unchecked Sendable {
 
     /// Downloads a recording to `destination`. `folder` must be the value reported by
     /// `listRecordings()` for this file ("recordings" or "memo"). Blocking; call off the main thread.
-    func download(filename: String, folder: String, to destination: URL) -> Result<Void, TP7MTPError> {
+    ///
+    /// `onProgress`, if given, is invoked synchronously and repeatedly from
+    /// within this call (never after it returns) with bytes sent/total for
+    /// the file currently transferring.
+    func download(filename: String, folder: String, to destination: URL, onProgress: ((Int64, Int64) -> Void)? = nil) -> Result<Void, TP7MTPError> {
+        let box = onProgress.map(ProgressBox.init)
+        defer { withExtendedLifetime(box) {} }
+        let contextPtr = box.map { Unmanaged.passUnretained($0).toOpaque() }
+
         let json = folder.withCString { cFolder in
             filename.withCString { cFilename in
                 destination.path.withCString { cDestPath in
-                    call { tp7mtp_download_recording(handle, UnsafeMutablePointer(mutating: cFolder), UnsafeMutablePointer(mutating: cFilename), UnsafeMutablePointer(mutating: cDestPath)) }
+                    call {
+                        tp7mtp_download_recording(
+                            handle,
+                            UnsafeMutablePointer(mutating: cFolder),
+                            UnsafeMutablePointer(mutating: cFilename),
+                            UnsafeMutablePointer(mutating: cDestPath),
+                            box != nil ? tp7mtpProgressTrampoline : nil,
+                            contextPtr
+                        )
+                    }
                 }
             }
         }

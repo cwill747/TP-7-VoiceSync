@@ -10,6 +10,21 @@ package main
 
 /*
 #include <stdlib.h>
+
+// Reports bytes transferred for the file currently being downloaded.
+// Invoked synchronously, possibly many times, from within
+// tp7mtp_download_recording - never after it returns. context is an opaque
+// pointer the caller supplied to tp7mtp_download_recording and is passed
+// back unchanged.
+typedef void (*tp7mtp_progress_cb)(long long bytesSent, long long bytesTotal, void *context);
+
+// cgo cannot invoke a C function pointer directly from Go, so this trampoline
+// does it on Go's behalf.
+static inline void tp7mtp_invoke_progress_cb(tp7mtp_progress_cb cb, long long bytesSent, long long bytesTotal, void *context) {
+    if (cb != NULL) {
+        cb(bytesSent, bytesTotal, context);
+    }
+}
 */
 import "C"
 
@@ -332,7 +347,7 @@ func tp7mtp_list_recordings(handle int) *C.char {
 }
 
 //export tp7mtp_download_recording
-func tp7mtp_download_recording(handle int, cFolder *C.char, cFilename *C.char, cDestPath *C.char) *C.char {
+func tp7mtp_download_recording(handle int, cFolder *C.char, cFilename *C.char, cDestPath *C.char, progressCb C.tp7mtp_progress_cb, progressContext unsafe.Pointer) *C.char {
 	folder := C.GoString(cFolder)
 	filename := C.GoString(cFilename)
 	destPath := C.GoString(cDestPath)
@@ -364,6 +379,9 @@ func tp7mtp_download_recording(handle int, cFolder *C.char, cFilename *C.char, c
 			func(pi *mtpx.ProgressInfo, err error) error {
 				if pi.FileInfo != nil {
 					modTime = pi.FileInfo.ModTime
+				}
+				if pi.ActiveFileSize != nil {
+					C.tp7mtp_invoke_progress_cb(progressCb, C.longlong(pi.ActiveFileSize.Sent), C.longlong(pi.ActiveFileSize.Total), progressContext)
 				}
 				return err
 			},
