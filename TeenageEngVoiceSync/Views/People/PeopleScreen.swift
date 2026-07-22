@@ -237,14 +237,14 @@ struct PersonDetailView: View {
                 // Hash the source first so we can reject an exact duplicate before
                 // paying for the (much more expensive) embedding extraction.
                 let sourceHash = try? await FileHasher.sha256(url: url)
-                let identity = VoiceSample.sourceIdentity(
-                    sourceHash: sourceHash,
-                    recordingFilename: url.lastPathComponent,
-                    startTime: 0,
-                    endTime: 0
-                )
                 let isDuplicate = await MainActor.run {
-                    VoiceSample.isDuplicate(identity: identity, in: person.samples)
+                    VoiceSample.isDuplicate(
+                        sourceHash: sourceHash,
+                        recordingFilename: url.lastPathComponent,
+                        startTime: 0,
+                        endTime: 0,
+                        in: person.samples
+                    )
                 }
                 if isDuplicate {
                     await MainActor.run {

@@ -487,15 +487,17 @@ struct DiarizedTranscriptView: View {
         // unless this exact segment is already enrolled (e.g. re-selecting the
         // same person for an already-assigned segment).
         if !segment.embedding.isEmpty, let person = persons.first(where: { $0.id == personId }) {
-            let identity = VoiceSample.sourceIdentity(
-                sourceHash: nil,
+            let isDuplicate = VoiceSample.isDuplicate(
+                sourceHash: recording.fileHash,
                 recordingFilename: recording.filename,
                 startTime: segment.startTime,
-                endTime: segment.endTime
+                endTime: segment.endTime,
+                in: person.samples
             )
-            if !VoiceSample.isDuplicate(identity: identity, in: person.samples) {
+            if !isDuplicate {
                 let sample = VoiceSample(
                     recordingFilename: recording.filename,
+                    sourceHash: recording.fileHash,
                     startTime: segment.startTime,
                     endTime: segment.endTime,
                     embedding: segment.embedding
@@ -519,6 +521,7 @@ struct DiarizedTranscriptView: View {
         if !segment.embedding.isEmpty {
             let sample = VoiceSample(
                 recordingFilename: recording.filename,
+                sourceHash: recording.fileHash,
                 startTime: segment.startTime,
                 endTime: segment.endTime,
                 embedding: segment.embedding

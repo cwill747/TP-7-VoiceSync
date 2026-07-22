@@ -31,43 +31,66 @@ final class VoiceSampleDeduplicationTests: XCTestCase {
         return sample
     }
 
-    // MARK: - Source identity
+    /// Convenience: is `candidate` a duplicate of anything in `existing`?
+    private func isDuplicate(_ candidate: VoiceSample, in existing: [VoiceSample]) -> Bool {
+        VoiceSample.isDuplicate(
+            sourceHash: candidate.sourceHash,
+            recordingFilename: candidate.recordingFilename,
+            startTime: candidate.startTime,
+            endTime: candidate.endTime,
+            in: existing
+        )
+    }
 
-    func testExactDuplicateSharesSourceIdentity() {
+    // MARK: - Source matching
+
+    func testExactDuplicateMatchesByContentHash() {
         let a = makeSample(filename: "clip.wav", hash: "abc123", start: 0, end: 0)
         let b = makeSample(filename: "renamed.wav", hash: "abc123", start: 0, end: 0)
 
-        // Same content hash + same range = same identity, even when the
-        // display filename differs.
-        XCTAssertEqual(a.sourceIdentity, b.sourceIdentity)
-        XCTAssertTrue(VoiceSample.isDuplicate(identity: b.sourceIdentity, in: [a]))
+        // Same content hash + same range = same source, even when the display
+        // filename differs (rename).
+        XCTAssertTrue(a.isSameSource(as: b))
+        XCTAssertTrue(isDuplicate(b, in: [a]))
     }
 
     func testSameFilenameDifferentContentIsNotDuplicate() {
         let a = makeSample(filename: "clip.wav", hash: "hash-one")
         let b = makeSample(filename: "clip.wav", hash: "hash-two")
 
-        XCTAssertNotEqual(a.sourceIdentity, b.sourceIdentity)
-        XCTAssertFalse(VoiceSample.isDuplicate(identity: b.sourceIdentity, in: [a]))
+        XCTAssertFalse(a.isSameSource(as: b))
+        XCTAssertFalse(isDuplicate(b, in: [a]))
     }
 
     func testDistinctSegmentsFromSameSourceCoexist() {
         let a = makeSample(filename: "clip.wav", hash: "abc123", start: 0, end: 5)
         let b = makeSample(filename: "clip.wav", hash: "abc123", start: 5, end: 10)
 
-        XCTAssertNotEqual(a.sourceIdentity, b.sourceIdentity)
-        XCTAssertFalse(VoiceSample.isDuplicate(identity: b.sourceIdentity, in: [a]))
+        XCTAssertFalse(a.isSameSource(as: b))
+        XCTAssertFalse(isDuplicate(b, in: [a]))
         XCTAssertTrue(VoiceSample.duplicatesToRemove(from: [a, b]).isEmpty)
     }
 
-    func testLegacySamplesFallBackToFilenameIdentity() {
+    func testLegacySamplesMatchByFilename() {
         // No content hash (legacy rows). Filename + range is the identity.
         let a = makeSample(filename: "clip.wav", hash: nil)
         let b = makeSample(filename: "clip.wav", hash: nil)
         let other = makeSample(filename: "different.wav", hash: nil)
 
-        XCTAssertEqual(a.sourceIdentity, b.sourceIdentity)
-        XCTAssertNotEqual(a.sourceIdentity, other.sourceIdentity)
+        XCTAssertTrue(a.isSameSource(as: b))
+        XCTAssertFalse(a.isSameSource(as: other))
+    }
+
+    func testHashedCandidateMatchesLegacyHashlessRowForSameFile() {
+        // A pre-update sample stored without a hash must still be recognized as
+        // a duplicate when the same file is re-added and now carries a hash.
+        let legacy = makeSample(filename: "clip.wav", hash: nil)
+        let hashed = makeSample(filename: "clip.wav", hash: "abc123")
+
+        XCTAssertTrue(hashed.isSameSource(as: legacy))
+        XCTAssertTrue(isDuplicate(hashed, in: [legacy]))
+        // And the launch repair collapses the mixed pair to a single sample.
+        XCTAssertEqual(VoiceSample.duplicatesToRemove(from: [legacy, hashed]).count, 1)
     }
 
     // MARK: - duplicatesToRemove

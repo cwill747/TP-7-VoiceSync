@@ -30,51 +30,84 @@ final class VoiceSample {
         self.embedding = embedding
     }
 
-    /// Stable identity used to detect exact duplicate samples. Prefers the
-    /// content hash plus segment range so distinct segments of one recording
-    /// stay distinct and renamed files still collide. Falls back to
-    /// filename + range for legacy samples that predate content hashing.
-    var sourceIdentity: String {
-        Self.sourceIdentity(
+    /// Whether two samples describe the same source clip/segment. Segments must
+    /// cover the same range; within that, matching non-empty content hashes are
+    /// authoritative, and when either side lacks a hash (legacy rows) we fall
+    /// back to comparing filenames. This cross-compatibility means a newly
+    /// hashed sample still collides with a pre-update, hash-less row for the
+    /// same file.
+    func isSameSource(as other: VoiceSample) -> Bool {
+        Self.isSameSource(
             sourceHash: sourceHash,
             recordingFilename: recordingFilename,
             startTime: startTime,
-            endTime: endTime
+            endTime: endTime,
+            asSourceHash: other.sourceHash,
+            recordingFilename: other.recordingFilename,
+            startTime: other.startTime,
+            endTime: other.endTime
         )
     }
 
-    /// Builds a source identity from raw components. Exposed so the enrollment
-    /// path can test a candidate for duplication before constructing a sample.
-    static func sourceIdentity(
+    /// Component-based `isSameSource`, so the enrollment/reassignment paths can
+    /// test a candidate before constructing a sample.
+    static func isSameSource(
+        sourceHash lhsHash: String?,
+        recordingFilename lhsFile: String?,
+        startTime lhsStart: TimeInterval,
+        endTime lhsEnd: TimeInterval,
+        asSourceHash rhsHash: String?,
+        recordingFilename rhsFile: String?,
+        startTime rhsStart: TimeInterval,
+        endTime rhsEnd: TimeInterval
+    ) -> Bool {
+        guard lhsStart == rhsStart, lhsEnd == rhsEnd else { return false }
+
+        if let lhsHash, !lhsHash.isEmpty, let rhsHash, !rhsHash.isEmpty {
+            return lhsHash == rhsHash
+        }
+        // At least one side predates content hashing — compare by filename.
+        if let lhsFile, !lhsFile.isEmpty, let rhsFile, !rhsFile.isEmpty {
+            return lhsFile == rhsFile
+        }
+        // Neither hash nor filename to go on: same range is the best we can do.
+        return true
+    }
+
+    /// True when `samples` already contains one describing the same source as
+    /// the given candidate components.
+    static func isDuplicate(
         sourceHash: String?,
         recordingFilename: String?,
         startTime: TimeInterval,
-        endTime: TimeInterval
-    ) -> String {
-        let range = "\(startTime)-\(endTime)"
-        if let sourceHash, !sourceHash.isEmpty {
-            return "hash:\(sourceHash)#\(range)"
+        endTime: TimeInterval,
+        in samples: [VoiceSample]
+    ) -> Bool {
+        samples.contains { existing in
+            isSameSource(
+                sourceHash: sourceHash,
+                recordingFilename: recordingFilename,
+                startTime: startTime,
+                endTime: endTime,
+                asSourceHash: existing.sourceHash,
+                recordingFilename: existing.recordingFilename,
+                startTime: existing.startTime,
+                endTime: existing.endTime
+            )
         }
-        if let recordingFilename, !recordingFilename.isEmpty {
-            return "file:\(recordingFilename)#\(range)"
-        }
-        return "none:#\(range)"
     }
 
-    /// True when a sample with `identity` already exists in `samples`.
-    static func isDuplicate(identity: String, in samples: [VoiceSample]) -> Bool {
-        samples.contains { $0.sourceIdentity == identity }
-    }
-
-    /// Returns the samples that duplicate an earlier one (by source identity)
-    /// and should be removed. The earliest-added sample of each identity is
-    /// kept; every later collision is returned for deletion.
+    /// Returns the samples that duplicate an earlier one (same source) and
+    /// should be removed. The earliest-added sample of each source is kept;
+    /// every later collision is returned for deletion.
     static func duplicatesToRemove(from samples: [VoiceSample]) -> [VoiceSample] {
-        var seen = Set<String>()
+        var kept: [VoiceSample] = []
         var duplicates: [VoiceSample] = []
         for sample in samples.sorted(by: { $0.addedAt < $1.addedAt }) {
-            if !seen.insert(sample.sourceIdentity).inserted {
+            if kept.contains(where: { $0.isSameSource(as: sample) }) {
                 duplicates.append(sample)
+            } else {
+                kept.append(sample)
             }
         }
         return duplicates
