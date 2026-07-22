@@ -208,11 +208,11 @@ final class DeviceWatchService {
         var downloaded: [DownloadedRecording] = []
         isDownloading = true
         downloadingCount = newFiles.count
-        downloadingFiles = newFiles.map { DeviceDownloadProgress(name: $0.name, folder: $0.folder) }
+        setDownloadingFiles(newFiles.map { DeviceDownloadProgress(name: $0.name, folder: $0.folder) })
         defer {
             isDownloading = false
             downloadingCount = 0
-            downloadingFiles = []
+            setDownloadingFiles([])
         }
 
         for (index, file) in newFiles.enumerated() {
@@ -226,15 +226,15 @@ final class DeviceWatchService {
             if FileManager.default.fileExists(atPath: destination.path) {
                 knownFilenames.insert(key)
                 downloaded.append(DownloadedRecording(url: destination, source: source, deviceFilename: file.name))
-                downloadingFiles[index].state = .done
+                setFileState(at: index, .done)
                 continue
             }
 
-            downloadingFiles[index].state = .downloading(bytesSent: 0, bytesTotal: file.size)
+            setFileState(at: index, .downloading(bytesSent: 0, bytesTotal: file.size))
 
             let downloadResult = await Task.detached(priority: .utility) { [weak self] in
                 session.download(filename: file.name, folder: file.folder, to: destination) { sent, total in
-                    self?.updateProgress(at: index, bytesSent: sent, bytesTotal: total)
+                    self?.setFileState(at: index, .downloading(bytesSent: sent, bytesTotal: total))
                 }
             }.value
 
@@ -242,12 +242,12 @@ final class DeviceWatchService {
             case .success:
                 knownFilenames.insert(key)
                 downloaded.append(DownloadedRecording(url: destination, source: source, deviceFilename: file.name))
-                downloadingFiles[index].state = .done
+                setFileState(at: index, .done)
             case .failure(let error):
                 // Do not mark as known: a transient MTP failure here should be
                 // retried on the next poll cycle rather than skipped forever.
                 AppLogger.device.error("Failed to download \(file.name, privacy: .private): \(error.localizedDescription, privacy: .public)")
-                downloadingFiles[index].state = .failed
+                setFileState(at: index, .failed)
             }
         }
 
@@ -258,14 +258,27 @@ final class DeviceWatchService {
         return true
     }
 
-    /// Invoked from the download's progress callback on the detached
-    /// download task's thread, potentially many times per second. Hops to
-    /// the main actor before touching `downloadingFiles`, since the toolbar/
-    /// popover UI reads that `@Observable` array on the main thread.
-    private func updateProgress(at index: Int, bytesSent: Int64, bytesTotal: Int64) {
+    /// Every `downloadingFiles` write - from `scanRecordings` itself and from
+    /// the progress callback on the detached download task's thread - goes
+    /// through one of these two methods, which hop to the main actor (where
+    /// the toolbar/popover read the array) via a fire-and-forget `Task`.
+    /// Confining every write to the same actor through the same enqueue
+    /// mechanism, in call order, is what keeps a batch's initial/progress/
+    /// done writes from racing or reordering relative to each other - e.g. a
+    /// stale in-flight progress update can never land after (and overwrite)
+    /// that file's own completion write, since the completion write for a
+    /// given file is always enqueued after all of that file's progress
+    /// writes.
+    private func setDownloadingFiles(_ files: [DeviceDownloadProgress]) {
+        Task { @MainActor [weak self] in
+            self?.downloadingFiles = files
+        }
+    }
+
+    private func setFileState(at index: Int, _ state: DeviceDownloadProgress.State) {
         Task { @MainActor [weak self] in
             guard let self, self.downloadingFiles.indices.contains(index) else { return }
-            self.downloadingFiles[index].state = .downloading(bytesSent: bytesSent, bytesTotal: bytesTotal)
+            self.downloadingFiles[index].state = state
         }
     }
 
