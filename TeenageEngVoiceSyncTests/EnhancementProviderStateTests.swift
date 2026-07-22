@@ -48,6 +48,21 @@ final class EnhancementProviderStateTests: XCTestCase {
         XCTAssertEqual(state.configuration(for: .custom).modelLoadError, "Custom provider error")
     }
 
+    func testValidatedUnsavedAPIKeyIsNotUsableByBackgroundWorkers() {
+        var state = EnhancementProviderState()
+
+        state.update(.openRouter) {
+            $0.apiKey = "not-yet-saved"
+            $0.status = .valid(1)
+        }
+
+        XCTAssertFalse(state.configuration(for: .openRouter).hasUsableRemoteCredentials)
+
+        state.update(.openRouter) { $0.isAPIKeyStored = true }
+
+        XCTAssertTrue(state.configuration(for: .openRouter).hasUsableRemoteCredentials)
+    }
+
     private func model(id: String) -> OpenRouterModel {
         OpenRouterModel(
             id: id,

@@ -20,10 +20,15 @@ nonisolated struct EnhancementProviderState {
 
     struct Configuration {
         var apiKey = ""
+        var isAPIKeyStored = false
         var status: Status = .notTested
         var models: [OpenRouterModel] = []
         var isLoadingModels = false
         var modelLoadError: String?
+
+        var hasUsableRemoteCredentials: Bool {
+            isAPIKeyStored && !apiKey.isEmpty
+        }
     }
 
     private(set) var configuredProvider: EnhancementProvider
@@ -82,7 +87,10 @@ struct EnhancementSettingsView: View {
         Binding(
             get: { configuredConfiguration.apiKey },
             set: { newValue in
-                providerState.update(configuredProvider) { $0.apiKey = newValue }
+                providerState.update(configuredProvider) {
+                    $0.apiKey = newValue
+                    $0.isAPIKeyStored = false
+                }
             }
         )
     }
@@ -122,16 +130,7 @@ struct EnhancementSettingsView: View {
 
     private var activeProviderHasCredentials: Bool {
         let activeConfiguration = providerState.configuration(for: provider)
-        if !activeConfiguration.apiKey.isEmpty {
-            return true
-        }
-
-        switch activeConfiguration.status {
-        case .saved, .valid:
-            return true
-        default:
-            return false
-        }
+        return activeConfiguration.hasUsableRemoteCredentials
     }
 
     private var canUseAI: Bool {
@@ -430,6 +429,7 @@ struct EnhancementSettingsView: View {
             if !storedKey.isEmpty {
                 providerState.update(provider) {
                     $0.apiKey = storedKey
+                    $0.isAPIKeyStored = true
                     $0.status = .saved
                 }
             }
@@ -440,7 +440,10 @@ struct EnhancementSettingsView: View {
         isLoadingKey = true
         defer { isLoadingKey = false }
         let storedKey = (try? await KeychainService.shared.retrieve(for: targetProvider.keychainKey)) ?? ""
-        providerState.update(targetProvider) { $0.apiKey = storedKey }
+        providerState.update(targetProvider) {
+            $0.apiKey = storedKey
+            $0.isAPIKeyStored = !storedKey.isEmpty
+        }
     }
 
     private func saveSelectedProviderKey() async {
@@ -451,7 +454,10 @@ struct EnhancementSettingsView: View {
 
         do {
             try await KeychainService.shared.save(apiKey, for: targetProvider.keychainKey)
-            providerState.update(targetProvider) { $0.status = .saved }
+            providerState.update(targetProvider) {
+                $0.isAPIKeyStored = true
+                $0.status = .saved
+            }
         } catch {
             providerState.update(targetProvider) {
                 $0.status = .error("Failed to save: \(error.localizedDescription)")
@@ -513,6 +519,7 @@ struct EnhancementSettingsView: View {
                     try? await KeychainService.shared.save(previousKey, for: newProvider.keychainKey)
                     providerState.update(newProvider) {
                         $0.apiKey = previousKey
+                        $0.isAPIKeyStored = true
                         $0.status = .saved
                     }
                 }
