@@ -135,7 +135,7 @@ struct TeenageEngVoiceSyncApp: App {
                     appState.shutdown()
                 }
         }
-        .defaultSize(width: 960, height: 640)
+        .defaultSize(width: 1100, height: 720)
         .commands {
             CommandGroup(replacing: .newItem) { }
         }

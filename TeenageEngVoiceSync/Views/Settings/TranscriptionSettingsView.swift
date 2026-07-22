@@ -74,6 +74,14 @@ struct TranscriptionSettingsView: View {
     @State private var isValidatingNotion = false
     @State private var isLoadingNotionKey = true
 
+    // Disclosure state for the optional destination integrations below the
+    // core Transcription section. Collapsed by default when the integration
+    // isn't enabled, so the tab isn't one long scroll of every integration's
+    // fields at once.
+    @State private var appleNotesExpanded = false
+    @State private var markdownExpanded = false
+    @State private var notionExpanded = false
+
     enum ValidationStatus {
         case success
         case error(String)
@@ -516,194 +524,199 @@ struct TranscriptionSettingsView: View {
 
             // MARK: - Apple Notes Integration
             Section("Apple Notes Integration") {
-                Toggle("Save transcriptions to Apple Notes", isOn: $notesEnabled)
-                    .disabled(!transcriptionActive)
-                    .onChange(of: notesEnabled) { _, newValue in
-                        if newValue {
-                            // Disable markdown when Apple Notes is enabled
-                            markdownEnabled = false
+                DisclosureGroup(isExpanded: $appleNotesExpanded) {
+                    if !transcriptionActive {
+                        Text("Enable transcription above to use Apple Notes integration")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    if notesEnabled {
+                        TextField("Notes Folder", text: $notesFolder)
+                            .textFieldStyle(.roundedBorder)
+
+                        Picker("Link expiry", selection: $linkExpiry) {
+                            Text("1 day").tag("1d")
+                            Text("7 days").tag("7d")
+                            Text("30 days").tag("30d")
+                            Text("90 days").tag("90d")
+                        }
+
+                        HStack {
+                            Button("Test Note Creation") {
+                                testNoteCreation()
+                            }
+                            .disabled(isTestingNote)
+
+                            if isTestingNote {
+                                ProgressView()
+                                    .scaleEffect(0.7)
+                            }
+                        }
+
+                        if let status = testNoteStatus {
+                            switch status {
+                            case .success:
+                                Label("Test note created! Check your Notes app.", systemImage: "checkmark.circle.fill")
+                                    .foregroundStyle(.green)
+                                    .font(.caption)
+                            case .error(let message):
+                                Label(message, systemImage: "exclamationmark.triangle.fill")
+                                    .foregroundStyle(.red)
+                                    .font(.caption)
+                            }
                         }
                     }
 
-                if !transcriptionActive {
-                    Text("Enable transcription above to use Apple Notes integration")
+                    Text("Creates notes in the Apple Notes app with transcription and audio links")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                } label: {
+                    Toggle("Save transcriptions to Apple Notes", isOn: $notesEnabled)
+                        .disabled(!transcriptionActive)
+                        .onChange(of: notesEnabled) { _, newValue in
+                            if newValue {
+                                // Disable markdown when Apple Notes is enabled
+                                markdownEnabled = false
+                                appleNotesExpanded = true
+                            }
+                        }
                 }
-
-                if notesEnabled {
-                    TextField("Notes Folder", text: $notesFolder)
-                        .textFieldStyle(.roundedBorder)
-
-                    Picker("Link expiry", selection: $linkExpiry) {
-                        Text("1 day").tag("1d")
-                        Text("7 days").tag("7d")
-                        Text("30 days").tag("30d")
-                        Text("90 days").tag("90d")
-                    }
-
-                    HStack {
-                        Button("Test Note Creation") {
-                            testNoteCreation()
-                        }
-                        .disabled(isTestingNote)
-
-                        if isTestingNote {
-                            ProgressView()
-                                .scaleEffect(0.7)
-                        }
-                    }
-
-                    if let status = testNoteStatus {
-                        switch status {
-                        case .success:
-                            Label("Test note created! Check your Notes app.", systemImage: "checkmark.circle.fill")
-                                .foregroundStyle(.green)
-                                .font(.caption)
-                        case .error(let message):
-                            Label(message, systemImage: "exclamationmark.triangle.fill")
-                                .foregroundStyle(.red)
-                                .font(.caption)
-                        }
-                    }
-                }
-
-                Text("Creates notes in the Apple Notes app with transcription and audio links")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
 
             // MARK: - Local Markdown Notes
             Section("Local Markdown Notes") {
-                Toggle("Save transcriptions as markdown files", isOn: $markdownEnabled)
-                    .disabled(!transcriptionActive)
-                    .onChange(of: markdownEnabled) { _, newValue in
-                        if newValue {
-                            // Disable Apple Notes when markdown is enabled
-                            notesEnabled = false
-                        }
-                    }
-
-                if markdownEnabled {
-                    HStack {
-                        TextField("e.g. ~/Downloads/TP7-Notes", text: $markdownInputPath)
-                            .textFieldStyle(.roundedBorder)
-                            .onChange(of: markdownInputPath) { _, newValue in
-                                if selectedMarkdownFolderURL?.path != newValue {
-                                    selectedMarkdownFolderURL = nil
-                                }
-                                markdownValidationStatus = nil
+                DisclosureGroup(isExpanded: $markdownExpanded) {
+                    if markdownEnabled {
+                        SettingsFolderPickerRow(
+                            path: $markdownInputPath,
+                            placeholder: "e.g. ~/Downloads/TP7-Notes",
+                            onChoose: chooseMarkdownFolder,
+                            onValidate: validateMarkdownFolder,
+                            validateDisabled: markdownInputPath.isEmpty
+                        )
+                        .onChange(of: markdownInputPath) { _, newValue in
+                            if selectedMarkdownFolderURL?.path != newValue {
+                                selectedMarkdownFolderURL = nil
                             }
-                            .onAppear {
-                                if !markdownFolderPath.isEmpty {
-                                    markdownInputPath = markdownFolderPath
-                                }
+                            markdownValidationStatus = nil
+                        }
+                        .onAppear {
+                            if !markdownFolderPath.isEmpty {
+                                markdownInputPath = markdownFolderPath
                             }
-
-                        Button("Choose…") {
-                            chooseMarkdownFolder()
                         }
 
-                        Button("Validate") {
-                            validateMarkdownFolder()
+                        if let status = markdownValidationStatus {
+                            switch status {
+                            case .success:
+                                Label("Folder is valid and accessible", systemImage: "checkmark.circle.fill")
+                                    .foregroundStyle(.green)
+                                    .font(.caption)
+                            case .error(let message):
+                                Label(message, systemImage: "exclamationmark.triangle.fill")
+                                    .foregroundStyle(.red)
+                                    .font(.caption)
+                            }
                         }
-                        .disabled(markdownInputPath.isEmpty)
-                    }
 
-                    if let status = markdownValidationStatus {
-                        switch status {
-                        case .success:
-                            Label("Folder is valid and accessible", systemImage: "checkmark.circle.fill")
-                                .foregroundStyle(.green)
-                                .font(.caption)
-                        case .error(let message):
-                            Label(message, systemImage: "exclamationmark.triangle.fill")
-                                .foregroundStyle(.red)
-                                .font(.caption)
+                        if !markdownFolderPath.isEmpty {
+                            SettingsFolderPathRow(path: markdownFolderPath)
                         }
                     }
 
-                    if !markdownFolderPath.isEmpty {
-                        Text("Current: \(markdownFolderPath)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
+                    Text("Creates .md files that work with any text editor or note-taking app")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } label: {
+                    Toggle("Save transcriptions as markdown files", isOn: $markdownEnabled)
+                        .disabled(!transcriptionActive)
+                        .onChange(of: markdownEnabled) { _, newValue in
+                            if newValue {
+                                // Disable Apple Notes when markdown is enabled
+                                notesEnabled = false
+                                markdownExpanded = true
+                            }
+                        }
                 }
-
-                Text("Creates .md files that work with any text editor or note-taking app")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
 
             // MARK: - Notion Integration
             Section("Notion Integration") {
-                Toggle("Send transcriptions to Notion", isOn: $notionEnabled)
-                    .disabled(!transcriptionActive || isLoadingNotionKey)
-
-                if !transcriptionActive {
-                    Text("Enable transcription above to use Notion integration")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                if notionEnabled {
-                    HStack {
-                        if showNotionKey {
-                            TextField("Integration Secret (ntn_… or secret_…)", text: $notionAPIKey)
-                                .textFieldStyle(.roundedBorder)
-                        } else {
-                            SecureField("Integration Secret (ntn_… or secret_…)", text: $notionAPIKey)
-                                .textFieldStyle(.roundedBorder)
-                        }
-                        Button { showNotionKey.toggle() } label: {
-                            Image(systemName: showNotionKey ? "eye.slash" : "eye")
-                        }
-                        .buttonStyle(.borderless)
-                        .accessibilityLabel(Text(showNotionKey ? "Hide integration secret" : "Show integration secret"))
+                DisclosureGroup(isExpanded: $notionExpanded) {
+                    if !transcriptionActive {
+                        Text("Enable transcription above to use Notion integration")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
-                    .disabled(isLoadingNotionKey)
 
-                    TextField("Database ID (paste the DB URL or the 32-char hex ID)", text: $notionDatabaseId)
-                        .textFieldStyle(.roundedBorder)
+                    if notionEnabled {
+                        HStack {
+                            if showNotionKey {
+                                TextField("Integration Secret (ntn_… or secret_…)", text: $notionAPIKey)
+                                    .textFieldStyle(.roundedBorder)
+                            } else {
+                                SecureField("Integration Secret (ntn_… or secret_…)", text: $notionAPIKey)
+                                    .textFieldStyle(.roundedBorder)
+                            }
+                            Button { showNotionKey.toggle() } label: {
+                                Image(systemName: showNotionKey ? "eye.slash" : "eye")
+                            }
+                            .buttonStyle(.borderless)
+                            .accessibilityLabel(Text(showNotionKey ? "Hide integration secret" : "Show integration secret"))
+                        }
                         .disabled(isLoadingNotionKey)
-                        .onChange(of: notionDatabaseId) { _, newValue in
-                            let extracted = NotionService.extractDatabaseId(from: newValue)
-                            if extracted != newValue {
-                                notionDatabaseId = extracted
+
+                        TextField("Database ID (paste the DB URL or the 32-char hex ID)", text: $notionDatabaseId)
+                            .textFieldStyle(.roundedBorder)
+                            .disabled(isLoadingNotionKey)
+                            .onChange(of: notionDatabaseId) { _, newValue in
+                                let extracted = NotionService.extractDatabaseId(from: newValue)
+                                if extracted != newValue {
+                                    notionDatabaseId = extracted
+                                }
                             }
-                        }
 
-                    HStack {
-                        Button(isValidatingNotion ? "Connecting…" : "Save & Connect") {
-                            Task { await saveAndValidateNotion() }
-                        }
-                        .disabled(isLoadingNotionKey || isValidatingNotion || notionAPIKey.isEmpty || notionDatabaseId.isEmpty)
+                        HStack {
+                            Button(isValidatingNotion ? "Connecting…" : "Save & Connect") {
+                                Task { await saveAndValidateNotion() }
+                            }
+                            .disabled(isLoadingNotionKey || isValidatingNotion || notionAPIKey.isEmpty || notionDatabaseId.isEmpty)
 
-                        if let notionStatus {
-                            Text(notionStatus)
-                                .font(.caption)
-                                .foregroundStyle(notionStatus == "Connected" ? .green : .red)
-                        }
-                    }
-
-                    if !notionWarnings.isEmpty {
-                        VStack(alignment: .leading, spacing: 2) {
-                            ForEach(notionWarnings, id: \.self) { warning in
-                                Text(warning)
+                            if let notionStatus {
+                                Text(notionStatus)
                                     .font(.caption)
-                                    .foregroundStyle(.orange)
+                                    .foregroundStyle(notionStatus == "Connected" ? .green : .red)
                             }
                         }
+
+                        if !notionWarnings.isEmpty {
+                            VStack(alignment: .leading, spacing: 2) {
+                                ForEach(notionWarnings, id: \.self) { warning in
+                                    Text(warning)
+                                        .font(.caption)
+                                        .foregroundStyle(.orange)
+                                }
+                            }
+                        }
+
+                        Text("Create an integration at notion.so/my-integrations, then share your database with it via ••• → Connections. Any missing properties are added automatically.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
 
-                    Text("Create an integration at notion.so/my-integrations, then share your database with it via ••• → Connections. Any missing properties are added automatically.")
+                    Text("Creates a page per recording in your Notion database, alongside Apple Notes or Markdown if enabled")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                } label: {
+                    Toggle("Send transcriptions to Notion", isOn: $notionEnabled)
+                        .disabled(!transcriptionActive || isLoadingNotionKey)
+                        .onChange(of: notionEnabled) { _, newValue in
+                            if newValue {
+                                notionExpanded = true
+                            }
+                        }
                 }
-
-                Text("Creates a page per recording in your Notion database, alongside Apple Notes or Markdown if enabled")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
 
             // MARK: - Notes Status
@@ -736,6 +749,9 @@ struct TranscriptionSettingsView: View {
         .padding()
         .task {
             ensureTranscriptionDefaults()
+            appleNotesExpanded = notesEnabled
+            markdownExpanded = markdownEnabled
+            notionExpanded = notionEnabled
             await loadElevenLabsKey()
             await loadNotionSettings()
             refreshWhisperKitStatus()
@@ -1121,6 +1137,29 @@ struct TranscriptionSettingsView: View {
     }
 }
 
-#Preview {
+#Preview("Minimum width") {
     TranscriptionSettingsView()
+        .environment(AppState())
+        .frame(width: 500, height: 500)
+}
+
+#Preview("Default width") {
+    TranscriptionSettingsView()
+        .environment(AppState())
+        .frame(width: 620, height: 700)
+}
+
+#Preview("Wide, long paths") {
+    UserDefaults.standard.set(true, forKey: "transcription.enabled")
+    UserDefaults.standard.set(true, forKey: "markdown.enabled")
+    UserDefaults.standard.set(
+        "/Users/cameron/Library/Mobile Documents/com~apple~CloudDocs/Notes/TP-7 Transcripts/2026/Field Sessions",
+        forKey: "markdown.folderPath"
+    )
+    UserDefaults.standard.set(true, forKey: "notion.enabled")
+    UserDefaults.standard.set(true, forKey: "applenotes.enabled")
+
+    return TranscriptionSettingsView()
+        .environment(AppState())
+        .frame(width: 900, height: 900)
 }

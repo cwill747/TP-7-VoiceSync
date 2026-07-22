@@ -106,6 +106,7 @@ struct StorageSettingsView: View {
                     Text("Files will be uploaded to: s3://\(bucket)/\(prefix)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
 
                     Divider()
 
@@ -189,31 +190,25 @@ struct StorageSettingsView: View {
                     }
 
                 if localAudioEnabled {
-                    HStack {
-                        TextField("e.g. ~/Downloads/TP7-Audio", text: $localInputPath)
-                            .textFieldStyle(.roundedBorder)
-                            .onAppear {
-                                if !localFolderPath.isEmpty {
-                                    localInputPath = localFolderPath
-                                }
-                            }
-                            .onChange(of: localFolderPath) { _, newValue in
-                                if localInputPath.isEmpty || localValidationStatus == .success {
-                                    localInputPath = newValue
-                                }
-                            }
-                            .onChange(of: localInputPath) { _, _ in
-                                localValidationStatus = nil
-                            }
-
-                        Button("Choose…") {
-                            chooseLocalFolder()
+                    SettingsFolderPickerRow(
+                        path: $localInputPath,
+                        placeholder: "e.g. ~/Downloads/TP7-Audio",
+                        onChoose: chooseLocalFolder,
+                        onValidate: validateLocalFolder,
+                        validateDisabled: localInputPath.isEmpty
+                    )
+                    .onAppear {
+                        if !localFolderPath.isEmpty {
+                            localInputPath = localFolderPath
                         }
-
-                        Button("Validate") {
-                            validateLocalFolder()
+                    }
+                    .onChange(of: localFolderPath) { _, newValue in
+                        if localInputPath.isEmpty || localValidationStatus == .success {
+                            localInputPath = newValue
                         }
-                        .disabled(localInputPath.isEmpty)
+                    }
+                    .onChange(of: localInputPath) { _, _ in
+                        localValidationStatus = nil
                     }
 
                     if let status = localValidationStatus {
@@ -230,9 +225,7 @@ struct StorageSettingsView: View {
                     }
 
                     if !localFolderPath.isEmpty {
-                        Text("Current: \(localFolderPath)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                        SettingsFolderPathRow(path: localFolderPath)
                     }
 
                     Text("Audio recordings will be copied to this folder.")
@@ -423,6 +416,29 @@ struct StorageSettingsView: View {
     }
 }
 
-#Preview {
+#Preview("Minimum width") {
     StorageSettingsView()
+        .environment(AppState())
+        .frame(width: 500, height: 500)
+}
+
+#Preview("Default width") {
+    StorageSettingsView()
+        .environment(AppState())
+        .frame(width: 620, height: 700)
+}
+
+#Preview("Wide, long paths") {
+    UserDefaults.standard.set(true, forKey: "localaudio.enabled")
+    UserDefaults.standard.set(
+        "/Users/cameron/Library/Mobile Documents/com~apple~CloudDocs/Recordings/TP-7 Field Sessions/2026/Backups",
+        forKey: "localaudio.folderPath"
+    )
+    UserDefaults.standard.set(true, forKey: "s3.enabled")
+    UserDefaults.standard.set("teenage-engineering-field-recordings-archive-production", forKey: "s3.bucket")
+    UserDefaults.standard.set("recordings/2026/field-sessions/unattended-devices/", forKey: "s3.prefix")
+
+    return StorageSettingsView()
+        .environment(AppState())
+        .frame(width: 900, height: 800)
 }
