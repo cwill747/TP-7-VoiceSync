@@ -233,6 +233,12 @@ struct OnboardingS3View: View {
             }
         } catch {
             testStatus = .error("Connection failed: \(error.localizedDescription)")
+            // A failed (re)test must not leave a kept-existing decision that
+            // still reads as enabled — the fields just failed may be edited,
+            // unvalidated values, and a kept `.isEnabled` decision would let
+            // `apply()` commit them as a working S3 configuration.
+            decision = .disabled
+            draft.s3Enabled = false
         }
     }
 }

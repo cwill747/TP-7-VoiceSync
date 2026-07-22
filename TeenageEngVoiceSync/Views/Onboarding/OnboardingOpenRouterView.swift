@@ -169,6 +169,12 @@ struct OnboardingOpenRouterView: View {
             }
         } catch {
             verificationStatus = .error("Verification failed: \(error.localizedDescription)")
+            // A failed (re)verify must not leave a kept-existing decision that
+            // still reads as enabled — the key just tested may be an edited,
+            // unvalidated value, and a kept `.isEnabled` decision would let
+            // `apply()` commit it as a working OpenRouter key.
+            decision = .disabled
+            draft.openRouterEnabled = false
         }
     }
 }

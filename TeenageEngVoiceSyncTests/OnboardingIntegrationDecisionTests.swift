@@ -102,4 +102,21 @@ final class OnboardingIntegrationDecisionTests: XCTestCase {
         XCTAssertTrue(decision.isEnabled)
         XCTAssertEqual(decision.summaryLabel, "Configured")
     }
+
+    /// A failed re-test of an already-configured integration must NOT stay
+    /// `.keptExisting` — the fields on screen may be edited, unvalidated
+    /// values, and a kept `.isEnabled` decision would let `apply()` commit
+    /// them as a working configuration. Step views resolve a failed test to
+    /// `.disabled` (see OnboardingS3View/OnboardingOpenRouterView/
+    /// OnboardingNotionView's `catch` blocks).
+    func testFailedRetestOfExistingIntegrationMustNotStayEnabled() {
+        var decision = IntegrationDecision.initial(wasConfiguredAtSeed: true)
+        XCTAssertTrue(decision.isEnabled)
+
+        // User edits credentials and re-tests; the test fails.
+        decision = .disabled
+
+        XCTAssertFalse(decision.isEnabled)
+        XCTAssertEqual(decision.summaryLabel, "Disabled")
+    }
 }

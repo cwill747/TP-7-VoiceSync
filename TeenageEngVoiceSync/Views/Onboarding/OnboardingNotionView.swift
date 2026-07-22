@@ -165,6 +165,12 @@ struct OnboardingNotionView: View {
             draft.notionNeedsProvisioning = true
         } catch {
             status = .error("Failed: \(error.localizedDescription)")
+            // A failed (re)test must not leave a kept-existing decision that
+            // still reads as enabled — the key/database just tested may be
+            // edited, unvalidated values, and a kept `.isEnabled` decision
+            // would let `apply()` commit them as a working Notion connection.
+            decision = .disabled
+            draft.notionEnabled = false
         }
     }
 }
