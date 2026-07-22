@@ -509,4 +509,27 @@ final class OnboardingDraftTests: XCTestCase {
         XCTAssertFalse(draft.localAudioWasConfiguredAtSeed)
         XCTAssertFalse(draft.markdownWasConfiguredAtSeed)
     }
+
+    /// A local/custom OpenAI-compatible endpoint (llama-server, LM Studio,
+    /// Ollama, etc.) runs without an API key — `OpenRouterService` and
+    /// `EnhancementSettingsView` both treat it as usable with no stored
+    /// credential. `openRouterWasConfiguredAtSeed` must count it as
+    /// configured too, or a re-run wizard would disable a working local AI
+    /// setup the moment the user presses Continue/Skip.
+    func testOpenRouterEnabledLocalEndpointIsConfiguredAtSeedWithoutKey() async throws {
+        let (defaults, suiteName) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        defaults.set(true, forKey: "openrouter.enabled")
+        defaults.set(EnhancementProvider.custom.rawValue, forKey: "enhancement.provider")
+        defaults.set("http://127.0.0.1:8088/v1", forKey: "openrouter.baseURL")
+
+        let draft = OnboardingDraft()
+        let credentials = MockCredentialStore()
+        // No stored API key for the custom keychain slot.
+
+        await draft.seed(defaults: defaults, credentials: credentials)
+
+        XCTAssertTrue(draft.openRouterWasConfiguredAtSeed)
+    }
 }

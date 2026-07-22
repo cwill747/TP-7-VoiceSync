@@ -13,10 +13,6 @@ struct OnboardingAppleNotesView: View {
 
     @State private var isTesting = false
     @State private var testStatus: TestStatus?
-    /// True once a test has failed in this session. Hides the Enable/Disable
-    /// toggle so a kept-existing decision can't be waved back to enabled
-    /// without another successful test — see `existingConfigurationToggle`.
-    @State private var hasFailedTest = false
 
     enum TestStatus {
         case success
@@ -59,7 +55,7 @@ struct OnboardingAppleNotesView: View {
             // failed test — the folder may now be an edited, unvalidated
             // value, so re-enabling requires another successful test rather
             // than just flipping this toggle back on.
-            if draft.appleNotesWasConfiguredAtSeed && !hasFailedTest {
+            if draft.appleNotesWasConfiguredAtSeed && !draft.appleNotesTestFailed {
                 existingConfigurationToggle
             }
 
@@ -160,7 +156,7 @@ struct OnboardingAppleNotesView: View {
                 await MainActor.run {
                     testStatus = .success
                     isTesting = false
-                    hasFailedTest = false
+                    draft.appleNotesTestFailed = false
                     decision = .configuredNow
                     // Stage Apple Notes as enabled; markdown is disabled when Apple
                     // Notes is chosen. Persisted only when onboarding completes.
@@ -171,7 +167,7 @@ struct OnboardingAppleNotesView: View {
                 await MainActor.run {
                     testStatus = .error("Failed: \(error.localizedDescription)")
                     isTesting = false
-                    hasFailedTest = true
+                    draft.appleNotesTestFailed = true
                     // A failed (re)test must not leave a kept-existing decision
                     // that still reads as enabled — the folder just tested may
                     // be an edited, unvalidated value, and a kept `.isEnabled`

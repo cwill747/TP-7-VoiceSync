@@ -14,10 +14,6 @@ struct OnboardingNotionView: View {
     @State private var showKey = false
     @State private var isTesting = false
     @State private var status: ProvisionStatus?
-    /// True once a test has failed in this session. Hides the Enable/Disable
-    /// toggle so a kept-existing decision can't be waved back to enabled
-    /// without another successful test — see `existingConfigurationToggle`.
-    @State private var hasFailedTest = false
 
     enum ProvisionStatus {
         case success
@@ -89,7 +85,7 @@ struct OnboardingNotionView: View {
             }
 
             // Existing configuration control (re-run only)
-            if draft.notionWasConfiguredAtSeed && !hasFailedTest {
+            if draft.notionWasConfiguredAtSeed && !draft.notionTestFailed {
                 existingConfigurationToggle
             }
 
@@ -164,13 +160,13 @@ struct OnboardingNotionView: View {
             // completes.
             try await NotionService.validateDatabaseAccess(apiKey: draft.notionAPIKey, databaseId: draft.notionDatabaseId)
             status = .success
-            hasFailedTest = false
+            draft.notionTestFailed = false
             decision = .configuredNow
             draft.notionEnabled = true
             draft.notionNeedsProvisioning = true
         } catch {
             status = .error("Failed: \(error.localizedDescription)")
-            hasFailedTest = true
+            draft.notionTestFailed = true
             // A failed (re)test must not leave a kept-existing decision that
             // still reads as enabled — the key/database just tested may be
             // edited, unvalidated values, and a kept `.isEnabled` decision
