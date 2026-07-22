@@ -10,6 +10,14 @@
 import Foundation
 
 /// Why the selected provider isn't running, when it isn't.
+///
+/// `.modelNotDownloaded` and `.downloadingModel` only apply to the local
+/// engines (WhisperKit/Parakeet/ParakeetUnified), which download their model
+/// on demand on first use (`WhisperKitConfig(download: true)`,
+/// `AsrModels.downloadAndLoad`) — they are informational, not blocking.
+/// `.missingAPIKey` is the only state that actually prevents transcription,
+/// since `SyncService` never constructs `ElevenLabsTranscriptionService`
+/// without a key.
 enum TranscriptionReadiness: Equatable {
     case ready
     case missingAPIKey
@@ -25,14 +33,17 @@ struct TranscriptionProviderStatus: Equatable {
     /// The saved preference is off — nothing to report.
     var isDisabled: Bool { !preferenceEnabled }
 
-    /// The preference is on and the provider is actually able to transcribe.
+    /// The preference is on and the provider is actually able to transcribe
+    /// (local engines still count as active even without a cached model,
+    /// since they download it transparently on first use).
     var isEffectivelyActive: Bool {
-        preferenceEnabled && readiness == .ready
+        preferenceEnabled && readiness != .missingAPIKey
     }
 
-    /// The user turned transcription on, but something is blocking it from running.
+    /// The user turned transcription on, but it cannot run without a manual
+    /// fix (currently only a missing ElevenLabs API key).
     var isBlocked: Bool {
-        preferenceEnabled && readiness != .ready
+        preferenceEnabled && readiness == .missingAPIKey
     }
 
     var statusText: String {
@@ -40,8 +51,8 @@ struct TranscriptionProviderStatus: Equatable {
         switch readiness {
         case .ready: return "\(providerKind.shortName) active"
         case .missingAPIKey: return "Paused — API key required"
-        case .modelNotDownloaded: return "Unavailable — model not downloaded"
-        case .downloadingModel: return "Unavailable — downloading model"
+        case .modelNotDownloaded: return "\(providerKind.shortName) active — model downloads on first use"
+        case .downloadingModel: return "\(providerKind.shortName) active — downloading model"
         }
     }
 
@@ -49,8 +60,9 @@ struct TranscriptionProviderStatus: Equatable {
         guard preferenceEnabled else { return "circle.slash" }
         switch readiness {
         case .ready: return "checkmark.circle.fill"
+        case .missingAPIKey: return "exclamationmark.triangle.fill"
+        case .modelNotDownloaded: return "icloud.and.arrow.down"
         case .downloadingModel: return "arrow.down.circle"
-        case .missingAPIKey, .modelNotDownloaded: return "exclamationmark.triangle.fill"
         }
     }
 

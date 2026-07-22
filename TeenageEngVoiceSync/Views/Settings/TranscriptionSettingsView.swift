@@ -147,19 +147,22 @@ struct TranscriptionSettingsView: View {
         if status.preferenceEnabled {
             HStack {
                 Label(status.statusText, systemImage: status.systemImage)
-                    .foregroundStyle(status.readiness == .ready ? .green : .orange)
+                    .foregroundStyle(status.readiness == .missingAPIKey ? .orange : (status.readiness == .ready ? .green : .secondary))
                     .font(.caption)
 
                 Spacer()
 
                 switch status.readiness {
                 case .missingAPIKey:
+                    // The only state that actually blocks transcription — needs a fix.
                     Button("Open API Keys") {
                         appState.settingsNavigationTarget = .apiKeys
                     }
                     .font(.caption)
                     .buttonStyle(.link)
                 case .modelNotDownloaded:
+                    // Informational only: the model downloads automatically on first
+                    // use, so this is a convenience shortcut, not a required fix.
                     Button("Download Model") {
                         downloadModel(for: transcriptionProvider)
                     }

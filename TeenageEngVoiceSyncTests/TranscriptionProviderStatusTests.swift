@@ -2,9 +2,12 @@
 //  TranscriptionProviderStatusTests.swift
 //  TeenageEngVoiceSyncTests
 //
-//  Covers TP-13: an unavailable transcription configuration (missing API key,
-//  model not downloaded, mid-download) must be clearly distinguishable from
-//  the fully active state, and from transcription simply being turned off.
+//  Covers TP-13: a genuinely blocked transcription configuration (missing
+//  API key) must be clearly distinguishable from the fully active state and
+//  from transcription simply being turned off. Local engines (WhisperKit/
+//  Parakeet/ParakeetUnified) download their model on demand on first use, so
+//  a missing/downloading model is informational only — it must NOT read as
+//  blocked or disable dependent features (see PR #65 review).
 //
 
 import XCTest
@@ -39,7 +42,10 @@ final class TranscriptionProviderStatusTests: XCTestCase {
         XCTAssertFalse(status.isBlocked)
     }
 
-    func testWhisperKitWithoutModelIsUnavailableNotActive() {
+    func testWhisperKitWithoutModelIsStillActiveViaAutoDownload() {
+        // WhisperKit falls back to `WhisperKitConfig(download: true)` when no
+        // model is cached, so it will still transcribe (just slower on the
+        // first recording) — it must not be treated as blocked.
         let status = TranscriptionProviderStatus.evaluate(
             providerKind: .whisperKit,
             preferenceEnabled: true,
@@ -48,12 +54,14 @@ final class TranscriptionProviderStatusTests: XCTestCase {
         )
 
         XCTAssertEqual(status.readiness, .modelNotDownloaded)
-        XCTAssertFalse(status.isEffectivelyActive)
-        XCTAssertTrue(status.isBlocked)
-        XCTAssertEqual(status.statusText, "Unavailable — model not downloaded")
+        XCTAssertTrue(status.isEffectivelyActive)
+        XCTAssertFalse(status.isBlocked)
+        XCTAssertEqual(status.statusText, "WhisperKit active — model downloads on first use")
     }
 
-    func testParakeetDuringModelDownloadIsUnavailableNotActive() {
+    func testParakeetDuringModelDownloadIsStillActive() {
+        // A user-initiated download in progress doesn't block transcription
+        // either — ParakeetService.loadAsrModels() downloads on demand too.
         let status = TranscriptionProviderStatus.evaluate(
             providerKind: .parakeet,
             preferenceEnabled: true,
@@ -63,9 +71,9 @@ final class TranscriptionProviderStatusTests: XCTestCase {
         )
 
         XCTAssertEqual(status.readiness, .downloadingModel)
-        XCTAssertFalse(status.isEffectivelyActive)
-        XCTAssertTrue(status.isBlocked)
-        XCTAssertEqual(status.statusText, "Unavailable — downloading model")
+        XCTAssertTrue(status.isEffectivelyActive)
+        XCTAssertFalse(status.isBlocked)
+        XCTAssertEqual(status.statusText, "Parakeet active — downloading model")
     }
 
     func testParakeetUnifiedWithModelIsActive() {
@@ -107,5 +115,13 @@ final class TranscriptionProviderStatusTests: XCTestCase {
 
         XCTAssertFalse(status.isBlocked)
         XCTAssertEqual(status.statusText, "Transcription off")
+    }
+
+    func testOnlyMissingAPIKeyIsEverBlocking() {
+        let allReadinessCases: [TranscriptionReadiness] = [.ready, .missingAPIKey, .modelNotDownloaded, .downloadingModel]
+        for readiness in allReadinessCases {
+            let status = TranscriptionProviderStatus(providerKind: .whisperKit, preferenceEnabled: true, readiness: readiness)
+            XCTAssertEqual(status.isBlocked, readiness == .missingAPIKey, "readiness \(readiness) should only block when missingAPIKey")
+        }
     }
 }
