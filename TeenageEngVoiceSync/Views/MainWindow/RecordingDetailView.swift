@@ -483,19 +483,29 @@ struct DiarizedTranscriptView: View {
         let speakerHash = segment.effectiveSpeakerHash
         assignLocalSegments(matching: speakerHash, personId: personId, personName: personName)
 
-        // Add this segment's audio as a VoiceSample for the chosen Person
+        // Add this segment's audio as a VoiceSample for the chosen Person,
+        // unless this exact segment is already enrolled (e.g. re-selecting the
+        // same person for an already-assigned segment).
         if !segment.embedding.isEmpty, let person = persons.first(where: { $0.id == personId }) {
-            let sample = VoiceSample(
+            let identity = VoiceSample.sourceIdentity(
+                sourceHash: nil,
                 recordingFilename: recording.filename,
                 startTime: segment.startTime,
-                endTime: segment.endTime,
-                embedding: segment.embedding
+                endTime: segment.endTime
             )
-            sample.person = person
-            modelContext.insert(sample)
-            person.recomputeEmbedding()
-            try? modelContext.save()
-            Task { await appState.syncService?.refreshKnownSpeakers() }
+            if !VoiceSample.isDuplicate(identity: identity, in: person.samples) {
+                let sample = VoiceSample(
+                    recordingFilename: recording.filename,
+                    startTime: segment.startTime,
+                    endTime: segment.endTime,
+                    embedding: segment.embedding
+                )
+                sample.person = person
+                modelContext.insert(sample)
+                person.recomputeEmbedding()
+                try? modelContext.save()
+                Task { await appState.syncService?.refreshKnownSpeakers() }
+            }
         }
 
         persistAssignment(matching: speakerHash, personId: personId, personName: personName)
