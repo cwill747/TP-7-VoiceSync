@@ -9,7 +9,7 @@ import SwiftUI
 
 struct OnboardingS3View: View {
     @Bindable var draft: OnboardingDraft
-    @Binding var isConfigured: Bool
+    @Binding var decision: IntegrationDecision
 
     @State private var showSecret = false
     @State private var isTesting = false
@@ -136,6 +136,14 @@ struct OnboardingS3View: View {
                     }
                 }
 
+                // Existing configuration control (re-run only). Hidden after a
+                // failed test — the fields may now be edited, unvalidated
+                // values, so re-enabling requires another successful test
+                // rather than just flipping this toggle back on.
+                if draft.s3WasConfiguredAtSeed && !draft.s3TestFailed {
+                    existingConfigurationToggle
+                }
+
                 // Test button
                 VStack(spacing: 8) {
                     HStack {
@@ -165,12 +173,21 @@ struct OnboardingS3View: View {
             .padding(.vertical, 16)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .task {
-            // Reflect existing, already-configured credentials seeded into the draft.
-            if !draft.awsAccessKeyId.isEmpty && !draft.awsSecretAccessKey.isEmpty && !draft.s3Bucket.isEmpty {
-                isConfigured = true
+    }
+
+    @ViewBuilder
+    private var existingConfigurationToggle: some View {
+        Toggle(isOn: Binding(
+            get: { decision.isEnabled },
+            set: { newValue in
+                decision = newValue ? .keptExisting : .disabled
+                draft.s3Enabled = newValue
             }
+        )) {
+            Text(decision.isEnabled ? "S3 storage is already configured — keep it enabled" : "S3 storage is disabled")
+                .font(.caption)
         }
+        .toggleStyle(.switch)
     }
 
     @ViewBuilder
@@ -208,7 +225,8 @@ struct OnboardingS3View: View {
             draft.s3Enabled = true
 
             testStatus = .success
-            isConfigured = true
+            draft.s3TestFailed = false
+            decision = .configuredNow
 
             // Clear success message after delay
             Task {
@@ -219,12 +237,18 @@ struct OnboardingS3View: View {
             }
         } catch {
             testStatus = .error("Connection failed: \(error.localizedDescription)")
-            isConfigured = false
+            draft.s3TestFailed = true
+            // A failed (re)test must not leave a kept-existing decision that
+            // still reads as enabled — the fields just failed may be edited,
+            // unvalidated values, and a kept `.isEnabled` decision would let
+            // `apply()` commit them as a working S3 configuration.
+            decision = .disabled
+            draft.s3Enabled = false
         }
     }
 }
 
 #Preview {
-    OnboardingS3View(draft: OnboardingDraft(), isConfigured: .constant(false))
+    OnboardingS3View(draft: OnboardingDraft(), decision: .constant(.notConfigured))
         .frame(width: 600, height: 440)
 }

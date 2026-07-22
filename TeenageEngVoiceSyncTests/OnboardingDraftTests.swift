@@ -356,4 +356,180 @@ final class OnboardingDraftTests: XCTestCase {
         XCTAssertEqual(draft.elevenLabsAPIKey, "seeded-key")
         XCTAssertFalse(draft.isSeeding)
     }
+
+    // MARK: Seed-time configuration snapshot (TP-16)
+
+    /// `seed()` must record which optional integrations were already fully
+    /// configured, independent of the enabled flags it also loads — this is
+    /// what lets a re-run distinguish "kept existing" from "configured now".
+    /// An integration counts as configured-at-seed only when both its enabled
+    /// flag AND its credential/data are present; a stray enabled flag with no
+    /// credential (e.g. a prior failed setup) must not count as configured.
+    func testSeedRecordsWhichIntegrationsWereAlreadyConfigured() async throws {
+        let (defaults, suiteName) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        defaults.set(true, forKey: "s3.enabled")
+        defaults.set("existing-bucket", forKey: "s3.bucket")
+        defaults.set(true, forKey: "openrouter.enabled")
+        defaults.set(true, forKey: "applenotes.enabled")
+        defaults.set(true, forKey: "notion.enabled")
+        defaults.set("db123", forKey: "notion.databaseId")
+        defaults.set("/tmp/audio", forKey: "localaudio.folderPath")
+        defaults.set(true, forKey: "localaudio.enabled")
+
+        let draft = OnboardingDraft()
+        let credentials = MockCredentialStore()
+        credentials.stored[.awsAccessKeyId] = "AKIA"
+        credentials.stored[.awsSecretAccessKey] = "secret"
+        credentials.stored[.openRouterAPIKey] = "or-key"
+        credentials.stored[.notionAPIKey] = "ntn_key"
+
+        await draft.seed(defaults: defaults, credentials: credentials)
+
+        XCTAssertTrue(draft.s3WasConfiguredAtSeed)
+        XCTAssertTrue(draft.openRouterWasConfiguredAtSeed)
+        XCTAssertTrue(draft.appleNotesWasConfiguredAtSeed)
+        XCTAssertTrue(draft.notionWasConfiguredAtSeed)
+        XCTAssertTrue(draft.localAudioWasConfiguredAtSeed)
+        // Never configured.
+        XCTAssertFalse(draft.markdownWasConfiguredAtSeed)
+    }
+
+    /// An enabled flag alone (no credential) must not count as "already
+    /// configured" — this is the exact TP-16 reproduction for Notion, whose
+    /// enabled flag can be true while it lacks a usable API key.
+    func testEnabledFlagWithoutCredentialIsNotConfiguredAtSeed() async throws {
+        let (defaults, suiteName) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        defaults.set(true, forKey: "notion.enabled")
+        defaults.set("db123", forKey: "notion.databaseId")
+        defaults.set(true, forKey: "openrouter.enabled")
+
+        let draft = OnboardingDraft()
+        let credentials = MockCredentialStore()
+        // No stored API keys for either integration.
+
+        await draft.seed(defaults: defaults, credentials: credentials)
+
+        XCTAssertFalse(draft.notionWasConfiguredAtSeed)
+        XCTAssertFalse(draft.openRouterWasConfiguredAtSeed)
+    }
+
+    /// `s3.enabled` alone (no bucket or keychain credentials) must not count
+    /// as "already configured" — `SyncService` won't actually stand up an S3
+    /// client without a bucket and both keys, so treating the bare flag as
+    /// configured would seed `.keptExisting`, hide the Skip path, skip the
+    /// local-audio fallback, and re-apply a non-functional `s3.enabled = true`.
+    func testS3EnabledFlagWithoutCredentialsIsNotConfiguredAtSeed() async throws {
+        let (defaults, suiteName) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        defaults.set(true, forKey: "s3.enabled")
+        // No bucket, no keychain credentials.
+
+        let draft = OnboardingDraft()
+        let credentials = MockCredentialStore()
+        await draft.seed(defaults: defaults, credentials: credentials)
+
+        XCTAssertFalse(draft.s3WasConfiguredAtSeed)
+    }
+
+    /// `notion.enabled` with a key but no database ID (e.g. the Settings
+    /// toggle was flipped before Save & Connect, or the DB field was cleared)
+    /// must not count as "already configured" — the runtime Notion delivery
+    /// path requires a non-empty database ID before it can create pages, so
+    /// treating the bare flag+key as configured would seed `.keptExisting`,
+    /// hide the skip path, and let `apply()` re-commit an unusable
+    /// `notion.enabled = true` with no database to write to.
+    func testNotionEnabledWithoutDatabaseIdIsNotConfiguredAtSeed() async throws {
+        let (defaults, suiteName) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        defaults.set(true, forKey: "notion.enabled")
+        // No database ID persisted.
+
+        let draft = OnboardingDraft()
+        let credentials = MockCredentialStore()
+        credentials.stored[.notionAPIKey] = "ntn_key"
+
+        await draft.seed(defaults: defaults, credentials: credentials)
+
+        XCTAssertFalse(draft.notionWasConfiguredAtSeed)
+    }
+
+    /// The exact TP-16 follow-up: stale `notion.enabled = true` with a key but
+    /// no database ID seeds a skippable step (`notionWasConfiguredAtSeed ==
+    /// false`), but the raw `notionEnabled` flag on the draft still starts as
+    /// `true`. `OnboardingView.goToNextStep()` syncs the draft's flag to the
+    /// resolved (non-enabled) decision before advancing — this verifies that
+    /// once that sync happens, `apply()` actually commits `false` rather than
+    /// re-persisting the stale `true`.
+    func testSkippingStaleNotionFlagCommitsDisabled() async throws {
+        let (defaults, suiteName) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        defaults.set(true, forKey: "notion.enabled")
+        // No database ID persisted — matches the reported stale-flag scenario.
+
+        let draft = OnboardingDraft()
+        let credentials = MockCredentialStore()
+        credentials.stored[.notionAPIKey] = "ntn_key"
+        await draft.seed(defaults: defaults, credentials: credentials)
+
+        XCTAssertFalse(draft.notionWasConfiguredAtSeed)
+        XCTAssertTrue(draft.notionEnabled, "Seed mirrors the stale persisted flag as-is")
+
+        // What OnboardingView.goToNextStep() does when the Notion step
+        // resolves to a non-enabled decision (skipped, in this case).
+        draft.notionEnabled = false
+
+        try await draft.apply(defaults: defaults, credentials: credentials)
+
+        XCTAssertFalse(defaults.bool(forKey: "notion.enabled"),
+                        "Skipping a stale-but-unusable Notion config must not re-commit it as enabled")
+    }
+
+    /// A fresh install with nothing persisted must report every optional
+    /// integration as not-configured-at-seed, so a first-run skip resolves to
+    /// `.skipped` rather than being mistaken for kept existing configuration.
+    func testFreshInstallHasNoIntegrationsConfiguredAtSeed() async throws {
+        let (defaults, suiteName) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let draft = OnboardingDraft()
+        let credentials = MockCredentialStore()
+        await draft.seed(defaults: defaults, credentials: credentials)
+
+        XCTAssertFalse(draft.s3WasConfiguredAtSeed)
+        XCTAssertFalse(draft.openRouterWasConfiguredAtSeed)
+        XCTAssertFalse(draft.appleNotesWasConfiguredAtSeed)
+        XCTAssertFalse(draft.notionWasConfiguredAtSeed)
+        XCTAssertFalse(draft.localAudioWasConfiguredAtSeed)
+        XCTAssertFalse(draft.markdownWasConfiguredAtSeed)
+    }
+
+    /// A local/custom OpenAI-compatible endpoint (llama-server, LM Studio,
+    /// Ollama, etc.) runs without an API key — `OpenRouterService` and
+    /// `EnhancementSettingsView` both treat it as usable with no stored
+    /// credential. `openRouterWasConfiguredAtSeed` must count it as
+    /// configured too, or a re-run wizard would disable a working local AI
+    /// setup the moment the user presses Continue/Skip.
+    func testOpenRouterEnabledLocalEndpointIsConfiguredAtSeedWithoutKey() async throws {
+        let (defaults, suiteName) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        defaults.set(true, forKey: "openrouter.enabled")
+        defaults.set(EnhancementProvider.custom.rawValue, forKey: "enhancement.provider")
+        defaults.set("http://127.0.0.1:8088/v1", forKey: "openrouter.baseURL")
+
+        let draft = OnboardingDraft()
+        let credentials = MockCredentialStore()
+        // No stored API key for the custom keychain slot.
+
+        await draft.seed(defaults: defaults, credentials: credentials)
+
+        XCTAssertTrue(draft.openRouterWasConfiguredAtSeed)
+    }
 }

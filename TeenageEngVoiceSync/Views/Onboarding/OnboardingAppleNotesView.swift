@@ -9,7 +9,7 @@ import SwiftUI
 
 struct OnboardingAppleNotesView: View {
     @Bindable var draft: OnboardingDraft
-    @Binding var isConfigured: Bool
+    @Binding var decision: IntegrationDecision
 
     @State private var isTesting = false
     @State private var testStatus: TestStatus?
@@ -49,6 +49,14 @@ struct OnboardingAppleNotesView: View {
                 Text("Notes will be created in this folder in your Apple Notes app. The folder will be created automatically if it doesn't exist.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+
+            // Existing configuration control (re-run only). Hidden after a
+            // failed test — the folder may now be an edited, unvalidated
+            // value, so re-enabling requires another successful test rather
+            // than just flipping this toggle back on.
+            if draft.appleNotesWasConfiguredAtSeed && !draft.appleNotesTestFailed {
+                existingConfigurationToggle
             }
 
             // Test button - testing successfully enables the integration
@@ -96,6 +104,30 @@ struct OnboardingAppleNotesView: View {
     }
 
     @ViewBuilder
+    private var existingConfigurationToggle: some View {
+        Toggle(isOn: Binding(
+            get: { decision.isEnabled },
+            set: { newValue in
+                decision = newValue ? .keptExisting : .disabled
+                draft.appleNotesEnabled = newValue
+                // Mirror the settings behavior: Apple Notes and the local
+                // markdown fallback are mutually exclusive destinations. Without
+                // this, re-enabling Apple Notes here after validating the
+                // markdown fallback would leave both flags true — the note
+                // router prefers markdown in that case, so notes would still be
+                // written as markdown despite the summary reporting Apple Notes.
+                if newValue {
+                    draft.markdownEnabled = false
+                }
+            }
+        )) {
+            Text(decision.isEnabled ? "Apple Notes is already configured — keep it enabled" : "Apple Notes integration is disabled")
+                .font(.caption)
+        }
+        .toggleStyle(.switch)
+    }
+
+    @ViewBuilder
     private func statusLabel(for status: TestStatus) -> some View {
         switch status {
         case .success:
@@ -124,7 +156,8 @@ struct OnboardingAppleNotesView: View {
                 await MainActor.run {
                     testStatus = .success
                     isTesting = false
-                    isConfigured = true
+                    draft.appleNotesTestFailed = false
+                    decision = .configuredNow
                     // Stage Apple Notes as enabled; markdown is disabled when Apple
                     // Notes is chosen. Persisted only when onboarding completes.
                     draft.appleNotesEnabled = true
@@ -134,6 +167,13 @@ struct OnboardingAppleNotesView: View {
                 await MainActor.run {
                     testStatus = .error("Failed: \(error.localizedDescription)")
                     isTesting = false
+                    draft.appleNotesTestFailed = true
+                    // A failed (re)test must not leave a kept-existing decision
+                    // that still reads as enabled — the folder just tested may
+                    // be an edited, unvalidated value, and a kept `.isEnabled`
+                    // decision would let `apply()` commit it as working.
+                    decision = .disabled
+                    draft.appleNotesEnabled = false
                 }
             }
         }
@@ -141,6 +181,6 @@ struct OnboardingAppleNotesView: View {
 }
 
 #Preview {
-    OnboardingAppleNotesView(draft: OnboardingDraft(), isConfigured: .constant(false))
+    OnboardingAppleNotesView(draft: OnboardingDraft(), decision: .constant(.notConfigured))
         .frame(width: 600, height: 440)
 }

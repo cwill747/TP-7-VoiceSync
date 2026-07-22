@@ -9,7 +9,7 @@ import SwiftUI
 
 struct OnboardingNotionView: View {
     @Bindable var draft: OnboardingDraft
-    @Binding var isConfigured: Bool
+    @Binding var decision: IntegrationDecision
 
     @State private var showKey = false
     @State private var isTesting = false
@@ -84,6 +84,11 @@ struct OnboardingNotionView: View {
                     .foregroundStyle(.secondary)
             }
 
+            // Existing configuration control (re-run only)
+            if draft.notionWasConfiguredAtSeed && !draft.notionTestFailed {
+                existingConfigurationToggle
+            }
+
             // Test button and status
             VStack(spacing: 10) {
                 HStack {
@@ -112,12 +117,21 @@ struct OnboardingNotionView: View {
         }
         .padding(.horizontal, 48)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .task {
-            // Reflect an existing, enabled configuration seeded into the draft.
-            if !draft.notionAPIKey.isEmpty {
-                isConfigured = draft.notionEnabled
+    }
+
+    @ViewBuilder
+    private var existingConfigurationToggle: some View {
+        Toggle(isOn: Binding(
+            get: { decision.isEnabled },
+            set: { newValue in
+                decision = newValue ? .keptExisting : .disabled
+                draft.notionEnabled = newValue
             }
+        )) {
+            Text(decision.isEnabled ? "Notion is already configured — keep it enabled" : "Notion integration is disabled")
+                .font(.caption)
         }
+        .toggleStyle(.switch)
     }
 
     @ViewBuilder
@@ -146,17 +160,24 @@ struct OnboardingNotionView: View {
             // completes.
             try await NotionService.validateDatabaseAccess(apiKey: draft.notionAPIKey, databaseId: draft.notionDatabaseId)
             status = .success
-            isConfigured = true
+            draft.notionTestFailed = false
+            decision = .configuredNow
             draft.notionEnabled = true
             draft.notionNeedsProvisioning = true
         } catch {
             status = .error("Failed: \(error.localizedDescription)")
-            isConfigured = false
+            draft.notionTestFailed = true
+            // A failed (re)test must not leave a kept-existing decision that
+            // still reads as enabled — the key/database just tested may be
+            // edited, unvalidated values, and a kept `.isEnabled` decision
+            // would let `apply()` commit them as a working Notion connection.
+            decision = .disabled
+            draft.notionEnabled = false
         }
     }
 }
 
 #Preview {
-    OnboardingNotionView(draft: OnboardingDraft(), isConfigured: .constant(false))
+    OnboardingNotionView(draft: OnboardingDraft(), decision: .constant(.notConfigured))
         .frame(width: 600, height: 480)
 }

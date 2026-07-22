@@ -76,6 +76,38 @@ final class OnboardingDraft {
     /// fields until it clears so an early keystroke isn't overwritten.
     var isSeeding = true
 
+    // MARK: - Seed-time configuration snapshot
+    //
+    // Whether each optional/fallback integration was already fully configured
+    // when the wizard opened. Captured once, right after `seed()` loads
+    // persisted state, so step views can distinguish "already configured —
+    // kept" from "configured now" and render (and record) the user's actual
+    // decision instead of just inheriting the persisted enabled flag.
+    var s3WasConfiguredAtSeed = false
+    var openRouterWasConfiguredAtSeed = false
+    var appleNotesWasConfiguredAtSeed = false
+    var notionWasConfiguredAtSeed = false
+    var localAudioWasConfiguredAtSeed = false
+    var markdownWasConfiguredAtSeed = false
+
+    // MARK: - Wizard-session test state
+    //
+    // Deliberately stored on the draft rather than as view `@State`: step
+    // views are recreated (and their `@State` reset) every time
+    // `OnboardingView` switches `currentStep`, so a per-view flag would
+    // silently forget a failed test after Back/Forward navigation and let a
+    // kept-existing decision be waved back to enabled without a fresh
+    // successful test. The draft instance persists for the whole wizard run.
+    var s3TestFailed = false
+    var openRouterTestFailed = false
+    var appleNotesTestFailed = false
+    var notionTestFailed = false
+    /// True once OpenRouter has been freshly verified in this session (as
+    /// opposed to merely kept from a seeded config). Keeps the fresh "Enable"
+    /// toggle visible after the user switches it off, without reintroducing
+    /// the separate existing-configuration toggle for a pre-existing key.
+    var openRouterVerifiedThisSession = false
+
     // MARK: - Seeding
 
     /// Populate the draft from currently persisted settings so the wizard shows
@@ -114,6 +146,18 @@ final class OnboardingDraft {
         awsSecretAccessKey = (try? await credentials.retrieve(for: .awsSecretAccessKey)) ?? ""
         openRouterAPIKey = (try? await credentials.retrieve(for: OpenRouterService.activeKeychainKey(defaults: defaults))) ?? ""
         notionAPIKey = (try? await credentials.retrieve(for: .notionAPIKey)) ?? ""
+
+        s3WasConfiguredAtSeed = s3Enabled && !s3Bucket.isEmpty && !awsAccessKeyId.isEmpty && !awsSecretAccessKey.isEmpty
+        // A local/custom OpenAI-compatible endpoint (llama-server, LM Studio,
+        // Ollama, etc.) runs without an API key — see OpenRouterService's
+        // guards and EnhancementSettingsView.canUseAI — so it counts as
+        // configured even with no stored key.
+        openRouterWasConfiguredAtSeed = openRouterEnabled
+            && (!openRouterAPIKey.isEmpty || OpenRouterService.isLocalEndpoint(defaults: defaults))
+        appleNotesWasConfiguredAtSeed = appleNotesEnabled
+        notionWasConfiguredAtSeed = notionEnabled && !notionAPIKey.isEmpty && !notionDatabaseId.isEmpty
+        localAudioWasConfiguredAtSeed = localAudioEnabled && !localAudioFolderPath.isEmpty
+        markdownWasConfiguredAtSeed = markdownEnabled && !markdownFolderPath.isEmpty
 
         isSeeding = false
     }
