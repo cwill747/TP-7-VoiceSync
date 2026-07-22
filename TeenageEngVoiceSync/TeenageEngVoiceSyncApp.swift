@@ -127,6 +127,14 @@ struct TeenageEngVoiceSyncApp: App {
                         appState.setError(storeRecoveryMessage)
                     }
 
+                    // An unsigned build (e.g. CODE_SIGNING_ALLOWED=NO) runs without the
+                    // App Sandbox and persists to ~/Library instead of the app container,
+                    // so every setting looks reset and the recordings store forks.
+                    if ProcessInfo.processInfo.environment["APP_SANDBOX_CONTAINER_ID"] == nil {
+                        AppLogger.app.fault("Running WITHOUT the App Sandbox — settings and data are being read from the wrong location")
+                        appState.setError("This build is running without the App Sandbox, so it can't see your normal settings or recordings. Rebuild with code signing enabled (don't launch CODE_SIGNING_ALLOWED=NO builds).")
+                    }
+
                     if !hasCompletedOnboarding {
                         openWindow(id: "onboarding")
                     }

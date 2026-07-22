@@ -323,6 +323,7 @@ If you're interested in contributing, you're more than welcome. Bug fixes, small
 - Open an issue (or just a PR) with a clear description of the change
 - Build/run locally with Xcode: `open TeenageEngVoiceSync.xcodeproj`
 - Or build from the CLI: `xcodebuild -project TeenageEngVoiceSync.xcodeproj -scheme TeenageEngVoiceSync -configuration Debug build`
+- Never launch a build made with `CODE_SIGNING_ALLOWED=NO` (as CI does for compile checks): it lacks the App Sandbox entitlement, so it reads/writes `~/Library/Preferences` and `~/Library/Application Support` instead of the app container — settings and the recordings database silently diverge from normal runs
 
 Please avoid committing secrets — API keys are stored in Keychain.
 
