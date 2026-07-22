@@ -120,6 +120,7 @@ struct TeenageEngVoiceSyncApp: App {
                     // Migrate before initialize so persons are in the DB when
                     // SyncService.loadServices() snapshots known speakers.
                     migrateEnrolledSpeakerIfNeeded(context: modelContainer.mainContext)
+                    dedupeVoiceSamplesIfNeeded(context: modelContainer.mainContext)
                     await appState.initialize(modelContext: modelContainer.mainContext)
 
                     if let storeRecoveryMessage {
@@ -168,5 +169,35 @@ struct TeenageEngVoiceSyncApp: App {
         try? context.save()
         ParakeetService.EnrolledSpeakerProfile.clearStored()
         AppLogger.app.info("Migrated enrolled speaker \"\(profile.name, privacy: .private)\" to Person model")
+    }
+
+    /// Repair pass: removes duplicate voice samples that share a source identity
+    /// within the same person (e.g. the same recording enrolled several times
+    /// before duplicate detection existed), then recomputes each affected
+    /// person's aggregate embedding exactly once. Runs every launch but is a
+    /// no-op once the store is clean. Samples of different people never compare
+    /// against each other because each person's samples are deduped in isolation.
+    private func dedupeVoiceSamplesIfNeeded(context: ModelContext) {
+        guard let persons = try? context.fetch(FetchDescriptor<Person>()) else { return }
+
+        var affected: [Person] = []
+        for person in persons {
+            let duplicates = VoiceSample.duplicatesToRemove(from: person.samples)
+            guard !duplicates.isEmpty else { continue }
+            for duplicate in duplicates {
+                context.delete(duplicate)
+            }
+            affected.append(person)
+            AppLogger.app.info("Deduplicated \(duplicates.count) voice sample(s) for a person")
+        }
+
+        guard !affected.isEmpty else { return }
+        // Persist the deletions first so each person's `samples` no longer
+        // includes the removed rows, then recompute embeddings once.
+        try? context.save()
+        for person in affected {
+            person.recomputeEmbedding()
+        }
+        try? context.save()
     }
 }

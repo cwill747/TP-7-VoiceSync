@@ -110,6 +110,7 @@ struct PersonDetailView: View {
 
     @State private var isEnrolling = false
     @State private var enrollmentError: String?
+    @State private var duplicateNotice: String?
     @State private var diarizerReady = false
 
     var body: some View {
@@ -175,6 +176,12 @@ struct PersonDetailView: View {
                             .font(.caption)
                     }
 
+                    if let duplicateNotice {
+                        Label(duplicateNotice, systemImage: "info.circle")
+                            .foregroundStyle(.secondary)
+                            .font(.caption)
+                    }
+
                     Text("Pick recordings where this person is the only or primary speaker. The more samples you add, the more accurate speaker identification becomes.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -222,14 +229,36 @@ struct PersonDetailView: View {
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
         enrollmentError = nil
+        duplicateNotice = nil
         isEnrolling = true
 
         Task {
             do {
+                // Hash the source first so we can reject an exact duplicate before
+                // paying for the (much more expensive) embedding extraction.
+                let sourceHash = try? await FileHasher.sha256(url: url)
+                let identity = VoiceSample.sourceIdentity(
+                    sourceHash: sourceHash,
+                    recordingFilename: url.lastPathComponent,
+                    startTime: 0,
+                    endTime: 0
+                )
+                let isDuplicate = await MainActor.run {
+                    VoiceSample.isDuplicate(identity: identity, in: person.samples)
+                }
+                if isDuplicate {
+                    await MainActor.run {
+                        duplicateNotice = "“\(url.lastPathComponent)” is already a voice sample for \(person.name). Skipped the duplicate — nothing was changed."
+                        isEnrolling = false
+                    }
+                    return
+                }
+
                 let embedding = try await ParakeetService.extractEmbedding(from: url.path)
                 await MainActor.run {
                     let sample = VoiceSample(
                         recordingFilename: url.lastPathComponent,
+                        sourceHash: sourceHash,
                         startTime: 0,
                         endTime: 0,
                         embedding: embedding
