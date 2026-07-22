@@ -370,6 +370,7 @@ final class OnboardingDraftTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
         defaults.set(true, forKey: "s3.enabled")
+        defaults.set("existing-bucket", forKey: "s3.bucket")
         defaults.set(true, forKey: "openrouter.enabled")
         defaults.set(true, forKey: "applenotes.enabled")
         defaults.set(true, forKey: "notion.enabled")
@@ -379,6 +380,8 @@ final class OnboardingDraftTests: XCTestCase {
 
         let draft = OnboardingDraft()
         let credentials = MockCredentialStore()
+        credentials.stored[.awsAccessKeyId] = "AKIA"
+        credentials.stored[.awsSecretAccessKey] = "secret"
         credentials.stored[.openRouterAPIKey] = "or-key"
         credentials.stored[.notionAPIKey] = "ntn_key"
 
@@ -412,6 +415,25 @@ final class OnboardingDraftTests: XCTestCase {
 
         XCTAssertFalse(draft.notionWasConfiguredAtSeed)
         XCTAssertFalse(draft.openRouterWasConfiguredAtSeed)
+    }
+
+    /// `s3.enabled` alone (no bucket or keychain credentials) must not count
+    /// as "already configured" — `SyncService` won't actually stand up an S3
+    /// client without a bucket and both keys, so treating the bare flag as
+    /// configured would seed `.keptExisting`, hide the Skip path, skip the
+    /// local-audio fallback, and re-apply a non-functional `s3.enabled = true`.
+    func testS3EnabledFlagWithoutCredentialsIsNotConfiguredAtSeed() async throws {
+        let (defaults, suiteName) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        defaults.set(true, forKey: "s3.enabled")
+        // No bucket, no keychain credentials.
+
+        let draft = OnboardingDraft()
+        let credentials = MockCredentialStore()
+        await draft.seed(defaults: defaults, credentials: credentials)
+
+        XCTAssertFalse(draft.s3WasConfiguredAtSeed)
     }
 
     /// A fresh install with nothing persisted must report every optional

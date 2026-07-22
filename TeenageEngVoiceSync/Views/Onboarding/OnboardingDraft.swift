@@ -129,7 +129,7 @@ final class OnboardingDraft {
         openRouterAPIKey = (try? await credentials.retrieve(for: OpenRouterService.activeKeychainKey(defaults: defaults))) ?? ""
         notionAPIKey = (try? await credentials.retrieve(for: .notionAPIKey)) ?? ""
 
-        s3WasConfiguredAtSeed = s3Enabled
+        s3WasConfiguredAtSeed = s3Enabled && !s3Bucket.isEmpty && !awsAccessKeyId.isEmpty && !awsSecretAccessKey.isEmpty
         openRouterWasConfiguredAtSeed = openRouterEnabled && !openRouterAPIKey.isEmpty
         appleNotesWasConfiguredAtSeed = appleNotesEnabled
         notionWasConfiguredAtSeed = notionEnabled && !notionAPIKey.isEmpty
