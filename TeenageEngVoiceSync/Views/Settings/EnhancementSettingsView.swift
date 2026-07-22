@@ -8,6 +8,54 @@
 import SwiftUI
 import os
 
+nonisolated struct EnhancementProviderState {
+    enum Status: Equatable {
+        case notTested
+        case active
+        case saved
+        case testing
+        case valid(Int)
+        case error(String)
+    }
+
+    struct Configuration {
+        var apiKey = ""
+        var isAPIKeyStored = false
+        var status: Status = .notTested
+        var models: [OpenRouterModel] = []
+        var isLoadingModels = false
+        var modelLoadError: String?
+
+        var hasUsableRemoteCredentials: Bool {
+            isAPIKeyStored && !apiKey.isEmpty
+        }
+    }
+
+    private(set) var configuredProvider: EnhancementProvider
+    private var configurations: [EnhancementProvider: Configuration] = [:]
+
+    init(configuredProvider: EnhancementProvider = .openRouter) {
+        self.configuredProvider = configuredProvider
+    }
+
+    func configuration(for provider: EnhancementProvider) -> Configuration {
+        configurations[provider] ?? Configuration()
+    }
+
+    mutating func update(
+        _ provider: EnhancementProvider,
+        _ update: (inout Configuration) -> Void
+    ) {
+        var configuration = configuration(for: provider)
+        update(&configuration)
+        configurations[provider] = configuration
+    }
+
+    mutating func configure(_ provider: EnhancementProvider) {
+        configuredProvider = provider
+    }
+}
+
 struct EnhancementSettingsView: View {
     @AppStorage(OpenRouterService.providerKey) private var providerRaw = EnhancementProvider.openRouter.rawValue
     @AppStorage(OpenRouterService.baseURLKey) private var apiBaseURL = ""
@@ -20,25 +68,31 @@ struct EnhancementSettingsView: View {
     @AppStorage("openrouter.format.splitParagraphs") private var splitParagraphs = false
     @AppStorage("openrouter.format.bulletPoints") private var bulletPoints = false
 
-    @State private var apiKey = ""
     @State private var showAPIKey = false
     @State private var isLoadingKey = true
     @State private var isSavingKey = false
-    @State private var configuredProvider: EnhancementProvider = .openRouter
-    @State private var providerStatuses: [EnhancementProvider: ProviderStatus] = [:]
-    @State private var availableLLMModels: [OpenRouterModel] = []
-    @State private var isLoadingModels = false
-    @State private var modelLoadError: String?
+    @State private var providerState = EnhancementProviderState()
 
     private let openRouterService = OpenRouterService()
 
-    private enum ProviderStatus: Equatable {
-        case notTested
-        case active
-        case saved
-        case testing
-        case valid(Int)
-        case error(String)
+    private var configuredProvider: EnhancementProvider {
+        providerState.configuredProvider
+    }
+
+    private var configuredConfiguration: EnhancementProviderState.Configuration {
+        providerState.configuration(for: configuredProvider)
+    }
+
+    private var configuredAPIKey: Binding<String> {
+        Binding(
+            get: { configuredConfiguration.apiKey },
+            set: { newValue in
+                providerState.update(configuredProvider) {
+                    $0.apiKey = newValue
+                    $0.isAPIKeyStored = false
+                }
+            }
+        )
     }
 
     private var provider: EnhancementProvider {
@@ -71,20 +125,12 @@ struct EnhancementSettingsView: View {
     }
 
     private var configuredProviderCanTest: Bool {
-        !apiKey.isEmpty || isConfiguredProviderLocalEndpoint
+        !configuredConfiguration.apiKey.isEmpty || isConfiguredProviderLocalEndpoint
     }
 
     private var activeProviderHasCredentials: Bool {
-        if provider == configuredProvider {
-            return !apiKey.isEmpty
-        }
-
-        switch providerStatuses[provider] {
-        case .saved, .valid:
-            return true
-        default:
-            return false
-        }
+        let activeConfiguration = providerState.configuration(for: provider)
+        return activeConfiguration.hasUsableRemoteCredentials
     }
 
     private var canUseAI: Bool {
@@ -145,11 +191,11 @@ struct EnhancementSettingsView: View {
         .formStyle(.grouped)
         .padding()
         .task {
-            configuredProvider = provider
+            providerState.configure(provider)
             await loadAllProviderStatuses()
-            await loadConfiguredProviderKey()
+            await loadProviderKey(provider)
             if canUseAI {
-                await loadModels()
+                await loadModels(for: provider)
             }
         }
     }
@@ -209,8 +255,11 @@ struct EnhancementSettingsView: View {
                 TextField("Base URL", text: $apiBaseURL)
                     .textFieldStyle(.roundedBorder)
                     .onChange(of: apiBaseURL) { _, _ in
-                        modelLoadError = nil
-                        availableLLMModels = []
+                        providerState.update(.custom) {
+                            $0.modelLoadError = nil
+                            $0.models = []
+                            $0.status = $0.apiKey.isEmpty ? .notTested : .saved
+                        }
                     }
 
                 Text("Use an OpenAI-compatible chat API, for example http://127.0.0.1:8088/v1. Local endpoints do not require an API key.")
@@ -220,10 +269,10 @@ struct EnhancementSettingsView: View {
 
             HStack {
                 if showAPIKey {
-                    TextField("API Key", text: $apiKey)
+                    TextField("API Key", text: configuredAPIKey)
                         .textFieldStyle(.roundedBorder)
                 } else {
-                    SecureField("API Key", text: $apiKey)
+                    SecureField("API Key", text: configuredAPIKey)
                         .textFieldStyle(.roundedBorder)
                 }
 
@@ -246,16 +295,17 @@ struct EnhancementSettingsView: View {
                 Button(isSavingKey ? "Saving..." : "Save") {
                     Task { await saveSelectedProviderKey() }
                 }
-                .disabled(isLoadingKey || isSavingKey || apiKey.isEmpty || isConfiguredProviderLocalEndpoint)
+                .disabled(isLoadingKey || isSavingKey || configuredConfiguration.apiKey.isEmpty || isConfiguredProviderLocalEndpoint)
 
                 Button {
-                    Task { await loadModels() }
+                    let targetProvider = configuredProvider
+                    Task { await loadModels(for: targetProvider) }
                 } label: {
                     Label("Test Connection", systemImage: "checkmark.circle")
                 }
-                .disabled(!configuredProviderCanTest || isLoadingModels)
+                .disabled(!configuredProviderCanTest || configuredConfiguration.isLoadingModels)
 
-                if isLoadingModels {
+                if configuredConfiguration.isLoadingModels {
                     ProgressView()
                         .scaleEffect(0.7)
                 }
@@ -269,7 +319,7 @@ struct EnhancementSettingsView: View {
                     .font(.caption)
             }
 
-            if let modelLoadError {
+            if let modelLoadError = configuredConfiguration.modelLoadError {
                 Label(modelLoadError, systemImage: "exclamationmark.triangle.fill")
                     .foregroundStyle(.red)
                     .font(.caption)
@@ -279,7 +329,7 @@ struct EnhancementSettingsView: View {
 
     @ViewBuilder
     private func providerStatusText(for rowProvider: EnhancementProvider) -> some View {
-        switch providerStatuses[rowProvider] ?? .notTested {
+        switch providerState.configuration(for: rowProvider).status {
         case .active:
             Text("Ready")
                 .font(.caption)
@@ -309,7 +359,7 @@ struct EnhancementSettingsView: View {
 
     @ViewBuilder
     private func providerStatusLabel(for rowProvider: EnhancementProvider) -> some View {
-        switch providerStatuses[rowProvider] ?? .notTested {
+        switch providerState.configuration(for: rowProvider).status {
         case .active, .saved:
             Label("API key saved", systemImage: "checkmark.circle.fill")
                 .foregroundStyle(.green)
@@ -335,28 +385,29 @@ struct EnhancementSettingsView: View {
 
     @ViewBuilder
     private func modelPicker(selection: Binding<String>, enabled: Bool, emptyMessage: String) -> some View {
-        if isLoadingModels {
+        let activeConfiguration = providerState.configuration(for: provider)
+        if activeConfiguration.isLoadingModels {
             HStack {
                 ProgressView()
                     .scaleEffect(0.7)
                 Text("Loading models...")
                     .foregroundStyle(.secondary)
             }
-        } else if availableLLMModels.isEmpty {
+        } else if activeConfiguration.models.isEmpty {
             Text(emptyMessage)
                 .font(.caption)
                 .foregroundStyle(.secondary)
         } else {
             Picker("Model", selection: selection) {
                 Text("Select a model").tag("")
-                ForEach(availableLLMModels) { model in
+                ForEach(activeConfiguration.models) { model in
                     Text(model.name).tag(model.id)
                 }
             }
             .pickerStyle(.menu)
             .disabled(!enabled)
 
-            if let model = availableLLMModels.first(where: { $0.id == selection.wrappedValue }) {
+            if let model = activeConfiguration.models.first(where: { $0.id == selection.wrappedValue }) {
                 VStack(alignment: .leading, spacing: 4) {
                     if !model.description.isEmpty {
                         Text(model.description)
@@ -376,62 +427,80 @@ struct EnhancementSettingsView: View {
         for provider in EnhancementProvider.allCases {
             let storedKey = (try? await KeychainService.shared.retrieve(for: provider.keychainKey)) ?? ""
             if !storedKey.isEmpty {
-                providerStatuses[provider] = .saved
+                providerState.update(provider) {
+                    $0.apiKey = storedKey
+                    $0.isAPIKeyStored = true
+                    $0.status = .saved
+                }
             }
         }
     }
 
-    private func loadConfiguredProviderKey() async {
+    private func loadProviderKey(_ targetProvider: EnhancementProvider) async {
         isLoadingKey = true
         defer { isLoadingKey = false }
-        apiKey = (try? await KeychainService.shared.retrieve(for: configuredProvider.keychainKey)) ?? ""
+        let storedKey = (try? await KeychainService.shared.retrieve(for: targetProvider.keychainKey)) ?? ""
+        providerState.update(targetProvider) {
+            $0.apiKey = storedKey
+            $0.isAPIKeyStored = !storedKey.isEmpty
+        }
     }
 
     private func saveSelectedProviderKey() async {
+        let targetProvider = configuredProvider
+        let apiKey = configuredConfiguration.apiKey
         isSavingKey = true
         defer { isSavingKey = false }
 
         do {
-            try await KeychainService.shared.save(apiKey, for: configuredProvider.keychainKey)
-            providerStatuses[configuredProvider] = .saved
+            try await KeychainService.shared.save(apiKey, for: targetProvider.keychainKey)
+            providerState.update(targetProvider) {
+                $0.isAPIKeyStored = true
+                $0.status = .saved
+            }
         } catch {
-            providerStatuses[configuredProvider] = .error("Failed to save: \(error.localizedDescription)")
+            providerState.update(targetProvider) {
+                $0.status = .error("Failed to save: \(error.localizedDescription)")
+            }
         }
     }
 
-    private func loadModels() async {
-        guard !apiKey.isEmpty || isConfiguredProviderLocalEndpoint else { return }
+    private func loadModels(for targetProvider: EnhancementProvider) async {
+        let configuration = providerState.configuration(for: targetProvider)
+        let targetBaseURL = targetProvider == .custom ? apiBaseURL : targetProvider.defaultBaseURL
+        let targetIsLocalEndpoint = isLocalEndpoint(targetProvider, baseURL: targetBaseURL)
+        guard !configuration.apiKey.isEmpty || targetIsLocalEndpoint else { return }
 
-        isLoadingModels = true
-        modelLoadError = nil
-        providerStatuses[configuredProvider] = .testing
-        defer { isLoadingModels = false }
+        providerState.update(targetProvider) {
+            $0.isLoadingModels = true
+            $0.modelLoadError = nil
+            $0.status = .testing
+        }
+        defer {
+            providerState.update(targetProvider) { $0.isLoadingModels = false }
+        }
 
         do {
-            availableLLMModels = try await openRouterService.fetchModels(
-                apiKey: apiKey,
-                provider: configuredProvider,
-                customBaseURL: apiBaseURL
+            let models = try await openRouterService.fetchModels(
+                apiKey: configuration.apiKey,
+                provider: targetProvider,
+                customBaseURL: targetBaseURL
             )
-            modelLoadError = nil
-            providerStatuses[configuredProvider] = .valid(availableLLMModels.count)
-
-            let availableIDs = Set(availableLLMModels.map(\.id))
-            let defaultModel = availableLLMModels.first(where: {
-                $0.id.contains("gpt-4o-mini") || $0.id.contains("claude-3-haiku")
-            }) ?? availableLLMModels.first
-
-            if !availableIDs.contains(selectedLLMModel) {
-                selectedLLMModel = defaultModel?.id ?? ""
+            providerState.update(targetProvider) {
+                $0.models = models
+                $0.modelLoadError = nil
+                $0.status = .valid(models.count)
             }
-            if !availableIDs.contains(formatModel) {
-                formatModel = defaultModel?.id ?? ""
-            }
+
+            guard targetProvider == provider else { return }
+            updateModelSelections(using: models)
         } catch {
-            availableLLMModels = []
-            let message = modelLoadErrorMessage(for: error)
-            modelLoadError = message
-            providerStatuses[configuredProvider] = .error(message)
+            let message = modelLoadErrorMessage(for: error, provider: targetProvider, baseURL: targetBaseURL)
+            providerState.update(targetProvider) {
+                $0.models = []
+                $0.modelLoadError = message
+                $0.status = .error(message)
+            }
             AppLogger.app.error("Failed to load enhancement models: \(String(describing: error), privacy: .public)")
         }
     }
@@ -439,10 +508,7 @@ struct EnhancementSettingsView: View {
     private func useProvider(_ newProvider: EnhancementProvider) {
         let previousProvider = provider
         providerRaw = newProvider.rawValue
-        configuredProvider = newProvider
-        apiKey = ""
-        modelLoadError = nil
-        availableLLMModels = []
+        providerState.configure(newProvider)
         Task {
             // If the new slot is empty, carry over the previous provider's key so
             // LLM keeps working after a provider switch without requiring re-entry.
@@ -451,29 +517,64 @@ struct EnhancementSettingsView: View {
                 let previousKey = (try? await KeychainService.shared.retrieve(for: previousProvider.keychainKey)) ?? ""
                 if !previousKey.isEmpty {
                     try? await KeychainService.shared.save(previousKey, for: newProvider.keychainKey)
-                    providerStatuses[newProvider] = .saved
+                    providerState.update(newProvider) {
+                        $0.apiKey = previousKey
+                        $0.isAPIKeyStored = true
+                        $0.status = .saved
+                    }
                 }
             }
-            await loadConfiguredProviderKey()
+            await loadProviderKey(newProvider)
             if canUseAI {
-                await loadModels()
+                let cachedModels = providerState.configuration(for: newProvider).models
+                if cachedModels.isEmpty {
+                    await loadModels(for: newProvider)
+                } else {
+                    updateModelSelections(using: cachedModels)
+                }
             }
         }
     }
 
     private func configureProvider(_ newProvider: EnhancementProvider) {
-        configuredProvider = newProvider
-        apiKey = ""
-        modelLoadError = nil
-        availableLLMModels = []
-        Task { await loadConfiguredProviderKey() }
+        providerState.configure(newProvider)
+        Task { await loadProviderKey(newProvider) }
     }
 
-    private func modelLoadErrorMessage(for error: Error) -> String {
+    private func updateModelSelections(using models: [OpenRouterModel]) {
+        let availableIDs = Set(models.map(\.id))
+        let defaultModel = models.first(where: {
+            $0.id.contains("gpt-4o-mini") || $0.id.contains("claude-3-haiku")
+        }) ?? models.first
+
+        if !availableIDs.contains(selectedLLMModel) {
+            selectedLLMModel = defaultModel?.id ?? ""
+        }
+        if !availableIDs.contains(formatModel) {
+            formatModel = defaultModel?.id ?? ""
+        }
+    }
+
+    private func isLocalEndpoint(_ provider: EnhancementProvider, baseURL: String) -> Bool {
+        guard provider == .custom,
+              let host = URL(string: OpenRouterService.normalizeBaseURL(baseURL))?.host?.lowercased() else {
+            return false
+        }
+        return host == "localhost" || host == "127.0.0.1" || host == "::1" || OpenRouterService.isPrivateIPv4(host)
+    }
+
+    private func modelLoadErrorMessage(
+        for error: Error,
+        provider: EnhancementProvider,
+        baseURL: String
+    ) -> String {
         if let urlError = error as? URLError {
             switch urlError.code {
             case .cannotConnectToHost, .cannotFindHost, .networkConnectionLost, .timedOut, .notConnectedToInternet:
-                return "Could not reach \(configuredBaseURL). Check that the provider is reachable, then test again."
+                let resolvedURL = provider == .custom
+                    ? OpenRouterService.normalizeBaseURL(baseURL)
+                    : provider.defaultBaseURL
+                return "Could not reach \(resolvedURL). Check that the provider is reachable, then test again."
             default:
                 break
             }
