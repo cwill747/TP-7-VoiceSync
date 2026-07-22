@@ -13,19 +13,28 @@ import XCTest
 /// In-memory credential store standing in for the Keychain. `failOnSave` makes
 /// the first save throw, simulating a failed final commit.
 private final class MockCredentialStore: OnboardingCredentialStore, @unchecked Sendable {
+    /// Live backing store; also seeded by tests to provide retrievable values.
     var stored: [KeychainService.Key: String] = [:]
+    /// Record of keys that were successfully saved (for assertions).
     private(set) var saved: [KeychainService.Key: String] = [:]
     var failOnSave = false
+    /// Fail only when saving this specific key (to exercise mid-sequence rollback).
+    var failSaveForKey: KeychainService.Key?
 
     struct Boom: Error {}
 
     func save(_ value: String, for key: KeychainService.Key) async throws {
-        if failOnSave { throw Boom() }
+        if failOnSave || key == failSaveForKey { throw Boom() }
+        stored[key] = value
         saved[key] = value
     }
 
     func retrieve(for key: KeychainService.Key) async throws -> String? {
         stored[key]
+    }
+
+    func delete(for key: KeychainService.Key) async throws {
+        stored.removeValue(forKey: key)
     }
 }
 
@@ -224,6 +233,39 @@ final class OnboardingDraftTests: XCTestCase {
                        TranscriptionProviderKind.elevenLabs.rawValue)
         XCTAssertFalse(defaults.bool(forKey: "transcription.enabled"))
         XCTAssertFalse(defaults.bool(forKey: "notion.enabled"))
+    }
+
+    /// When a later credential save fails, credentials written earlier in the
+    /// sequence are rolled back to their prior values (or removed if they were
+    /// new), so the commit is all-or-nothing rather than leaving active keys changed.
+    func testFailedCredentialCommitRollsBackEarlierSaves() async throws {
+        let (defaults, suiteName) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let draft = OnboardingDraft()
+        let credentials = MockCredentialStore()
+        // OpenRouter already had a key from a prior setup; ElevenLabs did not.
+        credentials.stored[.openRouterAPIKey] = "old-or-key"
+        // The Notion save (last in the sequence) fails after the others succeed.
+        credentials.failSaveForKey = .notionAPIKey
+
+        draft.elevenLabsAPIKey = "new-el-key"
+        draft.openRouterAPIKey = "new-or-key"
+        draft.notionAPIKey = "ntn_key"
+        draft.transcriptionProvider = .parakeet
+
+        do {
+            try await draft.apply(defaults: defaults, credentials: credentials)
+            XCTFail("apply() should have thrown when the Notion save failed")
+        } catch {
+            // Expected.
+        }
+
+        // Prior OpenRouter key restored; newly-added ElevenLabs key removed.
+        XCTAssertEqual(credentials.stored[.openRouterAPIKey], "old-or-key")
+        XCTAssertNil(credentials.stored[.elevenLabsAPIKey])
+        // No UserDefaults written.
+        XCTAssertNil(defaults.string(forKey: "transcription.provider"))
     }
 
     // MARK: Notion provisioning is deferred

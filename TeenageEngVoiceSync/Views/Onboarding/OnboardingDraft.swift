@@ -16,6 +16,7 @@ import Foundation
 protocol OnboardingCredentialStore {
     func save(_ value: String, for key: KeychainService.Key) async throws
     func retrieve(for key: KeychainService.Key) async throws -> String?
+    func delete(for key: KeychainService.Key) async throws
 }
 
 extension KeychainService: OnboardingCredentialStore {}
@@ -134,21 +135,36 @@ final class OnboardingDraft {
             provisionedNotionProps = try await provisionNotion(notionAPIKey, notionDatabaseId).props
         }
 
-        // Persist non-empty credentials.
-        if !elevenLabsAPIKey.isEmpty {
-            try await credentials.save(elevenLabsAPIKey, for: .elevenLabsAPIKey)
-        }
-        if !awsAccessKeyId.isEmpty {
-            try await credentials.save(awsAccessKeyId, for: .awsAccessKeyId)
-        }
-        if !awsSecretAccessKey.isEmpty {
-            try await credentials.save(awsSecretAccessKey, for: .awsSecretAccessKey)
-        }
-        if !openRouterAPIKey.isEmpty {
-            try await credentials.save(openRouterAPIKey, for: OpenRouterService.activeKeychainKey(defaults: defaults))
-        }
-        if !notionAPIKey.isEmpty {
-            try await credentials.save(notionAPIKey, for: .notionAPIKey)
+        // Persist non-empty credentials. Keychain has no transaction, so snapshot
+        // each key's prior value and roll the whole set back if a later save fails —
+        // otherwise a mid-sequence failure would leave some credentials changed
+        // while we report the commit failed and skip the UserDefaults writes.
+        let pending: [(KeychainService.Key, String)] = [
+            (.elevenLabsAPIKey, elevenLabsAPIKey),
+            (.awsAccessKeyId, awsAccessKeyId),
+            (.awsSecretAccessKey, awsSecretAccessKey),
+            (OpenRouterService.activeKeychainKey(defaults: defaults), openRouterAPIKey),
+            (.notionAPIKey, notionAPIKey)
+        ].filter { !$0.1.isEmpty }
+
+        var rollback: [(KeychainService.Key, String?)] = []
+        do {
+            for (key, value) in pending {
+                let prior = try? await credentials.retrieve(for: key)
+                try await credentials.save(value, for: key)
+                rollback.append((key, prior))
+            }
+        } catch {
+            // Restore each key we already overwrote to its prior value (or remove
+            // it if it didn't exist before), then surface the original failure.
+            for (key, prior) in rollback.reversed() {
+                if let prior {
+                    try? await credentials.save(prior, for: key)
+                } else {
+                    try? await credentials.delete(for: key)
+                }
+            }
+            throw error
         }
 
         // 2) Non-fallible work: write every setting in one burst so the
