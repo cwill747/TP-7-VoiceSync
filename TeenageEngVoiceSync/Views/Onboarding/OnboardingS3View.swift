@@ -14,6 +14,10 @@ struct OnboardingS3View: View {
     @State private var showSecret = false
     @State private var isTesting = false
     @State private var testStatus: TestStatus?
+    /// True once a test has failed in this session. Hides the Enable/Disable
+    /// toggle so a kept-existing decision can't be waved back to enabled
+    /// without another successful test — see `existingConfigurationToggle`.
+    @State private var hasFailedTest = false
 
     enum TestStatus {
         case success
@@ -136,8 +140,11 @@ struct OnboardingS3View: View {
                     }
                 }
 
-                // Existing configuration control (re-run only)
-                if draft.s3WasConfiguredAtSeed {
+                // Existing configuration control (re-run only). Hidden after a
+                // failed test — the fields may now be edited, unvalidated
+                // values, so re-enabling requires another successful test
+                // rather than just flipping this toggle back on.
+                if draft.s3WasConfiguredAtSeed && !hasFailedTest {
                     existingConfigurationToggle
                 }
 
@@ -222,6 +229,7 @@ struct OnboardingS3View: View {
             draft.s3Enabled = true
 
             testStatus = .success
+            hasFailedTest = false
             decision = .configuredNow
 
             // Clear success message after delay
@@ -233,6 +241,7 @@ struct OnboardingS3View: View {
             }
         } catch {
             testStatus = .error("Connection failed: \(error.localizedDescription)")
+            hasFailedTest = true
             // A failed (re)test must not leave a kept-existing decision that
             // still reads as enabled — the fields just failed may be edited,
             // unvalidated values, and a kept `.isEnabled` decision would let
