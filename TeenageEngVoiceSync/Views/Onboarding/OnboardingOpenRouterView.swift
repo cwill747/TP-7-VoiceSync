@@ -131,7 +131,7 @@ struct OnboardingOpenRouterView: View {
         defer { isLoading = false }
 
         do {
-            if let existingKey = try await KeychainService.shared.retrieve(for: .openRouterAPIKey),
+            if let existingKey = try await KeychainService.shared.retrieve(for: OpenRouterService.activeKeychainKey()),
                !existingKey.isEmpty {
                 apiKey = existingKey
                 isConfigured = true
@@ -152,7 +152,7 @@ struct OnboardingOpenRouterView: View {
                 return
             }
 
-            try await KeychainService.shared.save(apiKey, for: .openRouterAPIKey)
+            try await KeychainService.shared.save(apiKey, for: OpenRouterService.activeKeychainKey())
             verificationStatus = .success("Valid! \(models.count) models available")
             isConfigured = true
             llmEnabled = true

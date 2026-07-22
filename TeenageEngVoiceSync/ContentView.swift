@@ -37,6 +37,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     case storage
     case apiKeys
     case transcription
+    case enhancement
     case vocabulary
     case advanced
 
@@ -48,6 +49,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .storage: return "Storage"
         case .apiKeys: return "API Keys"
         case .transcription: return "Transcription"
+        case .enhancement: return "Enhancement"
         case .vocabulary: return "Dictionary"
         case .advanced: return "Advanced"
         }
@@ -59,6 +61,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .storage: return "externaldrive"
         case .apiKeys: return "key"
         case .transcription: return "text.bubble"
+        case .enhancement: return "sparkles"
         case .vocabulary: return "text.book.closed"
         case .advanced: return "slider.horizontal.3"
         }
@@ -171,6 +174,8 @@ struct ContentView: View {
             APIKeysSettingsView()
         case .transcription:
             TranscriptionSettingsView()
+        case .enhancement:
+            EnhancementSettingsView()
         case .vocabulary:
             VocabularySettingsView()
         case .advanced:

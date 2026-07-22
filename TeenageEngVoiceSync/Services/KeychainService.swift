@@ -17,6 +17,7 @@ actor KeychainService {
         case awsAccessKeyId = "com.tp7sync.aws.accesskeyid"
         case awsSecretAccessKey = "com.tp7sync.aws.secretaccesskey"
         case openRouterAPIKey = "com.tp7sync.openrouter.apikey"
+        case customAIAPIKey = "com.tp7sync.customai.apikey"
         case notionAPIKey = "com.tp7sync.notion.apikey"
     }
 

@@ -3,7 +3,7 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 77;
+	objectVersion = 100;
 	objects = {
 
 /* Begin PBXBuildFile section */
@@ -28,15 +28,13 @@
 /* Begin PBXCopyFilesBuildPhase section */
 		C1A1E20D9F1E4A2B8C6D0F0D /* Embed Vendored Libraries */ = {
 			isa = PBXCopyFilesBuildPhase;
-			buildActionMask = 2147483647;
 			dstPath = "";
-			dstSubfolderSpec = 10;
+			dstSubfolder = Frameworks;
 			files = (
 				C1A1E2089F1E4A2B8C6D0F08 /* libtp7mtp.dylib in Embed Vendored Libraries */,
 				C1A1E2099F1E4A2B8C6D0F09 /* libusb-1.0.0.dylib in Embed Vendored Libraries */,
 			);
 			name = "Embed Vendored Libraries";
-			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXCopyFilesBuildPhase section */
 
@@ -64,21 +62,17 @@
 /* Begin PBXFrameworksBuildPhase section */
 		74968E4BA0A32B0FB65328D7 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
 			files = (
 			);
-			runOnlyForDeploymentPostprocessing = 0;
 		};
 		8ECCCD672F15E24600FFB286 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
 			files = (
 				7E59D3082FF9DCEE005C7F4B /* FluidAudio in Frameworks */,
 				E8C0521153BBC298A4A89675 /* WhisperKit in Frameworks */,
 				C1A1E2049F1E4A2B8C6D0F04 /* libtp7mtp.dylib in Frameworks */,
 				C1A1E2069F1E4A2B8C6D0F06 /* libusb-1.0.0.dylib in Frameworks */,
 			);
-			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXFrameworksBuildPhase section */
 
@@ -133,8 +127,6 @@
 				C1A1E20D9F1E4A2B8C6D0F0D /* Embed Vendored Libraries */,
 			);
 			buildRules = (
-			);
-			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
 				8ECCCD6C2F15E24600FFB286 /* TeenageEngVoiceSync */,
@@ -201,7 +193,7 @@
 				81D8A9F9F9818A4843D8D40A /* XCRemoteSwiftPackageReference "WhisperKit" */,
 				7E59D3062FF9DCEE005C7F4B /* XCRemoteSwiftPackageReference "FluidAudio" */,
 			);
-			preferredProjectObjectVersion = 77;
+			preferredProjectObjectVersion = 100;
 			productRefGroup = 8ECCCD6B2F15E24600FFB286 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -215,34 +207,26 @@
 /* Begin PBXResourcesBuildPhase section */
 		8ECCCD682F15E24600FFB286 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
 			files = (
 			);
-			runOnlyForDeploymentPostprocessing = 0;
 		};
 		D751137A23C589A367D8634C /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
 			files = (
 			);
-			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		8ECCCD662F15E24600FFB286 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
 			files = (
 			);
-			runOnlyForDeploymentPostprocessing = 0;
 		};
 		D2F0022DDD2A447782F39F9A /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
 			files = (
 			);
-			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
 
@@ -255,7 +239,7 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
-		0A9F07FB54124E6B1FDA051D /* Debug */ = {
+		0A9F07FB54124E6B1FDA051D /* Debug configuration for PBXNativeTarget "TeenageEngVoiceSyncTests" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
@@ -272,7 +256,7 @@
 			};
 			name = Debug;
 		};
-		3CAB6816E85B5910375730F5 /* Release */ = {
+		3CAB6816E85B5910375730F5 /* Release configuration for PBXNativeTarget "TeenageEngVoiceSyncTests" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
@@ -289,7 +273,7 @@
 			};
 			name = Release;
 		};
-		8ECCCD892F15E24800FFB286 /* Debug */ = {
+		8ECCCD892F15E24800FFB286 /* Debug configuration for PBXProject "TeenageEngVoiceSync" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -355,7 +339,7 @@
 			};
 			name = Debug;
 		};
-		8ECCCD8A2F15E24800FFB286 /* Release */ = {
+		8ECCCD8A2F15E24800FFB286 /* Release configuration for PBXProject "TeenageEngVoiceSync" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -413,17 +397,19 @@
 			};
 			name = Release;
 		};
-		8ECCCD8C2F15E24800FFB286 /* Debug */ = {
+		8ECCCD8C2F15E24800FFB286 /* Debug configuration for PBXNativeTarget "TeenageEngVoiceSync" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = TeenageEngVoiceSync/TeenageEngVoiceSync.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
+				DEVELOPMENT_TEAM = 5XZ5XQ2F3F;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
@@ -462,17 +448,19 @@
 			};
 			name = Debug;
 		};
-		8ECCCD8D2F15E24800FFB286 /* Release */ = {
+		8ECCCD8D2F15E24800FFB286 /* Release configuration for PBXNativeTarget "TeenageEngVoiceSync" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = TeenageEngVoiceSync/TeenageEngVoiceSync.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
+				DEVELOPMENT_TEAM = 5XZ5XQ2F3F;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
@@ -517,28 +505,25 @@
 		8ECCCD652F15E24600FFB286 /* Build configuration list for PBXProject "TeenageEngVoiceSync" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				8ECCCD892F15E24800FFB286 /* Debug */,
-				8ECCCD8A2F15E24800FFB286 /* Release */,
+				8ECCCD892F15E24800FFB286 /* Debug configuration for PBXProject "TeenageEngVoiceSync" */,
+				8ECCCD8A2F15E24800FFB286 /* Release configuration for PBXProject "TeenageEngVoiceSync" */,
 			);
-			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
 		8ECCCD8B2F15E24800FFB286 /* Build configuration list for PBXNativeTarget "TeenageEngVoiceSync" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				8ECCCD8C2F15E24800FFB286 /* Debug */,
-				8ECCCD8D2F15E24800FFB286 /* Release */,
+				8ECCCD8C2F15E24800FFB286 /* Debug configuration for PBXNativeTarget "TeenageEngVoiceSync" */,
+				8ECCCD8D2F15E24800FFB286 /* Release configuration for PBXNativeTarget "TeenageEngVoiceSync" */,
 			);
-			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
 		A94E20B46C3EBF755D6E5958 /* Build configuration list for PBXNativeTarget "TeenageEngVoiceSyncTests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				0A9F07FB54124E6B1FDA051D /* Debug */,
-				3CAB6816E85B5910375730F5 /* Release */,
+				0A9F07FB54124E6B1FDA051D /* Debug configuration for PBXNativeTarget "TeenageEngVoiceSyncTests" */,
+				3CAB6816E85B5910375730F5 /* Release configuration for PBXNativeTarget "TeenageEngVoiceSyncTests" */,
 			);
-			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
@@ -548,8 +533,7 @@
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/FluidInference/FluidAudio.git";
 			requirement = {
-				kind = versionRange;
-				maximumVersion = 1.0.0;
+				kind = upToNextMajorVersion;
 				minimumVersion = 0.15.5;
 			};
 		};

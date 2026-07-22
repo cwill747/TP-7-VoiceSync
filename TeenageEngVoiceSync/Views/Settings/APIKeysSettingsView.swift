@@ -22,16 +22,8 @@ struct APIKeysSettingsView: View {
     @State private var isVerifyingElevenLabs = false
     @State private var elevenLabsStatus: VerificationStatus?
 
-    // OpenRouter credentials
-    @State private var openRouterAPIKey = ""
-    @State private var showOpenRouterKey = false
-    @State private var isVerifyingOpenRouter = false
-    @State private var openRouterStatus: VerificationStatus?
-
     // Loading state
     @State private var isLoading = true
-
-    private let openRouterService = OpenRouterService()
 
     enum VerificationStatus {
         case success(String)
@@ -148,59 +140,6 @@ struct APIKeysSettingsView: View {
                 Label("ElevenLabs", systemImage: "waveform")
             }
 
-            // MARK: - OpenRouter Section
-            Section {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        if showOpenRouterKey {
-                            TextField("API Key", text: $openRouterAPIKey)
-                                .textFieldStyle(.roundedBorder)
-                        } else {
-                            SecureField("API Key", text: $openRouterAPIKey)
-                                .textFieldStyle(.roundedBorder)
-                        }
-
-                        Button {
-                            showOpenRouterKey.toggle()
-                        } label: {
-                            Image(systemName: showOpenRouterKey ? "eye.slash" : "eye")
-                        }
-                        .buttonStyle(.borderless)
-                    }
-                    .disabled(isLoading)
-
-                    Text("Used to generate intelligent titles and summaries for your notes")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
-                    Link("Open OpenRouter Dashboard", destination: URL(string: "https://openrouter.ai/settings/keys")!)
-                        .font(.caption)
-
-                    HStack {
-                        Button("Save") {
-                            Task { await saveOpenRouterKey() }
-                        }
-                        .disabled(openRouterAPIKey.isEmpty)
-
-                        Button("Verify") {
-                            Task { await verifyOpenRouterKey() }
-                        }
-                        .disabled(openRouterAPIKey.isEmpty || isVerifyingOpenRouter)
-
-                        if isVerifyingOpenRouter {
-                            ProgressView()
-                                .scaleEffect(0.7)
-                        }
-                    }
-
-                    if let status = openRouterStatus {
-                        statusLabel(for: status)
-                    }
-                }
-            } header: {
-                Label("OpenRouter", systemImage: "brain")
-            }
-
             Section {
                 Text("All API keys are stored securely in your Mac's Keychain.")
                     .font(.caption)
@@ -238,7 +177,6 @@ struct APIKeysSettingsView: View {
             awsAccessKeyId = try await KeychainService.shared.retrieve(for: .awsAccessKeyId) ?? ""
             awsSecretAccessKey = try await KeychainService.shared.retrieve(for: .awsSecretAccessKey) ?? ""
             elevenLabsAPIKey = try await KeychainService.shared.retrieve(for: .elevenLabsAPIKey) ?? ""
-            openRouterAPIKey = try await KeychainService.shared.retrieve(for: .openRouterAPIKey) ?? ""
         } catch {
             AppLogger.app.error("Failed to load credentials: \(String(describing: error), privacy: .public)")
         }
@@ -314,39 +252,10 @@ struct APIKeysSettingsView: View {
         }
     }
 
-    // MARK: - Save & Verify OpenRouter
-
-    private func saveOpenRouterKey() async {
-        do {
-            try await KeychainService.shared.save(openRouterAPIKey, for: .openRouterAPIKey)
-            openRouterStatus = .success("Saved")
-            clearStatus(for: .openRouter)
-        } catch {
-            openRouterStatus = .error("Failed to save: \(error.localizedDescription)")
-        }
-    }
-
-    private func verifyOpenRouterKey() async {
-        isVerifyingOpenRouter = true
-        defer { isVerifyingOpenRouter = false }
-
-        do {
-            let models = try await openRouterService.fetchModels(apiKey: openRouterAPIKey)
-            if models.isEmpty {
-                openRouterStatus = .error("No models returned")
-            } else {
-                openRouterStatus = .success("Valid - \(models.count) models available")
-                clearStatus(for: .openRouter)
-            }
-        } catch {
-            openRouterStatus = .error("Invalid API key: \(error.localizedDescription)")
-        }
-    }
-
     // MARK: - Helpers
 
     private enum StatusType {
-        case aws, elevenLabs, openRouter
+        case aws, elevenLabs
     }
 
     private func clearStatus(for type: StatusType) {
@@ -358,8 +267,6 @@ struct APIKeysSettingsView: View {
                     awsStatus = nil
                 case .elevenLabs:
                     elevenLabsStatus = nil
-                case .openRouter:
-                    openRouterStatus = nil
                 }
             }
         }

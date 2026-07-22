@@ -1732,7 +1732,7 @@ final class SyncService {
 
     /// Generates a title and summary via the configured OpenAI-compatible API.
     private func generateLLMTitle(for transcription: String) async -> LLMResult? {
-        let apiKey = (try? await KeychainService.shared.retrieve(for: .openRouterAPIKey)) ?? ""
+        let apiKey = (try? await KeychainService.shared.retrieve(for: OpenRouterService.activeKeychainKey())) ?? ""
         // A local endpoint needs no key; a remote one does.
         guard !apiKey.isEmpty || OpenRouterService.isLocalEndpoint() else {
             AppLogger.network.debug("AI provider API key not configured")
@@ -1788,7 +1788,7 @@ final class SyncService {
             bulletPoints: defaults.bool(forKey: "openrouter.format.bulletPoints")
         )
 
-        let apiKey = (try? await KeychainService.shared.retrieve(for: .openRouterAPIKey)) ?? ""
+        let apiKey = (try? await KeychainService.shared.retrieve(for: OpenRouterService.activeKeychainKey())) ?? ""
         // A local endpoint needs no key; a remote one does. Without a usable
         // config the step can never succeed, so skip (deliver the raw transcript)
         // rather than leaving it pending and spinning the UI forever.

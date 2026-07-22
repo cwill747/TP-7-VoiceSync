@@ -51,7 +51,50 @@ nonisolated struct OpenRouterModel: Identifiable, Sendable {
     let completionPrice: String
 }
 
+nonisolated enum EnhancementProvider: String, CaseIterable, Identifiable {
+    case openRouter
+    case custom
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .openRouter: return "OpenRouter"
+        case .custom: return "Custom Provider"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .openRouter: return "brain"
+        case .custom: return "server.rack"
+        }
+    }
+
+    var defaultBaseURL: String {
+        switch self {
+        case .openRouter: return OpenRouterService.defaultBaseURL
+        case .custom: return ""
+        }
+    }
+
+    var keychainKey: KeychainService.Key {
+        switch self {
+        case .openRouter: return .openRouterAPIKey
+        case .custom: return .customAIAPIKey
+        }
+    }
+
+    var dashboardURL: URL? {
+        switch self {
+        case .openRouter: return URL(string: "https://openrouter.ai/settings/keys")
+        case .custom: return nil
+        }
+    }
+}
+
 actor OpenRouterService {
+    static let providerKey = "enhancement.provider"
     /// UserDefaults key holding the OpenAI-compatible API base URL. Empty means
     /// use the OpenRouter default; set it to e.g. `http://127.0.0.1:8088/v1` to
     /// point at a local llama-server / LM Studio / Ollama instance.
@@ -63,14 +106,33 @@ actor OpenRouterService {
     /// Resolves the configured base URL, falling back to OpenRouter and trimming
     /// a trailing slash so path joins stay well-formed.
     nonisolated static func resolvedBaseURL(defaults: UserDefaults = .standard) -> String {
-        let raw = (defaults.string(forKey: baseURLKey) ?? "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let base = raw.isEmpty ? defaultBaseURL : raw
-        let trimmed = base.hasSuffix("/") ? String(base.dropLast()) : base
+        let provider = activeProvider(defaults: defaults)
+        let raw = provider == .custom
+            ? (defaults.string(forKey: baseURLKey) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            : provider.defaultBaseURL
+        let base = raw.isEmpty ? provider.defaultBaseURL : raw
+        return normalizeBaseURL(base)
+    }
 
-        // URLSession may resolve localhost to IPv6 first. llama-server commonly
-        // listens only on IPv4, which makes an otherwise healthy local endpoint
-        // fail with a refused ::1 connection.
+    nonisolated static func activeProvider(defaults: UserDefaults = .standard) -> EnhancementProvider {
+        if let raw = defaults.string(forKey: providerKey),
+           let provider = EnhancementProvider(rawValue: raw) {
+            return provider
+        }
+
+        let legacyBaseURL = (defaults.string(forKey: baseURLKey) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return legacyBaseURL.isEmpty ? .openRouter : .custom
+    }
+
+    nonisolated static func activeKeychainKey(defaults: UserDefaults = .standard) -> KeychainService.Key {
+        activeProvider(defaults: defaults).keychainKey
+    }
+
+    // Trims a trailing slash and rewrites localhost to 127.0.0.1 to avoid IPv6
+    // resolution races with llama-server and similar local servers.
+    nonisolated static func normalizeBaseURL(_ url: String) -> String {
+        let trimmed = url.hasSuffix("/") ? String(url.dropLast()) : url
         guard var components = URLComponents(string: trimmed),
               components.host?.lowercased() == "localhost" else {
             return trimmed
@@ -79,8 +141,6 @@ actor OpenRouterService {
         return components.string ?? trimmed
     }
 
-    /// True when the endpoint is on the local machine or private LAN — such
-    /// servers need no API key and can run while the app is otherwise offline.
     nonisolated static func isLocalEndpoint(defaults: UserDefaults = .standard) -> Bool {
         guard let host = URL(string: resolvedBaseURL(defaults: defaults))?.host?.lowercased() else {
             return false
@@ -88,7 +148,7 @@ actor OpenRouterService {
         return host == "localhost" || host == "127.0.0.1" || host == "::1" || isPrivateIPv4(host)
     }
 
-    nonisolated private static func isPrivateIPv4(_ host: String) -> Bool {
+    nonisolated static func isPrivateIPv4(_ host: String) -> Bool {
         let parts = host.split(separator: ".")
         guard parts.count == 4,
               let first = Int(parts[0]),
@@ -156,7 +216,26 @@ actor OpenRouterService {
 
     /// Fetches available models from OpenRouter API
     func fetchModels(apiKey: String) async throws -> [OpenRouterModel] {
-        var request = URLRequest(url: URL(string: "\(baseURL)/models")!)
+        try await fetchModels(apiKey: apiKey, baseURL: baseURL)
+    }
+
+    func fetchModels(apiKey: String, provider: EnhancementProvider, customBaseURL: String) async throws -> [OpenRouterModel] {
+        let rawBaseURL = provider == .custom
+            ? customBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            : provider.defaultBaseURL
+        let resolvedURL = Self.normalizeBaseURL(rawBaseURL.isEmpty ? provider.defaultBaseURL : rawBaseURL)
+        return try await fetchModels(apiKey: apiKey, baseURL: resolvedURL)
+    }
+
+    private func fetchModels(apiKey: String, baseURL: String) async throws -> [OpenRouterModel] {
+        guard !baseURL.isEmpty else {
+            throw OpenRouterError.parseError("No base URL configured for this provider")
+        }
+        let trimmedBaseURL = baseURL.hasSuffix("/") ? String(baseURL.dropLast()) : baseURL
+        guard let url = URL(string: "\(trimmedBaseURL)/models") else {
+            throw URLError(.badURL)
+        }
+        var request = URLRequest(url: url)
         request.httpMethod = "GET"
         if !apiKey.isEmpty {
             request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
@@ -220,7 +299,10 @@ actor OpenRouterService {
         \(transcription)
         """
 
-        var request = URLRequest(url: URL(string: "\(baseURL)/chat/completions")!)
+        guard let chatURL = URL(string: "\(baseURL)/chat/completions") else {
+            throw URLError(.badURL)
+        }
+        var request = URLRequest(url: chatURL)
         request.timeoutInterval = Self.completionTimeout()
         request.httpMethod = "POST"
         if !apiKey.isEmpty {
@@ -296,7 +378,10 @@ actor OpenRouterService {
         \(transcription)
         """
 
-        var request = URLRequest(url: URL(string: "\(baseURL)/chat/completions")!)
+        guard let chatURL = URL(string: "\(baseURL)/chat/completions") else {
+            throw URLError(.badURL)
+        }
+        var request = URLRequest(url: chatURL)
         request.timeoutInterval = Self.completionTimeout()
         request.httpMethod = "POST"
         if !apiKey.isEmpty {

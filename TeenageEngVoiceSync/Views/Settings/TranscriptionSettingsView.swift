@@ -36,24 +36,8 @@ struct TranscriptionSettingsView: View {
     @AppStorage("notion.enabled") private var notionEnabled = false
     @AppStorage("notion.databaseId") private var notionDatabaseId = ""
 
-    // LLM settings
-    @AppStorage("openrouter.enabled") private var llmEnabled = false
-    @AppStorage("openrouter.model") private var selectedLLMModel = ""
-    // OpenAI-compatible API base URL. Empty = OpenRouter default; set to e.g.
-    // http://127.0.0.1:8088/v1 for a local llama-server / LM Studio / Ollama.
-    @AppStorage(OpenRouterService.baseURLKey) private var apiBaseURL = ""
-
-    // LLM transcript cleanup settings (separate model choice from titling)
-    @AppStorage("openrouter.formatEnabled") private var formatEnabled = false
-    @AppStorage("openrouter.formatModel") private var formatModel = ""
-    @AppStorage("openrouter.format.removeFillerWords") private var removeFillerWords = false
-    @AppStorage("openrouter.format.removeFalseStarts") private var removeFalseStarts = false
-    @AppStorage("openrouter.format.splitParagraphs") private var splitParagraphs = false
-    @AppStorage("openrouter.format.bulletPoints") private var bulletPoints = false
-
     // State
     @State private var hasElevenLabsKey = false
-    @State private var hasOpenRouterKey = false
     @State private var whisperKitDownloadState: ModelDownloadState = .notDownloaded
     @State private var whisperKitDownloadProgress = 0.0
     @State private var whisperKitDownloadError: String?
@@ -72,9 +56,6 @@ struct TranscriptionSettingsView: View {
     @State private var parakeetUnifiedDownloadError: String?
     @State private var parakeetUnifiedDownloadPhaseText: String?
     @State private var parakeetUnifiedDownloadTask: Task<Void, Never>?
-    @State private var availableLLMModels: [OpenRouterModel] = []
-    @State private var isLoadingModels = false
-    @State private var modelLoadError: String?
     @State private var isTestingNote = false
     @State private var testNoteStatus: TestStatus?
     @State private var markdownInputPath = ""
@@ -97,8 +78,6 @@ struct TranscriptionSettingsView: View {
         case downloading
         case ready
     }
-
-    private let openRouterService = OpenRouterService()
 
     enum TestStatus {
         case success
@@ -138,22 +117,6 @@ struct TranscriptionSettingsView: View {
 
     private var transcriptionActive: Bool {
         transcriptionEnabled && canTranscribe
-    }
-
-    /// The effective base URL, falling back to OpenRouter when unset.
-    private var resolvedBaseURL: String {
-        let raw = apiBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        return raw.isEmpty ? OpenRouterService.defaultBaseURL : raw
-    }
-
-    /// A local endpoint (llama-server etc.) needs no API key.
-    private var isLocalEndpoint: Bool {
-        OpenRouterService.isLocalEndpoint()
-    }
-
-    /// AI steps can run when a key is configured or the endpoint is local.
-    private var canUseAI: Bool {
-        hasOpenRouterKey || isLocalEndpoint
     }
 
     var body: some View {
@@ -644,176 +607,6 @@ struct TranscriptionSettingsView: View {
                 }
             }
 
-            // MARK: - AI Provider
-            Section("AI Provider") {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        TextField(OpenRouterService.defaultBaseURL, text: $apiBaseURL)
-                            .textFieldStyle(.roundedBorder)
-                            .onChange(of: apiBaseURL) { _, _ in
-                                modelLoadError = nil
-                            }
-                            .onSubmit { Task { await loadModels() } }
-                        if !apiBaseURL.isEmpty {
-                            Button("Reset") { apiBaseURL = "" }
-                                .buttonStyle(.borderless)
-                        }
-                        Button {
-                            Task { await loadModels() }
-                        } label: {
-                            Label("Refresh Models", systemImage: "arrow.clockwise")
-                        }
-                        .disabled(!canUseAI || isLoadingModels)
-                    }
-
-                    if isLocalEndpoint {
-                        Label("Local endpoint — no API key required", systemImage: "checkmark.circle.fill")
-                            .foregroundStyle(.green)
-                            .font(.caption)
-                    } else if hasOpenRouterKey {
-                        Label("API key configured", systemImage: "checkmark.circle.fill")
-                            .foregroundStyle(.green)
-                            .font(.caption)
-                    } else {
-                        Label("Configure an API key in the API Keys tab", systemImage: "exclamationmark.triangle")
-                            .foregroundStyle(.orange)
-                            .font(.caption)
-                    }
-
-                    if let modelLoadError {
-                        Label(modelLoadError, systemImage: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.red)
-                            .font(.caption)
-                    }
-
-                    Text("Any OpenAI-compatible chat API. Leave blank for OpenRouter, or point at a local server you run yourself — e.g. llama-server at http://127.0.0.1:8088/v1 (start it with: llama-server --model <model.gguf> --port 8088). Local endpoints need no API key.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            // MARK: - LLM Title Generation
-            Section("LLM Title Generation") {
-                Toggle("Enable AI-powered titles", isOn: $llmEnabled)
-                    .disabled(!canUseAI)
-                    .help("Generate intelligent titles for Apple Notes using AI")
-
-                if !canUseAI {
-                    Label("Configure an API key in API Keys tab, or set a local endpoint above", systemImage: "exclamationmark.triangle")
-                        .foregroundStyle(.orange)
-                        .font(.caption)
-                }
-
-                if isLoadingModels {
-                    HStack {
-                        ProgressView()
-                            .scaleEffect(0.7)
-                        Text("Loading models...")
-                            .foregroundStyle(.secondary)
-                    }
-                } else if let modelLoadError {
-                    Label(modelLoadError, systemImage: "exclamationmark.triangle.fill")
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                } else if availableLLMModels.isEmpty && canUseAI {
-                    Text("Click 'Refresh Models' to load available models")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } else if !availableLLMModels.isEmpty {
-                    Picker("Model", selection: $selectedLLMModel) {
-                        Text("Select a model").tag("")
-                        ForEach(availableLLMModels) { model in
-                            Text(model.name).tag(model.id)
-                        }
-                    }
-                    .pickerStyle(.menu)
-                    .disabled(!llmEnabled)
-
-                    if let model = availableLLMModels.first(where: { $0.id == selectedLLMModel }) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            if !model.description.isEmpty {
-                                Text(model.description)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(2)
-                            }
-                            Text("Context: \(model.contextLength.formatted()) tokens")
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
-                        }
-                    }
-                }
-
-                Text("Generates intelligent titles and summaries for your Apple Notes using AI. Configure the prompt in the Advanced tab.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            // MARK: - AI Transcript Cleanup
-            Section("AI Transcript Cleanup") {
-                Toggle("Clean up transcripts with AI", isOn: $formatEnabled)
-                    .disabled(!canUseAI)
-                    .help("Add punctuation and fix likely transcription errors before saving")
-
-                if !canUseAI {
-                    Label("Configure an API key in API Keys tab, or set a local endpoint above", systemImage: "exclamationmark.triangle")
-                        .foregroundStyle(.orange)
-                        .font(.caption)
-                }
-
-                if isLoadingModels {
-                    HStack {
-                        ProgressView()
-                            .scaleEffect(0.7)
-                        Text("Loading models...")
-                            .foregroundStyle(.secondary)
-                    }
-                } else if let modelLoadError {
-                    Label(modelLoadError, systemImage: "exclamationmark.triangle.fill")
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                } else if availableLLMModels.isEmpty && canUseAI {
-                    Text("Click 'Refresh Models' above to load available models")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } else if !availableLLMModels.isEmpty {
-                    Picker("Model", selection: $formatModel) {
-                        Text("Select a model").tag("")
-                        ForEach(availableLLMModels) { model in
-                            Text(model.name).tag(model.id)
-                        }
-                    }
-                    .pickerStyle(.menu)
-                    .disabled(!formatEnabled)
-
-                    if let model = availableLLMModels.first(where: { $0.id == formatModel }) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            if !model.description.isEmpty {
-                                Text(model.description)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(2)
-                            }
-                            Text("Context: \(model.contextLength.formatted()) tokens")
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
-                        }
-                    }
-                }
-
-                Text("Rewrites the transcript with proper punctuation and paragraphs, correcting only words very likely misheard by the transcription engine. Notes and Notion pages use the cleaned text. Configure the prompt in the Advanced tab.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                Toggle("Cut filler words (\u{201c}um\u{201d}, \u{201c}uh\u{201d}, \u{201c}like\u{201d})", isOn: $removeFillerWords)
-                    .disabled(!formatEnabled)
-                Toggle("Remove false starts and repeated words", isOn: $removeFalseStarts)
-                    .disabled(!formatEnabled)
-                Toggle("Split into paragraphs by topic", isOn: $splitParagraphs)
-                    .disabled(!formatEnabled)
-                Toggle("Format lists as bullet points", isOn: $bulletPoints)
-                    .disabled(!formatEnabled)
-            }
         }
         .formStyle(.grouped)
         .padding()
@@ -825,9 +618,6 @@ struct TranscriptionSettingsView: View {
             refreshParakeetStatus()
             refreshParakeetUnifiedStatus()
             refreshDiarizerStatus()
-            if canUseAI {
-                await loadModels()
-            }
         }
     }
 
@@ -837,12 +627,8 @@ struct TranscriptionSettingsView: View {
         do {
             let elevenLabsKey = try await KeychainService.shared.retrieve(for: .elevenLabsAPIKey)
             hasElevenLabsKey = elevenLabsKey != nil && !elevenLabsKey!.isEmpty
-
-            let openRouterKey = try await KeychainService.shared.retrieve(for: .openRouterAPIKey)
-            hasOpenRouterKey = openRouterKey != nil && !openRouterKey!.isEmpty
         } catch {
             hasElevenLabsKey = false
-            hasOpenRouterKey = false
         }
     }
 
@@ -1044,52 +830,6 @@ struct TranscriptionSettingsView: View {
                 }
             }
         }
-    }
-
-    private func loadModels() async {
-        guard canUseAI else { return }
-
-        isLoadingModels = true
-        modelLoadError = nil
-        defer { isLoadingModels = false }
-
-        do {
-            let apiKey = (try? await KeychainService.shared.retrieve(for: .openRouterAPIKey)) ?? ""
-            availableLLMModels = try await openRouterService.fetchModels(apiKey: apiKey)
-            modelLoadError = nil
-
-            // Stored OpenRouter selections are invalid after switching to a
-            // local server. Replace missing selections so SwiftUI's Picker and
-            // subsequent completion requests always use an available model.
-            let availableIDs = Set(availableLLMModels.map(\.id))
-            let defaultModel = availableLLMModels.first(where: {
-                $0.id.contains("gpt-4o-mini") || $0.id.contains("claude-3-haiku")
-            }) ?? availableLLMModels.first
-
-            if !availableIDs.contains(selectedLLMModel) {
-                selectedLLMModel = defaultModel?.id ?? ""
-            }
-            if !availableIDs.contains(formatModel) {
-                formatModel = defaultModel?.id ?? ""
-            }
-        } catch {
-            availableLLMModels = []
-            modelLoadError = modelLoadErrorMessage(for: error)
-            AppLogger.app.error("Failed to load OpenRouter models: \(String(describing: error), privacy: .public)")
-        }
-    }
-
-    private func modelLoadErrorMessage(for error: Error) -> String {
-        if let urlError = error as? URLError {
-            switch urlError.code {
-            case .cannotConnectToHost, .cannotFindHost, .networkConnectionLost, .timedOut, .notConnectedToInternet:
-                return "Could not reach \(resolvedBaseURL). Check that the AI server is running and reachable, then refresh models."
-            default:
-                break
-            }
-        }
-
-        return "Failed to load models: \(error.localizedDescription)"
     }
 
     private func loadNotionSettings() async {
