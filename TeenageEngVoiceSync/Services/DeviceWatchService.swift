@@ -275,7 +275,7 @@ final class DeviceWatchService {
         }
     }
 
-    private func setFileState(at index: Int, _ state: DeviceDownloadProgress.State) {
+    nonisolated private func setFileState(at index: Int, _ state: DeviceDownloadProgress.State) {
         Task { @MainActor [weak self] in
             guard let self, self.downloadingFiles.indices.contains(index) else { return }
             self.downloadingFiles[index].state = state
@@ -411,7 +411,7 @@ final class DeviceWatchService {
 /// the loop isn't sleeping, so an attach/detach event landing in the gap between
 /// two sleeps is applied to the next sleep instead of being lost. The two
 /// guarded fields make `@unchecked Sendable` sound.
-final class WakeGate: @unchecked Sendable {
+nonisolated final class WakeGate: @unchecked Sendable {
     private let lock = NSLock()
     private var sleepTask: Task<Void, Never>?
     private var pendingWake = false

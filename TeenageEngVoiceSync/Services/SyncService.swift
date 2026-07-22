@@ -947,7 +947,7 @@ final class SyncService {
     /// Recordings shorter than this are almost always accidental button presses
     /// rather than intentional memos, so they're stored but never sent for
     /// transcription/summary.
-    static let minimumDurationForTranscription: TimeInterval = 2.0
+    nonisolated static let minimumDurationForTranscription: TimeInterval = 2.0
 
     /// True when a recording is too short to plausibly be intentional and
     /// should be skipped rather than transcribed/summarized.
@@ -2039,7 +2039,7 @@ final class SyncService {
 // network-dependent work a recording still owes. Pure functions over the
 // recording's fields + current settings, so no schema/state is required.
 extension SyncService {
-    enum RemoteStep: Equatable {
+    nonisolated enum RemoteStep: Equatable {
         case s3       // audio upload
         case summary  // LLM title/summary
         case format   // LLM transcript cleanup
