@@ -61,18 +61,28 @@ struct PeopleScreen: View {
 struct PersonRowView: View {
     let person: Person
 
+    private var sampleSummary: String {
+        person.isEnrolled
+            ? "\(person.samples.count) sample\(person.samples.count == 1 ? "" : "s")"
+            : "Not enrolled"
+    }
+
     var body: some View {
         HStack {
             Image(systemName: person.isSelf ? "person.circle.fill" : "person.circle")
                 .foregroundStyle(person.isSelf ? .blue : .secondary)
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 Text(person.name)
-                Text(person.isEnrolled ? "\(person.samples.count) sample\(person.samples.count == 1 ? "" : "s")" : "Not enrolled")
+                Text(sampleSummary)
                     .font(.caption)
                     .foregroundStyle(person.isEnrolled ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.orange))
             }
         }
         .padding(.vertical, 2)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(Text(person.isSelf ? "\(person.name), you" : person.name))
+        .accessibilityValue(Text(sampleSummary))
     }
 }
 
@@ -219,6 +229,8 @@ struct PersonDetailView: View {
                     } label: {
                         Label("Delete Person", systemImage: "trash")
                     }
+                    .help("Delete \(person.name)")
+                    .accessibilityLabel(Text("Delete \(person.name)"))
                 }
             }
             .padding(24)
@@ -308,10 +320,15 @@ struct SampleRowView: View {
     let sample: VoiceSample
     let onDelete: () -> Void
 
+    private var sampleIdentifier: String {
+        sample.recordingFilename ?? sample.addedAt.formatted(.dateTime.month().day().year())
+    }
+
     var body: some View {
         HStack {
             Image(systemName: "waveform")
                 .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 2) {
                 if let filename = sample.recordingFilename {
@@ -334,6 +351,8 @@ struct SampleRowView: View {
                     .foregroundStyle(.red)
             }
             .buttonStyle(.borderless)
+            .help("Remove voice sample \(sampleIdentifier)")
+            .accessibilityLabel(Text("Remove voice sample \(sampleIdentifier)"))
         }
         .padding(.vertical, 4)
         .padding(.horizontal, 8)

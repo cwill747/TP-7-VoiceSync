@@ -53,6 +53,7 @@ struct RecordingsListView: View {
                 }
                 .disabled(selectedRecordings.isEmpty || isDeleting)
                 .help(deleteButtonLabel)
+                .accessibilityLabel(Text(deleteButtonLabel))
             }
         }
         .overlay {
@@ -168,6 +169,7 @@ struct RecordingRow: View {
             }
         }
         .padding(.vertical, 4)
+        .accessibilityElement(children: .combine)
     }
 
     /// Icon, tint, and human-readable label for the row's current sync/transcription

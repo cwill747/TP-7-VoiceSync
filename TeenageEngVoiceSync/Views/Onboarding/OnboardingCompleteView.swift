@@ -28,6 +28,7 @@ struct OnboardingCompleteView: View {
             Image(systemName: "checkmark.circle.fill")
                 .font(.system(size: 56))
                 .foregroundStyle(.green)
+                .accessibilityHidden(true)
 
             // Title
             VStack(spacing: 6) {
@@ -115,6 +116,7 @@ struct OnboardingCompleteView: View {
             Image(systemName: configured ? "checkmark.circle.fill" : "circle")
                 .foregroundStyle(configured ? .green : .secondary)
                 .font(.body)
+                .accessibilityHidden(true)
 
             Text(title)
                 .font(.subheadline)
@@ -135,6 +137,7 @@ struct OnboardingCompleteView: View {
                     .foregroundStyle(.secondary)
             }
         }
+        .accessibilityElement(children: .combine)
     }
 }
 

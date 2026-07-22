@@ -27,6 +27,7 @@ struct OnboardingNotionView: View {
                 Image(systemName: "note.text")
                     .font(.system(size: 40))
                     .foregroundStyle(.tint)
+                    .accessibilityHidden(true)
 
                 Text("Notion Integration")
                     .font(.title2)
@@ -55,6 +56,7 @@ struct OnboardingNotionView: View {
                         Image(systemName: showKey ? "eye.slash" : "eye")
                     }
                     .buttonStyle(.borderless)
+                    .accessibilityLabel(Text(showKey ? "Hide API key" : "Show API key"))
                 }
                 .disabled(draft.isSeeding)
 

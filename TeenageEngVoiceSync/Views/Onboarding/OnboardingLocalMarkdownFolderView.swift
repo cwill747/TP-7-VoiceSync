@@ -29,6 +29,7 @@ struct OnboardingLocalMarkdownFolderView: View {
                 Image(systemName: "doc.text.fill")
                     .font(.system(size: 40))
                     .foregroundStyle(.tint)
+                    .accessibilityHidden(true)
 
                 Text("Local Markdown Notes")
                     .font(.title2)

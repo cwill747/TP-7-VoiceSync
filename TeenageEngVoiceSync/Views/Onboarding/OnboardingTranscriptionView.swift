@@ -53,6 +53,7 @@ struct OnboardingTranscriptionView: View {
                     Image(systemName: "waveform")
                         .font(.system(size: 40))
                         .foregroundStyle(.tint)
+                        .accessibilityHidden(true)
 
                     Text("Transcription Setup")
                         .font(.title2)
@@ -124,6 +125,7 @@ struct OnboardingTranscriptionView: View {
                     Image(systemName: showKey ? "eye.slash" : "eye")
                 }
                 .buttonStyle(.borderless)
+                .accessibilityLabel(Text(showKey ? "Hide API key" : "Show API key"))
             }
             .disabled(draft.isSeeding)
 

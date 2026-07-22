@@ -35,6 +35,7 @@ struct OnboardingS3View: View {
                     Image(systemName: "cloud")
                         .font(.system(size: 40))
                         .foregroundStyle(.tint)
+                        .accessibilityHidden(true)
 
                     Text("S3 Cloud Storage")
                         .font(.title2)
@@ -122,6 +123,7 @@ struct OnboardingS3View: View {
                             Image(systemName: showSecret ? "eye.slash" : "eye")
                         }
                         .buttonStyle(.borderless)
+                        .accessibilityLabel(Text(showSecret ? "Hide secret access key" : "Show secret access key"))
                     }
                     .disabled(draft.isSeeding)
 

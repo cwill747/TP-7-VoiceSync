@@ -49,6 +49,19 @@ private struct DeviceDownloadRow: View {
             ProgressView(value: fractionCompleted)
                 .progressViewStyle(.linear)
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(Text("\(file.name), \(statusDescription)"))
+    }
+
+    private var statusDescription: String {
+        switch file.state {
+        case .queued: return "Queued"
+        case .downloading(let sent, let total) where total > 0:
+            return "\(Int((Double(sent) / Double(total)) * 100))% downloaded"
+        case .downloading: return "Downloading"
+        case .done: return "Download complete"
+        case .failed: return "Download failed"
+        }
     }
 
     private var fractionCompleted: Double? {
