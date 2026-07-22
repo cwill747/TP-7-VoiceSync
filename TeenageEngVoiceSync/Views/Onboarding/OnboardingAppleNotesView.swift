@@ -26,6 +26,7 @@ struct OnboardingAppleNotesView: View {
                 Image(systemName: "note.text")
                     .font(.system(size: 40))
                     .foregroundStyle(.tint)
+                    .accessibilityHidden(true)
 
                 Text("Apple Notes Integration")
                     .font(.title2)

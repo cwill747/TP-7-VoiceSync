@@ -161,6 +161,7 @@ struct EnhancementSettingsView: View {
                 Image(systemName: rowProvider.systemImage)
                     .frame(width: 28)
                     .foregroundStyle(rowProvider == provider ? .teal : .secondary)
+                    .accessibilityHidden(true)
 
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
@@ -232,6 +233,7 @@ struct EnhancementSettingsView: View {
                     Image(systemName: showAPIKey ? "eye.slash" : "eye")
                 }
                 .buttonStyle(.borderless)
+                .accessibilityLabel(Text(showAPIKey ? "Hide API key" : "Show API key"))
             }
             .disabled(isLoadingKey || isConfiguredProviderLocalEndpoint)
 

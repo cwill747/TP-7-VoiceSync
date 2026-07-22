@@ -186,13 +186,15 @@ private struct BoostTermRow: View {
             Menu {
                 Button("Edit", action: onEdit)
                 Divider()
-                Button("Delete", role: .destructive, action: onDelete)
+                Button("Delete \"\(term.text)\"", role: .destructive, action: onDelete)
             } label: {
                 Image(systemName: "ellipsis.circle")
                     .foregroundStyle(.secondary)
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
+            .help("Options for \(term.text)")
+            .accessibilityLabel(Text("Options for \(term.text)"))
         }
     }
 }
@@ -214,6 +216,7 @@ private struct DictionaryEntryRow: View {
                     Image(systemName: "arrow.right")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
+                        .accessibilityHidden(true)
                     Text(entry.replacement)
                         .font(.body)
                 }
@@ -224,13 +227,15 @@ private struct DictionaryEntryRow: View {
             Menu {
                 Button("Edit", action: onEdit)
                 Divider()
-                Button("Delete", role: .destructive, action: onDelete)
+                Button("Delete \"\(entry.triggers.joined(separator: ", "))\"", role: .destructive, action: onDelete)
             } label: {
                 Image(systemName: "ellipsis.circle")
                     .foregroundStyle(.secondary)
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
+            .help("Options for \(entry.triggers.joined(separator: ", "))")
+            .accessibilityLabel(Text("Options for \(entry.triggers.joined(separator: ", "))"))
         }
     }
 }

@@ -224,11 +224,13 @@ struct StatusToolbarItem: View {
                         .contentTransition(.symbolEffect(.replace))
                         .symbolEffect(.variableColor, isActive: appState.isDownloadingFromDevice)
                         .symbolEffect(.pulse, isActive: appState.processingActivity != nil)
+                        .accessibilityHidden(true)
                 } else {
                     Circle()
                         .fill(statusColor)
                         .frame(width: 9, height: 9)
                         .shadow(color: statusColor.opacity(0.6), radius: 2)
+                        .accessibilityHidden(true)
                 }
 
                 Text(appState.statusText)
@@ -240,6 +242,7 @@ struct StatusToolbarItem: View {
         }
         .buttonStyle(.plain)
         .disabled(!appState.isDownloadingFromDevice)
+        .accessibilityLabel(Text(appState.statusText))
         .popover(isPresented: $showDownloadDetail) {
             DeviceDownloadProgressView(files: appState.deviceDownloadingFiles)
         }

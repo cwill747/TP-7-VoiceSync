@@ -14,6 +14,7 @@ struct OnboardingWelcomeView: View {
             Image(systemName: "waveform.circle.fill")
                 .font(.system(size: 64))
                 .foregroundStyle(.tint)
+                .accessibilityHidden(true)
 
             // Welcome text
             VStack(spacing: 6) {
@@ -75,6 +76,7 @@ struct OnboardingWelcomeView: View {
                 .font(.title3)
                 .foregroundStyle(.tint)
                 .frame(width: 28)
+                .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
@@ -105,6 +107,7 @@ struct OnboardingWelcomeView: View {
 
             Spacer()
         }
+        .accessibilityElement(children: .combine)
     }
 }
 

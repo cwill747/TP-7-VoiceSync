@@ -231,9 +231,11 @@ struct RecordingDetailView: View {
             HStack {
                 Image(systemName: "clock")
                     .foregroundStyle(.orange)
+                    .accessibilityHidden(true)
                 Text("Waiting to transcribe...")
                     .foregroundStyle(.secondary)
             }
+            .accessibilityElement(children: .combine)
 
         case .processing:
             HStack {
@@ -504,6 +506,7 @@ struct TranscriptSection: View {
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
             TextField("Find", text: $query)
                 .textFieldStyle(.plain)
                 .frame(minWidth: 120, maxWidth: 200)
@@ -521,12 +524,14 @@ struct TranscriptSection: View {
                 }
                 .disabled(total == 0)
                 .help("Previous match")
+                .accessibilityLabel(Text("Previous match"))
 
                 Button { goToMatch(offset: 1) } label: {
                     Image(systemName: "chevron.down")
                 }
                 .disabled(total == 0)
                 .help("Next match (Return)")
+                .accessibilityLabel(Text("Next match"))
 
                 Button {
                     query = ""
@@ -535,6 +540,7 @@ struct TranscriptSection: View {
                     Image(systemName: "xmark.circle.fill")
                 }
                 .help("Clear search")
+                .accessibilityLabel(Text("Clear search"))
             }
         }
         .buttonStyle(.borderless)
@@ -894,10 +900,13 @@ struct SpeakerSegmentView: View {
                         Image(systemName: "chevron.down")
                             .font(.caption2)
                             .foregroundStyle(.tertiary)
+                            .accessibilityHidden(true)
                     }
                 }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
+                .help("Reassign speaker, currently \(displayLabel)")
+                .accessibilityLabel(Text("Reassign speaker, currently \(displayLabel)"))
 
                 Text(":")
                     .font(.subheadline.bold())
@@ -1001,6 +1010,7 @@ struct AudioPlayerView: View {
                         .contentTransition(.symbolEffect(.replace))
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel(Text(isPlaying ? "Pause" : "Play"))
 
                 Spacer()
 

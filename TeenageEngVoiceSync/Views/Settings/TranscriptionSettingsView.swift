@@ -599,6 +599,7 @@ struct TranscriptionSettingsView: View {
                             Image(systemName: showNotionKey ? "eye.slash" : "eye")
                         }
                         .buttonStyle(.borderless)
+                        .accessibilityLabel(Text(showNotionKey ? "Hide integration secret" : "Show integration secret"))
                     }
                     .disabled(isLoadingNotionKey)
 

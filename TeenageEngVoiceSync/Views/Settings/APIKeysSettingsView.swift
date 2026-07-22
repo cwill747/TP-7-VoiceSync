@@ -57,6 +57,7 @@ struct APIKeysSettingsView: View {
                             Image(systemName: showAWSSecret ? "eye.slash" : "eye")
                         }
                         .buttonStyle(.borderless)
+                        .accessibilityLabel(Text(showAWSSecret ? "Hide secret access key" : "Show secret access key"))
                     }
                     .disabled(isLoading)
 
@@ -107,6 +108,7 @@ struct APIKeysSettingsView: View {
                             Image(systemName: showElevenLabsKey ? "eye.slash" : "eye")
                         }
                         .buttonStyle(.borderless)
+                        .accessibilityLabel(Text(showElevenLabsKey ? "Hide API key" : "Show API key"))
                     }
                     .disabled(isLoading)
 

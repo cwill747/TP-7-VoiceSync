@@ -28,6 +28,7 @@ struct OnboardingLocalAudioFolderView: View {
                 Image(systemName: "folder.fill")
                     .font(.system(size: 40))
                     .foregroundStyle(.tint)
+                    .accessibilityHidden(true)
 
                 Text("Local Audio Storage")
                     .font(.title2)
