@@ -71,8 +71,12 @@ actor NotionService {
         }
 
         func store() {
+            store(in: .standard)
+        }
+
+        func store(in defaults: UserDefaults) {
             guard let data = try? JSONEncoder().encode(self) else { return }
-            UserDefaults.standard.set(data, forKey: Self.storageKey)
+            defaults.set(data, forKey: Self.storageKey)
         }
     }
 

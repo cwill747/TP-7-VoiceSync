@@ -8,6 +8,7 @@
 import SwiftUI
 
 struct OnboardingCompleteView: View {
+    let draft: OnboardingDraft
     let transcriptionConfigured: Bool
     let s3Configured: Bool
     let localAudioFolderConfigured: Bool
@@ -16,10 +17,9 @@ struct OnboardingCompleteView: View {
     let localMarkdownFolderConfigured: Bool
     let notionConfigured: Bool
 
-    @AppStorage("transcription.provider") private var transcriptionProviderRaw = TranscriptionProviderKind.elevenLabs.rawValue
-
+    // Reflect the pending draft selection (not the still-unchanged persisted value).
     private var transcriptionProvider: TranscriptionProviderKind {
-        TranscriptionProviderKind(rawValue: transcriptionProviderRaw) ?? .elevenLabs
+        draft.transcriptionProvider
     }
 
     var body: some View {
@@ -140,6 +140,7 @@ struct OnboardingCompleteView: View {
 
 #Preview {
     OnboardingCompleteView(
+        draft: OnboardingDraft(),
         transcriptionConfigured: true,
         s3Configured: true,
         localAudioFolderConfigured: false,

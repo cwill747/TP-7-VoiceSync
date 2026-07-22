@@ -8,11 +8,8 @@
 import SwiftUI
 
 struct OnboardingAppleNotesView: View {
+    @Bindable var draft: OnboardingDraft
     @Binding var isConfigured: Bool
-
-    @AppStorage("applenotes.enabled") private var notesEnabled = false
-    @AppStorage("applenotes.folder") private var notesFolder = "TP-7 Transcripts"
-    @AppStorage("markdown.enabled") private var markdownEnabled = false
 
     @State private var isTesting = false
     @State private var testStatus: TestStatus?
@@ -45,7 +42,7 @@ struct OnboardingAppleNotesView: View {
                 Text("Notes Folder")
                     .font(.headline)
 
-                TextField("Folder name", text: $notesFolder)
+                TextField("Folder name", text: $draft.appleNotesFolder)
                     .textFieldStyle(.roundedBorder)
 
                 Text("Notes will be created in this folder in your Apple Notes app. The folder will be created automatically if it doesn't exist.")
@@ -60,7 +57,7 @@ struct OnboardingAppleNotesView: View {
                         testNoteCreation()
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(notesFolder.isEmpty || isTesting)
+                    .disabled(draft.appleNotesFolder.isEmpty || isTesting)
 
                     if isTesting {
                         ProgressView()
@@ -121,14 +118,16 @@ struct OnboardingAppleNotesView: View {
                 try await service.createNote(
                     title: "Test Note - \(Date().formatted())",
                     body: "<p>This is a test note from TP-7 VoiceSync setup wizard.</p><p>If you can see this, Apple Notes integration is working correctly!</p>",
-                    folder: notesFolder
+                    folder: draft.appleNotesFolder
                 )
                 await MainActor.run {
                     testStatus = .success
                     isTesting = false
                     isConfigured = true
-                    notesEnabled = true
-                    markdownEnabled = false  // Disable markdown when Apple Notes is enabled
+                    // Stage Apple Notes as enabled; markdown is disabled when Apple
+                    // Notes is chosen. Persisted only when onboarding completes.
+                    draft.appleNotesEnabled = true
+                    draft.markdownEnabled = false
                 }
             } catch {
                 await MainActor.run {
@@ -141,6 +140,6 @@ struct OnboardingAppleNotesView: View {
 }
 
 #Preview {
-    OnboardingAppleNotesView(isConfigured: .constant(false))
+    OnboardingAppleNotesView(draft: OnboardingDraft(), isConfigured: .constant(false))
         .frame(width: 600, height: 440)
 }

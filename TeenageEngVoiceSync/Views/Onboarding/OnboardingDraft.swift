@@ -1,0 +1,176 @@
+//
+//  OnboardingDraft.swift
+//  TeenageEngVoiceSync
+//
+//  Wizard-owned draft configuration. Step views edit this in-memory draft
+//  instead of writing straight to @AppStorage / Keychain / bookmarks, so a
+//  canceled or closed wizard leaves persisted settings untouched. The complete
+//  draft is committed atomically by `apply()` when the user presses
+//  "Start Using TP-7 VoiceSync".
+//
+
+import Foundation
+
+/// Persistence surface the draft commits to. Abstracted so tests can inject a
+/// store that fails on demand (the "failed final commit" acceptance case).
+protocol OnboardingCredentialStore {
+    func save(_ value: String, for key: KeychainService.Key) async throws
+    func retrieve(for key: KeychainService.Key) async throws -> String?
+}
+
+extension KeychainService: OnboardingCredentialStore {}
+
+@Observable
+@MainActor
+final class OnboardingDraft {
+    // MARK: Transcription
+    var transcriptionProvider: TranscriptionProviderKind = .elevenLabs
+    var transcriptionEnabled = false
+    var whisperKitModel = "base"
+    var backupAfterTranscription = true
+    var elevenLabsAPIKey = ""
+
+    // MARK: S3 storage
+    var s3Enabled = false
+    var s3Provider: S3Provider = .aws
+    var s3Bucket = ""
+    var s3Region = "us-east-1"
+    var s3Prefix = "recordings/"
+    var awsAccessKeyId = ""
+    var awsSecretAccessKey = ""
+
+    // MARK: Local audio folder (S3 fallback)
+    var localAudioEnabled = false
+    var localAudioFolderPath = ""
+    var localAudioBookmark: Data?
+
+    // MARK: OpenRouter
+    var openRouterEnabled = false
+    var openRouterAPIKey = ""
+
+    // MARK: Apple Notes
+    var appleNotesEnabled = false
+    var appleNotesFolder = "TP-7 Transcripts"
+
+    // MARK: Local markdown folder (Apple Notes fallback)
+    var markdownEnabled = false
+    var markdownFolderPath = ""
+    var markdownBookmark: Data?
+
+    // MARK: Notion
+    var notionEnabled = false
+    var notionDatabaseId = ""
+    var notionAPIKey = ""
+    /// Set when the database has been provisioned; committed so `SyncService`
+    /// uses the same property-name mapping later.
+    var notionProps: NotionService.PropertyNames?
+
+    /// True while `seed()` is loading current values; step views disable secret
+    /// fields until it clears so an early keystroke isn't overwritten.
+    var isSeeding = true
+
+    // MARK: - Seeding
+
+    /// Populate the draft from currently persisted settings so the wizard shows
+    /// existing configuration and re-applies anything the user leaves untouched.
+    func seed(defaults: UserDefaults = .standard,
+              credentials: OnboardingCredentialStore = KeychainService.shared) async {
+        isSeeding = true
+
+        transcriptionProvider = TranscriptionProviderKind(rawValue: defaults.string(forKey: "transcription.provider") ?? "") ?? .elevenLabs
+        transcriptionEnabled = defaults.bool(forKey: "transcription.enabled")
+        whisperKitModel = defaults.string(forKey: "whisperkit.model") ?? "base"
+        backupAfterTranscription = defaults.object(forKey: "s3.backupAfterTranscription") as? Bool ?? true
+
+        s3Enabled = defaults.bool(forKey: "s3.enabled")
+        s3Provider = S3Provider(rawValue: defaults.string(forKey: "s3.provider") ?? "") ?? .aws
+        s3Bucket = defaults.string(forKey: "s3.bucket") ?? ""
+        s3Region = defaults.string(forKey: "s3.region") ?? "us-east-1"
+        s3Prefix = defaults.string(forKey: "s3.prefix") ?? "recordings/"
+
+        localAudioEnabled = defaults.bool(forKey: "localaudio.enabled")
+        localAudioFolderPath = defaults.string(forKey: "localaudio.folderPath") ?? ""
+
+        openRouterEnabled = defaults.bool(forKey: "openrouter.enabled")
+
+        appleNotesEnabled = defaults.bool(forKey: "applenotes.enabled")
+        appleNotesFolder = defaults.string(forKey: "applenotes.folder") ?? "TP-7 Transcripts"
+
+        markdownEnabled = defaults.bool(forKey: "markdown.enabled")
+        markdownFolderPath = defaults.string(forKey: "markdown.folderPath") ?? ""
+
+        notionEnabled = defaults.bool(forKey: "notion.enabled")
+        notionDatabaseId = defaults.string(forKey: "notion.databaseId") ?? ""
+
+        elevenLabsAPIKey = (try? await credentials.retrieve(for: .elevenLabsAPIKey)) ?? ""
+        awsAccessKeyId = (try? await credentials.retrieve(for: .awsAccessKeyId)) ?? ""
+        awsSecretAccessKey = (try? await credentials.retrieve(for: .awsSecretAccessKey)) ?? ""
+        openRouterAPIKey = (try? await credentials.retrieve(for: OpenRouterService.activeKeychainKey(defaults: defaults))) ?? ""
+        notionAPIKey = (try? await credentials.retrieve(for: .notionAPIKey)) ?? ""
+
+        isSeeding = false
+    }
+
+    // MARK: - Commit
+
+    /// Commit the complete draft. Credential saves (the only fallible step) run
+    /// first: if any throws, no UserDefaults are written, so the persisted
+    /// configuration is left exactly as it was — never partially applied.
+    func apply(defaults: UserDefaults = .standard,
+               credentials: OnboardingCredentialStore = KeychainService.shared) async throws {
+        // 1) Fallible work: persist non-empty credentials up front.
+        if !elevenLabsAPIKey.isEmpty {
+            try await credentials.save(elevenLabsAPIKey, for: .elevenLabsAPIKey)
+        }
+        if !awsAccessKeyId.isEmpty {
+            try await credentials.save(awsAccessKeyId, for: .awsAccessKeyId)
+        }
+        if !awsSecretAccessKey.isEmpty {
+            try await credentials.save(awsSecretAccessKey, for: .awsSecretAccessKey)
+        }
+        if !openRouterAPIKey.isEmpty {
+            try await credentials.save(openRouterAPIKey, for: OpenRouterService.activeKeychainKey(defaults: defaults))
+        }
+        if !notionAPIKey.isEmpty {
+            try await credentials.save(notionAPIKey, for: .notionAPIKey)
+        }
+
+        // 2) Non-fallible work: write every setting in one burst so the
+        //    user-visible configuration flips over together.
+        defaults.set(transcriptionProvider.rawValue, forKey: "transcription.provider")
+        defaults.set(transcriptionEnabled, forKey: "transcription.enabled")
+        defaults.set(whisperKitModel, forKey: "whisperkit.model")
+        defaults.set(backupAfterTranscription, forKey: "s3.backupAfterTranscription")
+
+        defaults.set(s3Enabled, forKey: "s3.enabled")
+        defaults.set(s3Provider.rawValue, forKey: "s3.provider")
+        defaults.set(s3Bucket, forKey: "s3.bucket")
+        defaults.set(s3Region, forKey: "s3.region")
+        defaults.set(s3Prefix, forKey: "s3.prefix")
+
+        defaults.set(localAudioEnabled, forKey: "localaudio.enabled")
+        if let localAudioBookmark, !localAudioFolderPath.isEmpty {
+            SecurityScopedBookmark.persistFolderSelection(
+                path: localAudioFolderPath, bookmarkData: localAudioBookmark,
+                key: "localaudio.folderPath", defaults: defaults
+            )
+        }
+
+        defaults.set(openRouterEnabled, forKey: "openrouter.enabled")
+
+        defaults.set(appleNotesEnabled, forKey: "applenotes.enabled")
+        defaults.set(appleNotesFolder, forKey: "applenotes.folder")
+
+        defaults.set(markdownEnabled, forKey: "markdown.enabled")
+        if let markdownBookmark, !markdownFolderPath.isEmpty {
+            SecurityScopedBookmark.persistFolderSelection(
+                path: markdownFolderPath, bookmarkData: markdownBookmark,
+                key: "markdown.folderPath", defaults: defaults
+            )
+        }
+
+        defaults.set(notionEnabled, forKey: "notion.enabled")
+        defaults.set(notionDatabaseId, forKey: "notion.databaseId")
+        notionProps?.store(in: defaults)
+    }
+}
