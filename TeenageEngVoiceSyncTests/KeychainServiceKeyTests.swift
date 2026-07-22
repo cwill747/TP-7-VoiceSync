@@ -18,7 +18,7 @@ final class KeychainServiceKeyTests: XCTestCase {
     }
 
     func testExpectedCasesArePresent() {
-        XCTAssertEqual(KeychainService.Key.allCases.count, 5)
+        XCTAssertEqual(KeychainService.Key.allCases.count, 6)
     }
 
     func testRawValuesArePinned() {
@@ -26,6 +26,7 @@ final class KeychainServiceKeyTests: XCTestCase {
         XCTAssertEqual(KeychainService.Key.awsAccessKeyId.rawValue, "com.tp7sync.aws.accesskeyid")
         XCTAssertEqual(KeychainService.Key.awsSecretAccessKey.rawValue, "com.tp7sync.aws.secretaccesskey")
         XCTAssertEqual(KeychainService.Key.openRouterAPIKey.rawValue, "com.tp7sync.openrouter.apikey")
+        XCTAssertEqual(KeychainService.Key.customAIAPIKey.rawValue, "com.tp7sync.customai.apikey")
         XCTAssertEqual(KeychainService.Key.notionAPIKey.rawValue, "com.tp7sync.notion.apikey")
     }
 
