@@ -101,7 +101,7 @@ struct OnboardingCompleteView: View {
             .clipShape(RoundedRectangle(cornerRadius: 10))
 
             // Note about settings
-            Text("You can change any of these settings later in Preferences.")
+            Text("You can change any of these later in Settings.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
