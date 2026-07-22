@@ -156,8 +156,8 @@ After setup, **watching/syncing TP-7 recordings is enabled by default** (you can
 
 1. Sign up at [elevenlabs.io](https://elevenlabs.io)
 2. Go to your profile and copy your API key
-3. In TP-7 VoiceSync, go to **Settings > API Keys**
-4. Enter your ElevenLabs API key and click "Validate"
+3. In TP-7 VoiceSync, go to **Settings > Transcription**
+4. Enter your ElevenLabs API key and click "Verify"
 
 ### Step 3: Configure Storage (Optional)
 
@@ -167,8 +167,8 @@ You can skip this step — recordings will be stored in a local folder. If you w
 2. Create an IAM user with S3 access (recommended policy: `AmazonS3FullAccess` or a custom policy for your bucket)
 3. Generate an Access Key ID and Secret Access Key for the IAM user
 4. In TP-7 VoiceSync, go to **Settings > Storage** and enter your bucket name, region, and prefix
-5. Go to **Settings > API Keys** and enter your AWS Access Key ID and Secret Access Key
-6. Back in **Settings > Storage**, click "Test Connection" to verify
+5. In the same section, enter your AWS Access Key ID and Secret Access Key
+6. Click "Test Connection" to verify
 
 ### Step 4: Set Up OpenRouter (Optional)
 
@@ -176,7 +176,7 @@ OpenRouter provides LLM access for generating intelligent titles and summaries.
 
 1. Sign up at [openrouter.ai](https://openrouter.ai)
 2. Get your API key from the dashboard
-3. In TP-7 VoiceSync, go to **Settings > API Keys**
+3. In TP-7 VoiceSync, go to **Settings > Enhancement**
 4. Enter your OpenRouter API key
 5. Go to **Settings > Transcription** and select your preferred model
 
@@ -280,8 +280,7 @@ Each transcript includes:
 
 ### Upload Fails
 
-- Verify your S3 bucket settings in **Settings > Storage**
-- Verify your AWS credentials in **Settings > API Keys**
+- Verify your S3 bucket settings and AWS credentials in **Settings > Storage**
 - Check that your IAM user has permission to write to the bucket
 - Ensure you have internet connectivity
 - Try the "Test Connection" button in Storage settings
@@ -289,7 +288,7 @@ Each transcript includes:
 ### Transcription Fails
 
 - **Parakeet / WhisperKit**: Make sure the model is downloaded (check **Settings > Transcription** for status)
-- **ElevenLabs**: Verify your API key in **Settings > API Keys** and check your account balance
+- **ElevenLabs**: Verify your API key in **Settings > Transcription** and check your account balance
 - Ensure the recording uploaded successfully to S3 first (if using ElevenLabs)
 
 ### Model Won't Download
