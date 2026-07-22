@@ -13,7 +13,10 @@ import Foundation
 import IOKit
 import os
 
-final class USBDeviceMonitor {
+/// All mutable IOKit state is confined to `queue`. `@unchecked Sendable` is
+/// safe because start, stop, event handling, and destruction serialize access
+/// through that queue.
+nonisolated final class USBDeviceMonitor: @unchecked Sendable {
     private let vendorID: Int
     private let productID: Int
     /// Invoked on `queue` whenever a matching device is attached or detached.
@@ -67,7 +70,7 @@ final class USBDeviceMonitor {
 
     deinit {
         // stop() is expected before dealloc; this is a best-effort backstop.
-        teardown()
+        queue.sync { teardown() }
     }
 
     private func configure() {
