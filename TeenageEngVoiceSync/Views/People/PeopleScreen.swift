@@ -7,7 +7,11 @@ struct PeopleScreen: View {
     @Environment(AppState.self) private var appState
     @Environment(\.modelContext) private var modelContext
 
-    @Query(sort: \Person.createdAt) private var persons: [Person]
+    /// People to display — already filtered by the section's search text.
+    let persons: [Person]
+    /// True when a search query is active, distinguishing "no matches" from
+    /// "no people yet" in the empty state.
+    var isSearching: Bool = false
 
     @Binding var selectedPerson: Person?
     @State private var showAddPerson = false
@@ -33,11 +37,15 @@ struct PeopleScreen: View {
         }
         .overlay {
             if persons.isEmpty {
-                ContentUnavailableView(
-                    "No People",
-                    systemImage: "person.2",
-                    description: Text("Add people to label who's speaking in recordings.")
-                )
+                if isSearching {
+                    ContentUnavailableView.search
+                } else {
+                    ContentUnavailableView(
+                        "No People",
+                        systemImage: "person.2",
+                        description: Text("Add people to label who's speaking in recordings.")
+                    )
+                }
             }
         }
     }

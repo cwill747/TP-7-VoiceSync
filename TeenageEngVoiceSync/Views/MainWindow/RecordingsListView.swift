@@ -12,6 +12,9 @@ struct RecordingsListView: View {
     @Environment(AppState.self) private var appState
 
     let recordings: [Recording]
+    /// True when a search query is active, distinguishing "no matches" from
+    /// "no recordings synced yet" in the empty state.
+    var isSearching: Bool = false
     @Binding var selectedRecording: Recording?
     @Binding var selectedRecordings: Set<Recording>
 
@@ -54,11 +57,15 @@ struct RecordingsListView: View {
         }
         .overlay {
             if recordings.isEmpty {
-                ContentUnavailableView(
-                    "No Recordings",
-                    systemImage: "waveform.slash",
-                    description: Text("Connect your TP-7 to sync recordings.")
-                )
+                if isSearching {
+                    ContentUnavailableView.search
+                } else {
+                    ContentUnavailableView(
+                        "No Recordings",
+                        systemImage: "waveform.slash",
+                        description: Text("Connect your TP-7 to sync recordings.")
+                    )
+                }
             }
         }
         .onChange(of: selectedRecordings) { _, selection in

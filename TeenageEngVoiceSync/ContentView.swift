@@ -98,12 +98,17 @@ struct ContentView: View {
             case .recordings:
                 RecordingsListView(
                     recordings: filteredRecordings,
+                    isSearching: ContextualSearch.isActive(searchText),
                     selectedRecording: $selectedRecording,
                     selectedRecordings: $selectedRecordings
                 )
                 .navigationSplitViewColumnWidth(min: 250, ideal: 300, max: 400)
             case .people:
-                PeopleScreen(selectedPerson: $selectedPerson)
+                PeopleScreen(
+                    persons: filteredPersons,
+                    isSearching: ContextualSearch.isActive(searchText),
+                    selectedPerson: $selectedPerson
+                )
             case .settings:
                 List(SettingsSection.allCases, selection: $selectedSettingsSection) { section in
                     Label(section.label, systemImage: section.systemImage)
@@ -137,7 +142,7 @@ struct ContentView: View {
                 settingsDetailView(for: selectedSettingsSection)
             }
         }
-        .searchable(text: $searchText, prompt: "Search recordings")
+        .contextualSearchable(text: $searchText, prompt: selectedSection.searchPrompt)
         .toolbar {
             ToolbarItem(placement: .status) {
                 StatusToolbarItem(appState: appState)
@@ -149,6 +154,10 @@ struct ContentView: View {
             selectedRecording = nil
             selectedRecordings.removeAll()
             selectedPerson = nil
+            // Explicit rule: search is section-scoped and does not carry over.
+            // Clearing on switch guarantees text typed in one section never
+            // filters another. See ContextualSearchTests.
+            searchText = ""
         }
         .onChange(of: appState.navigationTarget) { _, target in
             if let target {
@@ -184,12 +193,11 @@ struct ContentView: View {
     }
 
     private var filteredRecordings: [Recording] {
-        guard !searchText.isEmpty else { return recordings }
-        return recordings.filter { recording in
-            recording.displayTitle.localizedCaseInsensitiveContains(searchText) ||
-            recording.filename.localizedCaseInsensitiveContains(searchText) ||
-            (recording.transcriptionText?.localizedCaseInsensitiveContains(searchText) ?? false)
-        }
+        ContextualSearch.filter(recordings: recordings, query: searchText)
+    }
+
+    private var filteredPersons: [Person] {
+        ContextualSearch.filter(persons: persons, query: searchText)
     }
 }
 
