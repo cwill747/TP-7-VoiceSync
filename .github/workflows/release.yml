@@ -195,7 +195,7 @@ jobs:
             **Note:** On first launch, you may need to right-click and select "Open" to bypass Gatekeeper.
 
             ## Requirements
-            - macOS 26.0 (Tahoe) or later
+            - macOS 26.0 (Tahoe) or later on Apple Silicon (Intel Macs are not supported)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
