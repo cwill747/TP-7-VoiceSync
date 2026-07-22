@@ -18,7 +18,6 @@ struct RecordingDetailView: View {
     @State private var isRetranscribing = false
     @State private var isSendingToDestinations = false
     @State private var destinationStatus: DestinationStatus?
-    @State private var showRawTranscript = false
 
     enum DestinationStatus {
         case success
@@ -203,9 +202,6 @@ struct RecordingDetailView: View {
                 }
             }
         }
-        .onChange(of: recording.persistentModelID) { _, _ in
-            showRawTranscript = false
-        }
     }
 
     private var pendingStatus: (text: String, systemImage: String)? {
@@ -252,57 +248,7 @@ struct RecordingDetailView: View {
                                 .foregroundStyle(.secondary)
                         }
                     } else {
-                    // Show diarized correction view if segment data is available
-                    if let segData = recording.speakerSegmentsData,
-                       let segments = try? JSONDecoder().decode([StoredSpeakerSegment].self, from: segData),
-                       !segments.isEmpty {
-                        if let cleaned = recording.formattedTranscriptionText {
-                            VStack(alignment: .leading, spacing: 6) {
-                                Picker("Transcript", selection: $showRawTranscript) {
-                                    Text("Cleaned up").tag(false)
-                                    Text("Original").tag(true)
-                                }
-                                .pickerStyle(.segmented)
-                                .frame(maxWidth: 220)
-
-                                if showRawTranscript {
-                                    DiarizedTranscriptView(
-                                        recording: recording,
-                                        segments: segments
-                                    )
-                                } else {
-                                    PlainTranscriptView(
-                                        text: cleaned,
-                                        language: recording.transcriptionLanguage
-                                    )
-                                }
-                            }
-                        } else {
-                            DiarizedTranscriptView(
-                                recording: recording,
-                                segments: segments
-                            )
-                        }
-                    } else if let cleaned = recording.formattedTranscriptionText {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Picker("Transcript", selection: $showRawTranscript) {
-                                Text("Cleaned up").tag(false)
-                                Text("Original").tag(true)
-                            }
-                            .pickerStyle(.segmented)
-                            .frame(maxWidth: 220)
-
-                            PlainTranscriptView(
-                                text: showRawTranscript ? (recording.transcriptionText ?? "") : cleaned,
-                                language: recording.transcriptionLanguage
-                            )
-                        }
-                    } else {
-                        PlainTranscriptView(
-                            text: recording.transcriptionText ?? "",
-                            language: recording.transcriptionLanguage
-                        )
-                    }
+                        TranscriptSection(recording: recording)
                     }
 
                     if let notesData = recording.overdubNotesData,
@@ -372,25 +318,293 @@ struct RecordingDetailView: View {
     }
 }
 
+// MARK: - Transcript section (reading + search + actions)
+
+/// Per-block search state threaded into the plain/diarized renderers so both
+/// highlight matches and expose scroll anchors the same way.
+struct TranscriptSearchContext: Equatable {
+    var query: String = ""
+    /// Index of the block that owns the currently-focused match.
+    var activeBlock: Int?
+    /// Match index *within* `activeBlock` to emphasize.
+    var activeLocalMatch: Int?
+    /// Stable prefix for each block's scroll-anchor id (`"<prefix>-<index>"`).
+    var anchorPrefix: String = "block"
+
+    func anchorID(for block: Int) -> String { "\(anchorPrefix)-\(block)" }
+
+    func activeMatch(for block: Int) -> Int? {
+        activeBlock == block ? activeLocalMatch : nil
+    }
+
+    var activeAnchorID: String? {
+        activeBlock.map(anchorID(for:))
+    }
+}
+
+/// Wraps a completed transcript with reading-friendly layout plus Copy All and
+/// Find affordances. Owns the Cleaned/Original toggle and search state so the
+/// window can stay a plain `ScrollView` while search still scrolls to matches.
+struct TranscriptSection: View {
+    let recording: Recording
+
+    @State private var showOriginal = false
+    @State private var query = ""
+    @State private var activeMatch = 0
+    @State private var didCopy = false
+    @FocusState private var searchFocused: Bool
+
+    private var segments: [StoredSpeakerSegment] {
+        guard let data = recording.speakerSegmentsData,
+              let decoded = try? JSONDecoder().decode([StoredSpeakerSegment].self, from: data)
+        else { return [] }
+        return decoded
+    }
+
+    private var cleaned: String? { recording.formattedTranscriptionText }
+
+    /// Whether the diarized turn-by-turn view is what's on screen.
+    private var showsDiarized: Bool {
+        guard !segments.isEmpty else { return false }
+        // With no cleaned transcript the diarized view is the only representation;
+        // otherwise it's the "Original" side of the toggle.
+        return cleaned == nil || showOriginal
+    }
+
+    /// Whether a Cleaned/Original toggle is meaningful for this recording.
+    private var hasToggle: Bool { cleaned != nil }
+
+    /// The plain text currently shown when not in diarized mode.
+    private var plainText: String {
+        if let cleaned, !showOriginal { return cleaned }
+        return recording.transcriptionText ?? cleaned ?? ""
+    }
+
+    /// Block texts backing the current view, in display order.
+    private var blocks: [String] {
+        showsDiarized
+            ? segments.map(\.text)
+            : TranscriptLayout.paragraphs(from: plainText)
+    }
+
+    /// Plain text to place on the pasteboard for Copy All. Diarized turns are
+    /// prefixed with their start time so the copy carries timeline context.
+    private var copyText: String {
+        guard showsDiarized else { return plainText }
+        return segments
+            .map { segment in
+                let label = segment.assignedPersonName ?? segment.rawSpeakerId
+                return "[\(Self.timestamp(segment.startTime))] \(label): \(segment.text)"
+            }
+            .joined(separator: "\n\n")
+    }
+
+    private static func timestamp(_ time: TimeInterval) -> String {
+        let total = Int(time.rounded())
+        return String(format: "%d:%02d", total / 60, total % 60)
+    }
+
+    private var matchMap: TranscriptMatchMap {
+        TranscriptMatchMap(blocks: blocks, query: query)
+    }
+
+    private var searchContext: TranscriptSearchContext {
+        let map = matchMap
+        let location = map.location(of: activeMatch)
+        return TranscriptSearchContext(
+            query: query,
+            activeBlock: location?.block,
+            activeLocalMatch: location?.localMatch,
+            anchorPrefix: showsDiarized ? "seg" : "para"
+        )
+    }
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            VStack(alignment: .leading, spacing: 10) {
+                controls
+                    .id("transcript-controls")
+
+                transcriptBody
+            }
+            .onChange(of: query) { _, _ in activeMatch = 0 }
+            .onChange(of: activeMatch) { _, _ in
+                guard let target = searchContext.activeAnchorID else { return }
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    proxy.scrollTo(target, anchor: .center)
+                }
+            }
+            .onChange(of: recording.persistentModelID) { _, _ in
+                showOriginal = false
+                query = ""
+                activeMatch = 0
+                searchFocused = false
+            }
+            .background {
+                // Keyboard affordances remain reachable even when the top of the
+                // transcript is scrolled off: ⌘F focuses Find, ⌘⇧C copies all.
+                Group {
+                    Button("") {
+                        withAnimation { proxy.scrollTo("transcript-controls", anchor: .top) }
+                        searchFocused = true
+                    }
+                    .keyboardShortcut("f", modifiers: .command)
+
+                    Button("", action: copyAll)
+                        .keyboardShortcut("c", modifiers: [.command, .shift])
+                }
+                .opacity(0)
+                .frame(width: 0, height: 0)
+                .accessibilityHidden(true)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var controls: some View {
+        HStack(spacing: 12) {
+            if hasToggle {
+                Picker("Transcript", selection: $showOriginal) {
+                    Text("Cleaned up").tag(false)
+                    Text("Original").tag(true)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(maxWidth: 220)
+            }
+
+            Spacer(minLength: 0)
+
+            searchField
+
+            Button(action: copyAll) {
+                Label(didCopy ? "Copied" : "Copy All",
+                      systemImage: didCopy ? "checkmark" : "doc.on.doc")
+            }
+            .help("Copy the full transcript (⌘⇧C)")
+            .disabled(copyText.isEmpty)
+        }
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+            TextField("Find", text: $query)
+                .textFieldStyle(.plain)
+                .frame(minWidth: 120, maxWidth: 200)
+                .focused($searchFocused)
+                .onSubmit { goToMatch(offset: 1) }
+
+            if !query.isEmpty {
+                let total = matchMap.total
+                Text(total == 0 ? "No results" : "\(activeMatch + 1) of \(total)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+
+                Button { goToMatch(offset: -1) } label: {
+                    Image(systemName: "chevron.up")
+                }
+                .disabled(total == 0)
+                .help("Previous match")
+
+                Button { goToMatch(offset: 1) } label: {
+                    Image(systemName: "chevron.down")
+                }
+                .disabled(total == 0)
+                .help("Next match (Return)")
+
+                Button {
+                    query = ""
+                    searchFocused = false
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                }
+                .help("Clear search")
+            }
+        }
+        .buttonStyle(.borderless)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(.quaternary, in: Capsule())
+        .frame(maxWidth: 360)
+    }
+
+    @ViewBuilder
+    private var transcriptBody: some View {
+        if showsDiarized {
+            DiarizedTranscriptView(
+                recording: recording,
+                segments: segments,
+                search: searchContext
+            )
+        } else {
+            PlainTranscriptView(
+                text: plainText,
+                language: recording.transcriptionLanguage,
+                search: searchContext
+            )
+        }
+    }
+
+    private func goToMatch(offset: Int) {
+        let total = matchMap.total
+        guard total > 0 else { return }
+        activeMatch = ((activeMatch + offset) % total + total) % total
+    }
+
+    private func copyAll() {
+        guard !copyText.isEmpty else { return }
+        #if canImport(AppKit)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(copyText, forType: .string)
+        #endif
+        didCopy = true
+        Task {
+            try? await Task.sleep(for: .seconds(1.5))
+            await MainActor.run { didCopy = false }
+        }
+    }
+}
+
 // MARK: - Plain transcript (no diarization)
 
 struct PlainTranscriptView: View {
     let text: String
     let language: String?
+    var search: TranscriptSearchContext = TranscriptSearchContext()
+
+    private var paragraphs: [String] { TranscriptLayout.paragraphs(from: text) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 12) {
             if let lang = language {
                 Text("Language: \(lang)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            Text(text)
-                .textSelection(.enabled)
+
+            if paragraphs.isEmpty {
+                Text("No transcript text")
+                    .foregroundStyle(.secondary)
+                    .italic()
+            } else {
+                ForEach(Array(paragraphs.enumerated()), id: \.offset) { index, paragraph in
+                    Text(TranscriptSearch.highlighted(
+                        paragraph,
+                        query: search.query,
+                        activeMatch: search.activeMatch(for: index)
+                    ))
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .id(search.anchorID(for: index))
+                }
+            }
         }
         .padding()
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: TranscriptLayout.maxReadingWidth, alignment: .leading)
         .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -432,6 +646,7 @@ struct OverdubNotesView: View {
 struct DiarizedTranscriptView: View {
     let recording: Recording
     let segments: [StoredSpeakerSegment]
+    var search: TranscriptSearchContext
 
     @Environment(\.modelContext) private var modelContext
     @Environment(AppState.self) private var appState
@@ -439,9 +654,14 @@ struct DiarizedTranscriptView: View {
 
     @State private var localSegments: [StoredSpeakerSegment]
 
-    init(recording: Recording, segments: [StoredSpeakerSegment]) {
+    init(
+        recording: Recording,
+        segments: [StoredSpeakerSegment],
+        search: TranscriptSearchContext = TranscriptSearchContext()
+    ) {
         self.recording = recording
         self.segments = segments
+        self.search = search
         self._localSegments = State(initialValue: segments)
     }
 
@@ -460,21 +680,26 @@ struct DiarizedTranscriptView: View {
             }
             .padding(.bottom, 6)
 
-            ForEach($localSegments) { $segment in
+            ForEach(Array(localSegments.enumerated()), id: \.element.id) { index, _ in
                 SpeakerSegmentView(
-                    segment: $segment,
+                    segment: $localSegments[index],
                     persons: persons,
+                    query: search.query,
+                    activeMatch: search.activeMatch(for: index),
                     onReassign: { personId, personName in
-                        reassign(segment: &segment, personId: personId, personName: personName)
+                        reassign(segment: &localSegments[index], personId: personId, personName: personName)
                     },
                     onNewPerson: { name in
-                        createAndAssign(segment: &segment, name: name)
+                        createAndAssign(segment: &localSegments[index], name: name)
                     }
                 )
+                .id(search.anchorID(for: index))
             }
         }
         .padding()
+        .frame(maxWidth: TranscriptLayout.maxReadingWidth, alignment: .leading)
         .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+        .frame(maxWidth: .infinity, alignment: .leading)
         .onChange(of: recording.persistentModelID) { _, _ in
             // Reset local state when the selected recording changes so stale
             // segments from the previous recording are never shown or persisted.
@@ -608,6 +833,8 @@ struct DiarizedTranscriptView: View {
 struct SpeakerSegmentView: View {
     @Binding var segment: StoredSpeakerSegment
     let persons: [Person]
+    var query: String = ""
+    var activeMatch: Int?
     let onReassign: (String, String) -> Void
     let onNewPerson: (String) -> Void
 
@@ -653,9 +880,13 @@ struct SpeakerSegmentView: View {
                     .foregroundStyle(.secondary)
             }
 
-            Text(segment.text)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
+            Text(TranscriptSearch.highlighted(
+                segment.text,
+                query: query,
+                activeMatch: activeMatch
+            ))
+            .textSelection(.enabled)
+            .fixedSize(horizontal: false, vertical: true)
         }
         .padding(.vertical, 8)
         .overlay(alignment: .bottom) {
@@ -826,3 +1057,81 @@ struct AudioPlayerView: View {
     )
     .modelContainer(for: [Recording.self, Person.self, VoiceSample.self], inMemory: true)
 }
+
+#if DEBUG
+/// A multi-paragraph, multi-page transcript used to exercise the reading and
+/// search layout without a real recording.
+enum TranscriptPreviewFixture {
+    static let multiPageText: String = {
+        let paragraph = """
+        We opened the session by walking through last quarter's numbers and where \
+        the projections landed versus what actually shipped. The headline is that \
+        adoption outpaced the forecast, but support load grew with it, so the net \
+        picture is more nuanced than the top-line figure suggests.
+        """
+        // Repeat with distinct markers so search has scattered, countable matches.
+        return (1...12)
+            .map { "Section \($0). \(paragraph)" }
+            .joined(separator: "\n\n")
+    }()
+
+    static let segments: [StoredSpeakerSegment] = (1...8).map { index -> StoredSpeakerSegment in
+        let start = TimeInterval(index * 20)
+        let speaker = index.isMultiple(of: 2) ? "Speaker 2" : "Speaker 1"
+        let turnText = "Turn \(index): the projections landed close to plan, and the support load is the part we should keep watching next quarter."
+        return StoredSpeakerSegment(
+            startTime: start,
+            endTime: start + 18,
+            rawSpeakerId: speaker,
+            text: turnText,
+            embedding: []
+        )
+    }
+}
+
+#Preview("Plain — multi-page") {
+    ScrollView {
+        PlainTranscriptView(text: TranscriptPreviewFixture.multiPageText, language: "en")
+            .padding()
+    }
+    .frame(width: 900, height: 600)
+}
+
+#Preview("Transcript section — searchable") {
+    let recording = Recording(
+        filename: "long_meeting.wav",
+        localPath: "/path/to/file.wav",
+        fileSize: 1024 * 1024 * 40,
+        recordedAt: Date()
+    )
+    recording.transcriptionText = TranscriptPreviewFixture.multiPageText
+    recording.transcriptionLanguage = "en"
+
+    return ScrollView {
+        TranscriptSection(recording: recording)
+            .padding()
+    }
+    .frame(width: 900, height: 600)
+    .environment(AppState())
+    .modelContainer(for: [Recording.self, Person.self, VoiceSample.self], inMemory: true)
+}
+
+#Preview("Transcript section — diarized") {
+    let recording = Recording(
+        filename: "interview.wav",
+        localPath: "/path/to/file.wav",
+        fileSize: 1024 * 1024 * 20,
+        recordedAt: Date()
+    )
+    recording.transcriptionText = StoredSpeakerSegment.transcript(from: TranscriptPreviewFixture.segments)
+    recording.speakerSegmentsData = try? JSONEncoder().encode(TranscriptPreviewFixture.segments)
+
+    return ScrollView {
+        TranscriptSection(recording: recording)
+            .padding()
+    }
+    .frame(width: 900, height: 600)
+    .environment(AppState())
+    .modelContainer(for: [Recording.self, Person.self, VoiceSample.self], inMemory: true)
+}
+#endif
