@@ -8,15 +8,12 @@
 import SwiftUI
 
 struct OnboardingOpenRouterView: View {
+    @Bindable var draft: OnboardingDraft
     @Binding var isConfigured: Bool
 
-    @AppStorage("openrouter.enabled") private var llmEnabled = false
-
-    @State private var apiKey = ""
     @State private var showKey = false
     @State private var isVerifying = false
     @State private var verificationStatus: VerificationStatus?
-    @State private var isLoading = true
 
     private let openRouterService = OpenRouterService()
 
@@ -50,10 +47,10 @@ struct OnboardingOpenRouterView: View {
 
                 HStack {
                     if showKey {
-                        TextField("Enter your OpenRouter API key", text: $apiKey)
+                        TextField("Enter your OpenRouter API key", text: $draft.openRouterAPIKey)
                             .textFieldStyle(.roundedBorder)
                     } else {
-                        SecureField("Enter your OpenRouter API key", text: $apiKey)
+                        SecureField("Enter your OpenRouter API key", text: $draft.openRouterAPIKey)
                             .textFieldStyle(.roundedBorder)
                     }
 
@@ -64,7 +61,7 @@ struct OnboardingOpenRouterView: View {
                     }
                     .buttonStyle(.borderless)
                 }
-                .disabled(isLoading)
+                .disabled(draft.isSeeding)
 
                 Link("Get an API key from OpenRouter", destination: URL(string: "https://openrouter.ai/settings/keys")!)
                     .font(.caption)
@@ -81,7 +78,7 @@ struct OnboardingOpenRouterView: View {
                         Task { await verifyAndSave() }
                     }
                     .buttonStyle(.bordered)
-                    .disabled(apiKey.isEmpty || isVerifying)
+                    .disabled(draft.openRouterAPIKey.isEmpty || isVerifying)
 
                     if isVerifying {
                         ProgressView()
@@ -96,11 +93,11 @@ struct OnboardingOpenRouterView: View {
 
             // Enable toggle
             if isConfigured {
-                Toggle("Enable AI-powered titles", isOn: $llmEnabled)
+                Toggle("Enable AI-powered titles", isOn: $draft.openRouterEnabled)
             }
 
             // Info text
-            Text("Your API key is stored securely in your Mac's Keychain. You can select your preferred model in Settings.")
+            Text("Your API key is saved securely to your Mac's Keychain when you finish setup. You can select your preferred model in Settings.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -108,7 +105,10 @@ struct OnboardingOpenRouterView: View {
         .padding(.horizontal, 48)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task {
-            await loadExistingKey()
+            // Reflect an existing key seeded into the draft.
+            if !draft.openRouterAPIKey.isEmpty {
+                isConfigured = true
+            }
         }
     }
 
@@ -126,36 +126,21 @@ struct OnboardingOpenRouterView: View {
         }
     }
 
-    private func loadExistingKey() async {
-        isLoading = true
-        defer { isLoading = false }
-
-        do {
-            if let existingKey = try await KeychainService.shared.retrieve(for: OpenRouterService.activeKeychainKey()),
-               !existingKey.isEmpty {
-                apiKey = existingKey
-                isConfigured = true
-            }
-        } catch {
-            // Key not found, that's fine
-        }
-    }
-
     private func verifyAndSave() async {
         isVerifying = true
         defer { isVerifying = false }
 
         do {
-            let models = try await openRouterService.fetchModels(apiKey: apiKey)
+            let models = try await openRouterService.fetchModels(apiKey: draft.openRouterAPIKey)
             if models.isEmpty {
                 verificationStatus = .error("No models returned - key may be invalid")
                 return
             }
 
-            try await KeychainService.shared.save(apiKey, for: OpenRouterService.activeKeychainKey())
+            // Stage the verified key + enabled flag in the draft; persisted on completion.
             verificationStatus = .success("Valid! \(models.count) models available")
             isConfigured = true
-            llmEnabled = true
+            draft.openRouterEnabled = true
 
             // Clear success message after delay
             Task {
@@ -172,6 +157,6 @@ struct OnboardingOpenRouterView: View {
 }
 
 #Preview {
-    OnboardingOpenRouterView(isConfigured: .constant(false))
+    OnboardingOpenRouterView(draft: OnboardingDraft(), isConfigured: .constant(false))
         .frame(width: 600, height: 440)
 }

@@ -8,19 +8,12 @@
 import SwiftUI
 
 struct OnboardingTranscriptionView: View {
+    @Bindable var draft: OnboardingDraft
     @Binding var isConfigured: Bool
 
-    @AppStorage("transcription.provider") private var transcriptionProviderRaw = TranscriptionProviderKind.elevenLabs.rawValue
-    @AppStorage("transcription.enabled") private var transcriptionEnabled = false
-    @AppStorage("whisperkit.model") private var whisperKitModel = "base"
-    @AppStorage("s3.backupAfterTranscription") private var whisperKitBackupToS3 = true
-    @AppStorage("s3.enabled") private var s3Enabled = false
-
-    @State private var apiKey = ""
     @State private var showKey = false
     @State private var isVerifying = false
     @State private var verificationStatus: VerificationStatus?
-    @State private var isLoading = true
 
     @State private var whisperKitDownloadState: WhisperKitDownloadState = .notDownloaded
     @State private var whisperKitDownloadProgress = 0.0
@@ -41,16 +34,11 @@ struct OnboardingTranscriptionView: View {
         case ready
     }
 
-    private var transcriptionProvider: TranscriptionProviderKind {
-        TranscriptionProviderKind(rawValue: transcriptionProviderRaw) ?? .elevenLabs
-    }
-
     private var transcriptionProviderBinding: Binding<TranscriptionProviderKind> {
         Binding(
-            get: { transcriptionProvider },
+            get: { draft.transcriptionProvider },
             set: { newValue in
-                transcriptionProviderRaw = newValue.rawValue
-                UserDefaults.standard.synchronize()
+                draft.transcriptionProvider = newValue
                 refreshWhisperKitStatus()
                 updateConfiguredState()
             }
@@ -89,20 +77,20 @@ struct OnboardingTranscriptionView: View {
                     .pickerStyle(.segmented)
                 }
 
-                if transcriptionProvider == .elevenLabs {
+                if draft.transcriptionProvider == .elevenLabs {
                     elevenLabsSection
                 }
 
-                if transcriptionProvider == .whisperKit {
+                if draft.transcriptionProvider == .whisperKit {
                     whisperKitSection
                 }
 
-                if transcriptionProvider == .parakeetUnified {
+                if draft.transcriptionProvider == .parakeetUnified {
                     parakeetUnifiedSection
                 }
 
                 if isConfigured {
-                    Toggle("Enable automatic transcription", isOn: $transcriptionEnabled)
+                    Toggle("Enable automatic transcription", isOn: $draft.transcriptionEnabled)
                 }
             }
             .padding(.horizontal, 48)
@@ -110,8 +98,6 @@ struct OnboardingTranscriptionView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task {
-            ensureDefaults()
-            await loadExistingKey()
             refreshWhisperKitStatus()
             refreshParakeetUnifiedStatus()
             updateConfiguredState()
@@ -125,10 +111,10 @@ struct OnboardingTranscriptionView: View {
 
             HStack {
                 if showKey {
-                    TextField("Enter your ElevenLabs API key", text: $apiKey)
+                    TextField("Enter your ElevenLabs API key", text: $draft.elevenLabsAPIKey)
                         .textFieldStyle(.roundedBorder)
                 } else {
-                    SecureField("Enter your ElevenLabs API key", text: $apiKey)
+                    SecureField("Enter your ElevenLabs API key", text: $draft.elevenLabsAPIKey)
                         .textFieldStyle(.roundedBorder)
                 }
 
@@ -139,7 +125,7 @@ struct OnboardingTranscriptionView: View {
                 }
                 .buttonStyle(.borderless)
             }
-            .disabled(isLoading)
+            .disabled(draft.isSeeding)
 
             Link("Get an API key from ElevenLabs", destination: URL(string: "https://elevenlabs.io/app/settings/api-keys")!)
                 .font(.caption)
@@ -149,7 +135,7 @@ struct OnboardingTranscriptionView: View {
                     Task { await verifyAndSave() }
                 }
                 .buttonStyle(.bordered)
-                .disabled(apiKey.isEmpty || isVerifying)
+                .disabled(draft.elevenLabsAPIKey.isEmpty || isVerifying)
 
                 if isVerifying {
                     ProgressView()
@@ -161,7 +147,7 @@ struct OnboardingTranscriptionView: View {
                 statusLabel(for: status)
             }
 
-            Text("Your API key is stored securely in your Mac's Keychain.")
+            Text("Your API key is saved securely to your Mac's Keychain when you finish setup.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -172,17 +158,17 @@ struct OnboardingTranscriptionView: View {
             Text("WhisperKit Model")
                 .font(.headline)
 
-            Picker("Model", selection: $whisperKitModel) {
+            Picker("Model", selection: $draft.whisperKitModel) {
                 ForEach(WhisperKitService.availableModels) { model in
                     Text(model.name).tag(model.id)
                 }
             }
-            .onChange(of: whisperKitModel) { _, _ in
+            .onChange(of: draft.whisperKitModel) { _, _ in
                 refreshWhisperKitStatus()
                 updateConfiguredState()
             }
 
-            if let model = WhisperKitService.availableModels.first(where: { $0.id == whisperKitModel }) {
+            if let model = WhisperKitService.availableModels.first(where: { $0.id == draft.whisperKitModel }) {
                 Text(model.detailLabel)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -221,8 +207,8 @@ struct OnboardingTranscriptionView: View {
                 }
             }
 
-            if s3Enabled {
-                Toggle("Backup audio to S3", isOn: $whisperKitBackupToS3)
+            if draft.s3Enabled {
+                Toggle("Backup audio to S3", isOn: $draft.backupAfterTranscription)
             }
 
             Text("Runs locally using WhisperKit. Download a model for offline use.")
@@ -269,8 +255,8 @@ struct OnboardingTranscriptionView: View {
                 }
             }
 
-            if s3Enabled {
-                Toggle("Backup audio to S3", isOn: $whisperKitBackupToS3)
+            if draft.s3Enabled {
+                Toggle("Backup audio to S3", isOn: $draft.backupAfterTranscription)
             }
 
             Text("Runs locally on the Apple Neural Engine with native punctuation and capitalization (English only). First transcription downloads the model if you skip this.")
@@ -293,47 +279,17 @@ struct OnboardingTranscriptionView: View {
         }
     }
 
-    private func ensureDefaults() {
-        let defaults = UserDefaults.standard
-        if defaults.string(forKey: "transcription.provider") == nil {
-            defaults.set(TranscriptionProviderKind.elevenLabs.rawValue, forKey: "transcription.provider")
-        }
-        if defaults.string(forKey: "whisperkit.model") == nil {
-            defaults.set("base", forKey: "whisperkit.model")
-        }
-        if defaults.object(forKey: "s3.backupAfterTranscription") == nil {
-            defaults.set(true, forKey: "s3.backupAfterTranscription")
-        }
-        if defaults.object(forKey: "transcription.enabled") == nil {
-            let legacyEnabled = defaults.bool(forKey: "elevenlabs.enabled")
-            defaults.set(legacyEnabled, forKey: "transcription.enabled")
-        }
-    }
-
-    private func loadExistingKey() async {
-        isLoading = true
-        defer { isLoading = false }
-
-        do {
-            if let existingKey = try await KeychainService.shared.retrieve(for: .elevenLabsAPIKey),
-               !existingKey.isEmpty {
-                apiKey = existingKey
-            }
-        } catch {
-            // Key not found, that's fine
-        }
-    }
-
     private func verifyAndSave() async {
         isVerifying = true
         defer { isVerifying = false }
 
         do {
-            try await ElevenLabsTranscriptionService.validateAPIKey(apiKey)
-            try await KeychainService.shared.save(apiKey, for: .elevenLabsAPIKey)
-            verificationStatus = .success("API key verified and saved!")
+            // Validate against the live API, but stage the key in the draft; it is
+            // written to the Keychain only when onboarding completes.
+            try await ElevenLabsTranscriptionService.validateAPIKey(draft.elevenLabsAPIKey)
+            verificationStatus = .success("API key verified!")
             isConfigured = true
-            transcriptionEnabled = true
+            draft.transcriptionEnabled = true
 
             Task {
                 try? await Task.sleep(for: .seconds(3))
@@ -349,7 +305,7 @@ struct OnboardingTranscriptionView: View {
 
     private func refreshWhisperKitStatus() {
         whisperKitDownloadError = nil
-        if WhisperKitService.cachedModelPath(for: whisperKitModel) != nil {
+        if WhisperKitService.cachedModelPath(for: draft.whisperKitModel) != nil {
             whisperKitDownloadState = .ready
         } else {
             whisperKitDownloadState = .notDownloaded
@@ -357,9 +313,9 @@ struct OnboardingTranscriptionView: View {
     }
 
     private func updateConfiguredState() {
-        switch transcriptionProvider {
+        switch draft.transcriptionProvider {
         case .elevenLabs:
-            isConfigured = !apiKey.isEmpty
+            isConfigured = !draft.elevenLabsAPIKey.isEmpty
         case .whisperKit:
             isConfigured = whisperKitDownloadState == .ready
         case .parakeet:
@@ -376,16 +332,16 @@ struct OnboardingTranscriptionView: View {
 
         Task {
             do {
-                let modelURL = try await WhisperKitService.downloadModel(variant: whisperKitModel) { progress in
+                let modelURL = try await WhisperKitService.downloadModel(variant: draft.whisperKitModel) { progress in
                     Task { @MainActor in
                         whisperKitDownloadProgress = progress.fractionCompleted
                     }
                 }
-                WhisperKitService.storeDownloadedModel(path: modelURL, variant: whisperKitModel)
+                WhisperKitService.storeDownloadedModel(path: modelURL, variant: draft.whisperKitModel)
                 await MainActor.run {
                     whisperKitDownloadState = .ready
                     isConfigured = true
-                    transcriptionEnabled = true
+                    draft.transcriptionEnabled = true
                 }
             } catch {
                 await MainActor.run {
@@ -417,7 +373,7 @@ struct OnboardingTranscriptionView: View {
                 await MainActor.run {
                     parakeetUnifiedDownloadState = .ready
                     isConfigured = true
-                    transcriptionEnabled = true
+                    draft.transcriptionEnabled = true
                 }
             } catch {
                 await MainActor.run {
@@ -431,6 +387,6 @@ struct OnboardingTranscriptionView: View {
 }
 
 #Preview {
-    OnboardingTranscriptionView(isConfigured: .constant(false))
+    OnboardingTranscriptionView(draft: OnboardingDraft(), isConfigured: .constant(false))
         .frame(width: 600, height: 440)
 }

@@ -35,6 +35,34 @@ nonisolated enum SecurityScopedBookmark {
         return true
     }
 
+    /// Creates security-scoped bookmark data for `url` without persisting anything.
+    /// Returns `nil` when the bookmark can't be created. The setup wizard uses this to
+    /// stage a folder choice in its draft and commit it only when onboarding completes.
+    static func makeBookmarkData(for url: URL) -> Data? {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+
+        do {
+            return try url.bookmarkData(
+                options: .withSecurityScope,
+                includingResourceValuesForKeys: nil,
+                relativeTo: nil
+            )
+        } catch {
+            logger.error("Failed to create staged bookmark: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
+
+    /// Persists a pre-computed bookmark + path together. Counterpart to
+    /// `makeBookmarkData(for:)`: the wizard stages `bookmarkData` during folder
+    /// validation and commits it here only when the user finishes onboarding.
+    static func persistFolderSelection(path: String, bookmarkData: Data, key: String, defaults: UserDefaults = .standard) {
+        defaults.set(bookmarkData, forKey: "\(key).bookmark")
+        defaults.set(path, forKey: key)
+        logger.info("Persisted staged bookmark for \(key, privacy: .public)")
+    }
+
     static func hasBookmark(key: String) -> Bool {
         UserDefaults.standard.data(forKey: "\(key).bookmark") != nil
     }

@@ -9,11 +9,8 @@ import SwiftUI
 import AppKit
 
 struct OnboardingLocalMarkdownFolderView: View {
+    @Bindable var draft: OnboardingDraft
     @Binding var isConfigured: Bool
-
-    @AppStorage("markdown.enabled") private var markdownEnabled = false
-    @AppStorage("markdown.folderPath") private var folderPath = ""
-    @AppStorage("applenotes.enabled") private var appleNotesEnabled = false
 
     @State private var inputPath = ""
     @State private var selectedFolderURL: URL?
@@ -94,9 +91,9 @@ struct OnboardingLocalMarkdownFolderView: View {
         .padding(.horizontal, 48)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
-            // Load existing path
-            if !folderPath.isEmpty {
-                inputPath = folderPath
+            // Reflect a folder already staged in the draft (seeded or chosen earlier).
+            if !draft.markdownFolderPath.isEmpty {
+                inputPath = draft.markdownFolderPath
                 isConfigured = true
             }
         }
@@ -163,20 +160,21 @@ struct OnboardingLocalMarkdownFolderView: View {
             return
         }
 
-        // Save the path and security-scoped bookmark together. Bail out if the
-        // bookmark can't be created rather than enabling a folder we can't reopen.
-        guard SecurityScopedBookmark.saveFolderSelection(url: folderURL, key: "markdown.folderPath") else {
+        // Stage the path and security-scoped bookmark in the draft. Bail out if the
+        // bookmark can't be created rather than staging a folder we can't reopen.
+        // Both are committed to UserDefaults only when onboarding completes.
+        guard let bookmark = SecurityScopedBookmark.makeBookmarkData(for: folderURL) else {
             validationStatus = .error("Couldn't get lasting access to this folder. Click Choose… to grant access.")
             isValidating = false
             return
         }
 
-        // Success - enable markdown. Update the @AppStorage binding so the view
-        // reflects the new path immediately (a direct UserDefaults write to a
-        // dotted key is not observed by @AppStorage).
-        folderPath = folderURL.path
-        markdownEnabled = true
-        appleNotesEnabled = false  // Disable Apple Notes when markdown is enabled
+        // Success - stage markdown in the draft (Apple Notes is disabled when
+        // markdown is chosen).
+        draft.markdownFolderPath = folderURL.path
+        draft.markdownBookmark = bookmark
+        draft.markdownEnabled = true
+        draft.appleNotesEnabled = false
         validationStatus = .success
         isConfigured = true
         isValidating = false
@@ -189,7 +187,7 @@ struct OnboardingLocalMarkdownFolderView: View {
         panel.allowsMultipleSelection = false
         panel.prompt = "Choose"
 
-        let startPath = inputPath.isEmpty ? folderPath : inputPath
+        let startPath = inputPath.isEmpty ? draft.markdownFolderPath : inputPath
         if !startPath.isEmpty {
             panel.directoryURL = URL(fileURLWithPath: NSString(string: startPath).expandingTildeInPath)
         }
@@ -202,6 +200,6 @@ struct OnboardingLocalMarkdownFolderView: View {
 }
 
 #Preview {
-    OnboardingLocalMarkdownFolderView(isConfigured: .constant(false))
+    OnboardingLocalMarkdownFolderView(draft: OnboardingDraft(), isConfigured: .constant(false))
         .frame(width: 600, height: 440)
 }

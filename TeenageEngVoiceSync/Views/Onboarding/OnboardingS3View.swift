@@ -8,24 +8,12 @@
 import SwiftUI
 
 struct OnboardingS3View: View {
+    @Bindable var draft: OnboardingDraft
     @Binding var isConfigured: Bool
 
-    @AppStorage("s3.enabled") private var s3Enabled = false
-    @AppStorage("s3.provider") private var providerRaw = S3Provider.aws.rawValue
-    @AppStorage("s3.bucket") private var bucket = ""
-    @AppStorage("s3.region") private var region = "us-east-1"
-    @AppStorage("s3.prefix") private var prefix = "recordings/"
-
-    private var provider: S3Provider {
-        S3Provider(rawValue: providerRaw) ?? .aws
-    }
-
-    @State private var accessKeyId = ""
-    @State private var secretAccessKey = ""
     @State private var showSecret = false
     @State private var isTesting = false
     @State private var testStatus: TestStatus?
-    @State private var isLoading = true
 
     enum TestStatus {
         case success
@@ -64,10 +52,10 @@ struct OnboardingS3View: View {
                         .font(.headline)
 
                     Picker("Provider", selection: Binding(
-                        get: { provider },
+                        get: { draft.s3Provider },
                         set: { newValue in
-                            providerRaw = newValue.rawValue
-                            region = newValue.defaultRegion
+                            draft.s3Provider = newValue
+                            draft.s3Region = newValue.defaultRegion
                         }
                     )) {
                         ForEach(S3Provider.allCases) { provider in
@@ -83,12 +71,12 @@ struct OnboardingS3View: View {
                     Text("Bucket")
                         .font(.headline)
 
-                    TextField("Bucket name", text: $bucket)
+                    TextField("Bucket name", text: $draft.s3Bucket)
                         .textFieldStyle(.roundedBorder)
 
                     HStack {
-                        if provider == .aws {
-                            Picker("Region", selection: $region) {
+                        if draft.s3Provider == .aws {
+                            Picker("Region", selection: $draft.s3Region) {
                                 ForEach(awsRegions, id: \.self) { r in
                                     Text(r).tag(r)
                                 }
@@ -96,16 +84,16 @@ struct OnboardingS3View: View {
                             .pickerStyle(.menu)
                             .frame(maxWidth: 200)
                         } else {
-                            TextField("Region (e.g. us-west-004)", text: $region)
+                            TextField("Region (e.g. us-west-004)", text: $draft.s3Region)
                                 .textFieldStyle(.roundedBorder)
                                 .frame(maxWidth: 200)
                         }
 
-                        TextField("Key prefix", text: $prefix)
+                        TextField("Key prefix", text: $draft.s3Prefix)
                             .textFieldStyle(.roundedBorder)
                     }
 
-                    Text("Files will be uploaded to: s3://\(bucket)/\(prefix)")
+                    Text("Files will be uploaded to: s3://\(draft.s3Bucket)/\(draft.s3Prefix)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -115,16 +103,16 @@ struct OnboardingS3View: View {
                     Text("Credentials")
                         .font(.headline)
 
-                    TextField("Access Key ID", text: $accessKeyId)
+                    TextField("Access Key ID", text: $draft.awsAccessKeyId)
                         .textFieldStyle(.roundedBorder)
-                        .disabled(isLoading)
+                        .disabled(draft.isSeeding)
 
                     HStack {
                         if showSecret {
-                            TextField("Secret Access Key", text: $secretAccessKey)
+                            TextField("Secret Access Key", text: $draft.awsSecretAccessKey)
                                 .textFieldStyle(.roundedBorder)
                         } else {
-                            SecureField("Secret Access Key", text: $secretAccessKey)
+                            SecureField("Secret Access Key", text: $draft.awsSecretAccessKey)
                                 .textFieldStyle(.roundedBorder)
                         }
 
@@ -135,9 +123,9 @@ struct OnboardingS3View: View {
                         }
                         .buttonStyle(.borderless)
                     }
-                    .disabled(isLoading)
+                    .disabled(draft.isSeeding)
 
-                    if provider == .aws {
+                    if draft.s3Provider == .aws {
                         Link("Open AWS Console", destination: URL(string: "https://console.aws.amazon.com/iam/home#/security_credentials")!)
                             .font(.caption)
                     } else {
@@ -153,7 +141,7 @@ struct OnboardingS3View: View {
                             Task { await testAndSave() }
                         }
                         .buttonStyle(.bordered)
-                        .disabled(bucket.isEmpty || accessKeyId.isEmpty || secretAccessKey.isEmpty || isTesting)
+                        .disabled(draft.s3Bucket.isEmpty || draft.awsAccessKeyId.isEmpty || draft.awsSecretAccessKey.isEmpty || isTesting)
 
                         if isTesting {
                             ProgressView()
@@ -167,7 +155,7 @@ struct OnboardingS3View: View {
                 }
 
                 // Info
-                Text("Your credentials are stored securely in your Mac's Keychain.")
+                Text("Your credentials are saved securely to your Mac's Keychain when you finish setup.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -176,7 +164,10 @@ struct OnboardingS3View: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task {
-            await loadExistingCredentials()
+            // Reflect existing, already-configured credentials seeded into the draft.
+            if !draft.awsAccessKeyId.isEmpty && !draft.awsSecretAccessKey.isEmpty && !draft.s3Bucket.isEmpty {
+                isConfigured = true
+            }
         }
     }
 
@@ -194,44 +185,25 @@ struct OnboardingS3View: View {
         }
     }
 
-    private func loadExistingCredentials() async {
-        isLoading = true
-        defer { isLoading = false }
-
-        do {
-            accessKeyId = try await KeychainService.shared.retrieve(for: .awsAccessKeyId) ?? ""
-            secretAccessKey = try await KeychainService.shared.retrieve(for: .awsSecretAccessKey) ?? ""
-
-            if !accessKeyId.isEmpty && !secretAccessKey.isEmpty && !bucket.isEmpty {
-                isConfigured = true
-            }
-        } catch {
-            // Credentials not found, that's fine
-        }
-    }
-
     private func testAndSave() async {
         isTesting = true
         defer { isTesting = false }
 
         let service = S3Service(
-            bucket: bucket,
-            region: region,
-            prefix: prefix,
-            accessKeyId: accessKeyId,
-            secretAccessKey: secretAccessKey,
-            provider: provider
+            bucket: draft.s3Bucket,
+            region: draft.s3Region,
+            prefix: draft.s3Prefix,
+            accessKeyId: draft.awsAccessKeyId,
+            secretAccessKey: draft.awsSecretAccessKey,
+            provider: draft.s3Provider
         )
 
         do {
             try await service.validateBucket()
 
-            // Save credentials
-            try await KeychainService.shared.save(accessKeyId, for: .awsAccessKeyId)
-            try await KeychainService.shared.save(secretAccessKey, for: .awsSecretAccessKey)
-
-            // Enable S3 storage
-            s3Enabled = true
+            // Stage S3 as enabled; credentials and flags are persisted only when
+            // onboarding completes.
+            draft.s3Enabled = true
 
             testStatus = .success
             isConfigured = true
@@ -251,6 +223,6 @@ struct OnboardingS3View: View {
 }
 
 #Preview {
-    OnboardingS3View(isConfigured: .constant(false))
+    OnboardingS3View(draft: OnboardingDraft(), isConfigured: .constant(false))
         .frame(width: 600, height: 440)
 }

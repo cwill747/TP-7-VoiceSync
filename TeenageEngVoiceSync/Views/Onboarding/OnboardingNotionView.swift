@@ -8,17 +8,12 @@
 import SwiftUI
 
 struct OnboardingNotionView: View {
+    @Bindable var draft: OnboardingDraft
     @Binding var isConfigured: Bool
 
-    @AppStorage("notion.enabled") private var notionEnabled = false
-    @AppStorage("notion.databaseId") private var notionDatabaseId = ""
-
-    @State private var apiKey = ""
     @State private var showKey = false
-    @State private var isProvisioning = false
+    @State private var isTesting = false
     @State private var status: ProvisionStatus?
-    @State private var warnings: [String] = []
-    @State private var isLoading = true
 
     enum ProvisionStatus {
         case success
@@ -50,10 +45,10 @@ struct OnboardingNotionView: View {
 
                 HStack {
                     if showKey {
-                        TextField("ntn_… or secret_…", text: $apiKey)
+                        TextField("ntn_… or secret_…", text: $draft.notionAPIKey)
                             .textFieldStyle(.roundedBorder)
                     } else {
-                        SecureField("ntn_… or secret_…", text: $apiKey)
+                        SecureField("ntn_… or secret_…", text: $draft.notionAPIKey)
                             .textFieldStyle(.roundedBorder)
                     }
                     Button { showKey.toggle() } label: {
@@ -61,7 +56,7 @@ struct OnboardingNotionView: View {
                     }
                     .buttonStyle(.borderless)
                 }
-                .disabled(isLoading)
+                .disabled(draft.isSeeding)
 
                 Link("Create an integration at notion.so/my-integrations", destination: URL(string: "https://www.notion.so/my-integrations")!)
                     .font(.caption)
@@ -72,13 +67,13 @@ struct OnboardingNotionView: View {
                 Text("Database")
                     .font(.headline)
 
-                TextField("Database ID (paste the DB URL or the 32-char hex ID)", text: $notionDatabaseId)
+                TextField("Database ID (paste the DB URL or the 32-char hex ID)", text: $draft.notionDatabaseId)
                     .textFieldStyle(.roundedBorder)
-                    .disabled(isLoading)
-                    .onChange(of: notionDatabaseId) { _, newValue in
+                    .disabled(draft.isSeeding)
+                    .onChange(of: draft.notionDatabaseId) { _, newValue in
                         let extracted = NotionService.extractDatabaseId(from: newValue)
                         if extracted != newValue {
-                            notionDatabaseId = extracted
+                            draft.notionDatabaseId = extracted
                         }
                     }
 
@@ -87,16 +82,16 @@ struct OnboardingNotionView: View {
                     .foregroundStyle(.secondary)
             }
 
-            // Provision button and status
+            // Test button and status
             VStack(spacing: 10) {
                 HStack {
-                    Button(isProvisioning ? "Connecting…" : "Provision & Connect") {
-                        Task { await provisionAndSave() }
+                    Button(isTesting ? "Testing…" : "Test Connection") {
+                        Task { await testConnection() }
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(apiKey.isEmpty || notionDatabaseId.isEmpty || isProvisioning)
+                    .disabled(draft.notionAPIKey.isEmpty || draft.notionDatabaseId.isEmpty || isTesting)
 
-                    if isProvisioning {
+                    if isTesting {
                         ProgressView()
                             .scaleEffect(0.7)
                     }
@@ -105,20 +100,10 @@ struct OnboardingNotionView: View {
                 if let status {
                     statusLabel(for: status)
                 }
-
-                if !warnings.isEmpty {
-                    VStack(alignment: .leading, spacing: 2) {
-                        ForEach(warnings, id: \.self) { warning in
-                            Text(warning)
-                                .font(.caption)
-                                .foregroundStyle(.orange)
-                        }
-                    }
-                }
             }
 
             // Info text
-            Text("Any missing properties (Date, Filename, Duration, Language, Audio, Summary) are added to the database automatically — existing columns and data are never modified.")
+            Text("Any missing properties (Date, Filename, Duration, Language, Audio, Summary) are added to the database when you finish setup — existing columns and data are never modified.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -126,7 +111,10 @@ struct OnboardingNotionView: View {
         .padding(.horizontal, 48)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task {
-            await loadExistingKey()
+            // Reflect an existing, enabled configuration seeded into the draft.
+            if !draft.notionAPIKey.isEmpty {
+                isConfigured = draft.notionEnabled
+            }
         }
     }
 
@@ -134,7 +122,7 @@ struct OnboardingNotionView: View {
     private func statusLabel(for status: ProvisionStatus) -> some View {
         switch status {
         case .success:
-            Label("Connected! Database is ready.", systemImage: "checkmark.circle.fill")
+            Label("Connected! The database is set up when you finish setup.", systemImage: "checkmark.circle.fill")
                 .foregroundStyle(.green)
                 .font(.caption)
         case .error(let message):
@@ -144,31 +132,21 @@ struct OnboardingNotionView: View {
         }
     }
 
-    private func loadExistingKey() async {
-        isLoading = true
-        defer { isLoading = false }
-
-        if let existingKey = try? await KeychainService.shared.retrieve(for: .notionAPIKey),
-           !existingKey.isEmpty {
-            apiKey = existingKey
-            isConfigured = notionEnabled
-        }
-    }
-
-    private func provisionAndSave() async {
-        isProvisioning = true
+    private func testConnection() async {
+        isTesting = true
         status = nil
-        warnings = []
-        defer { isProvisioning = false }
+        defer { isTesting = false }
 
         do {
-            try await KeychainService.shared.save(apiKey, for: .notionAPIKey)
-            let result = try await NotionService.provisionDatabase(apiKey: apiKey, databaseId: notionDatabaseId)
-            result.props.store()
+            // Read-only check that the secret works and the database is shared. The
+            // key, database ID, and enabled flag are staged in the draft; the
+            // database is provisioned (missing columns added) only when onboarding
+            // completes.
+            try await NotionService.validateDatabaseAccess(apiKey: draft.notionAPIKey, databaseId: draft.notionDatabaseId)
             status = .success
-            warnings = result.warnings
             isConfigured = true
-            notionEnabled = true
+            draft.notionEnabled = true
+            draft.notionNeedsProvisioning = true
         } catch {
             status = .error("Failed: \(error.localizedDescription)")
             isConfigured = false
@@ -177,6 +155,6 @@ struct OnboardingNotionView: View {
 }
 
 #Preview {
-    OnboardingNotionView(isConfigured: .constant(false))
+    OnboardingNotionView(draft: OnboardingDraft(), isConfigured: .constant(false))
         .frame(width: 600, height: 480)
 }

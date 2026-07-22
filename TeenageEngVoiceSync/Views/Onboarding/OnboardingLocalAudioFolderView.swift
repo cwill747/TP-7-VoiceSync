@@ -9,11 +9,8 @@ import SwiftUI
 import AppKit
 
 struct OnboardingLocalAudioFolderView: View {
+    @Bindable var draft: OnboardingDraft
     @Binding var isConfigured: Bool
-
-    @AppStorage("localaudio.enabled") private var localAudioEnabled = false
-    @AppStorage("localaudio.folderPath") private var folderPath = ""
-    @AppStorage("s3.enabled") private var s3Enabled = false
 
     @State private var inputPath = ""
     @State private var isValidating = false
@@ -90,9 +87,9 @@ struct OnboardingLocalAudioFolderView: View {
         .padding(.horizontal, 48)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
-            // Load existing path
-            if !folderPath.isEmpty {
-                inputPath = folderPath
+            // Reflect a folder already staged in the draft (seeded or chosen earlier).
+            if !draft.localAudioFolderPath.isEmpty {
+                inputPath = draft.localAudioFolderPath
                 isConfigured = true
             }
         }
@@ -147,20 +144,21 @@ struct OnboardingLocalAudioFolderView: View {
             return
         }
 
-        // Save the path and security-scoped bookmark together. Bail out if the
-        // bookmark can't be created rather than enabling a folder we can't reopen.
-        guard SecurityScopedBookmark.saveFolderSelection(url: folderURL, key: "localaudio.folderPath") else {
+        // Stage the path and security-scoped bookmark in the draft. Bail out if the
+        // bookmark can't be created rather than staging a folder we can't reopen.
+        // Both are committed to UserDefaults only when onboarding completes.
+        guard let bookmark = SecurityScopedBookmark.makeBookmarkData(for: folderURL) else {
             validationStatus = .error("Couldn't get lasting access to this folder. Click Choose… to grant access.")
             isValidating = false
             return
         }
 
-        // Success - enable local storage. Update the @AppStorage binding so the
-        // view reflects the new path immediately (a direct UserDefaults write to
-        // a dotted key is not observed by @AppStorage).
-        folderPath = folderURL.path
-        localAudioEnabled = true
-        s3Enabled = false  // Disable S3 when local storage is enabled
+        // Success - stage local storage in the draft (S3 is disabled when local
+        // storage is chosen).
+        draft.localAudioFolderPath = folderURL.path
+        draft.localAudioBookmark = bookmark
+        draft.localAudioEnabled = true
+        draft.s3Enabled = false
         validationStatus = .success
         isConfigured = true
         isValidating = false
@@ -173,7 +171,7 @@ struct OnboardingLocalAudioFolderView: View {
         panel.allowsMultipleSelection = false
         panel.prompt = "Choose"
 
-        let startPath = inputPath.isEmpty ? folderPath : inputPath
+        let startPath = inputPath.isEmpty ? draft.localAudioFolderPath : inputPath
         if !startPath.isEmpty {
             panel.directoryURL = URL(fileURLWithPath: NSString(string: startPath).expandingTildeInPath)
         }
@@ -185,6 +183,6 @@ struct OnboardingLocalAudioFolderView: View {
 }
 
 #Preview {
-    OnboardingLocalAudioFolderView(isConfigured: .constant(false))
+    OnboardingLocalAudioFolderView(draft: OnboardingDraft(), isConfigured: .constant(false))
         .frame(width: 600, height: 440)
 }

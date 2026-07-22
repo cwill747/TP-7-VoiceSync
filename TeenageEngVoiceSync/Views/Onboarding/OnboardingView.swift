@@ -45,6 +45,10 @@ struct OnboardingView: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
 
+    /// Wizard-owned draft. All step edits land here; nothing is persisted until
+    /// `completeOnboarding()` commits it, so closing or canceling changes nothing.
+    @State private var draft = OnboardingDraft()
+
     @State private var currentStep: OnboardingStep = .welcome
 
     // Configuration state passed between steps
@@ -57,6 +61,10 @@ struct OnboardingView: View {
     @State private var appleNotesSkipped = false
     @State private var localMarkdownFolderConfigured = false
     @State private var notionConfigured = false
+
+    // Final-commit state
+    @State private var isCompleting = false
+    @State private var completionError: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -79,6 +87,17 @@ struct OnboardingView: View {
                 .padding(.horizontal, 24)
         }
         .frame(width: 600, height: 550)
+        .task {
+            await draft.seed()
+        }
+        .alert("Couldn't Save Setup", isPresented: Binding(
+            get: { completionError != nil },
+            set: { if !$0 { completionError = nil } }
+        )) {
+            Button("OK", role: .cancel) { completionError = nil }
+        } message: {
+            Text(completionError ?? "")
+        }
     }
 
     // MARK: - Active Steps (excluding conditional steps that don't apply)
@@ -162,21 +181,22 @@ struct OnboardingView: View {
         case .welcome:
             OnboardingWelcomeView()
         case .transcription:
-            OnboardingTranscriptionView(isConfigured: $transcriptionConfigured)
+            OnboardingTranscriptionView(draft: draft, isConfigured: $transcriptionConfigured)
         case .s3Setup:
-            OnboardingS3View(isConfigured: $s3Configured)
+            OnboardingS3View(draft: draft, isConfigured: $s3Configured)
         case .localAudioFolder:
-            OnboardingLocalAudioFolderView(isConfigured: $localAudioFolderConfigured)
+            OnboardingLocalAudioFolderView(draft: draft, isConfigured: $localAudioFolderConfigured)
         case .openRouter:
-            OnboardingOpenRouterView(isConfigured: $openRouterConfigured)
+            OnboardingOpenRouterView(draft: draft, isConfigured: $openRouterConfigured)
         case .appleNotes:
-            OnboardingAppleNotesView(isConfigured: $appleNotesConfigured)
+            OnboardingAppleNotesView(draft: draft, isConfigured: $appleNotesConfigured)
         case .localMarkdownFolder:
-            OnboardingLocalMarkdownFolderView(isConfigured: $localMarkdownFolderConfigured)
+            OnboardingLocalMarkdownFolderView(draft: draft, isConfigured: $localMarkdownFolderConfigured)
         case .notion:
-            OnboardingNotionView(isConfigured: $notionConfigured)
+            OnboardingNotionView(draft: draft, isConfigured: $notionConfigured)
         case .complete:
             OnboardingCompleteView(
+                draft: draft,
                 transcriptionConfigured: transcriptionConfigured,
                 s3Configured: s3Configured,
                 localAudioFolderConfigured: localAudioFolderConfigured,
@@ -217,10 +237,17 @@ struct OnboardingView: View {
 
             // Primary action button
             if currentStep == .complete {
-                Button("Start Using TP-7 VoiceSync") {
-                    completeOnboarding()
+                HStack(spacing: 8) {
+                    if isCompleting {
+                        ProgressView()
+                            .scaleEffect(0.7)
+                    }
+                    Button("Start Using TP-7 VoiceSync") {
+                        Task { await completeOnboarding() }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(isCompleting)
                 }
-                .buttonStyle(.borderedProminent)
             } else {
                 let canContinue = canContinueFromCurrentStep()
                 Button(currentStep == .welcome ? "Get Started" : "Continue") {
@@ -340,9 +367,19 @@ struct OnboardingView: View {
         }
     }
 
-    private func completeOnboarding() {
-        hasCompletedOnboarding = true
-        dismiss()
+    private func completeOnboarding() async {
+        isCompleting = true
+        defer { isCompleting = false }
+
+        do {
+            // Commit the whole draft atomically. On failure nothing is persisted,
+            // so the wizard stays open with settings unchanged and an actionable error.
+            try await draft.apply()
+            hasCompletedOnboarding = true
+            dismiss()
+        } catch {
+            completionError = "Your settings couldn't be saved: \(error.localizedDescription). Please try again."
+        }
     }
 }
 
