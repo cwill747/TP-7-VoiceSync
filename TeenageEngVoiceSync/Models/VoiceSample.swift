@@ -63,15 +63,25 @@ final class VoiceSample {
     ) -> Bool {
         guard lhsStart == rhsStart, lhsEnd == rhsEnd else { return false }
 
-        if let lhsHash, !lhsHash.isEmpty, let rhsHash, !rhsHash.isEmpty {
+        let lhsHasHash = !(lhsHash ?? "").isEmpty
+        let rhsHasHash = !(rhsHash ?? "").isEmpty
+        let lhsHasFile = !(lhsFile ?? "").isEmpty
+        let rhsHasFile = !(rhsFile ?? "").isEmpty
+
+        // Matching content hashes are authoritative.
+        if lhsHasHash, rhsHasHash {
             return lhsHash == rhsHash
         }
-        // At least one side predates content hashing — compare by filename.
-        if let lhsFile, !lhsFile.isEmpty, let rhsFile, !rhsFile.isEmpty {
+        // When either side predates content hashing, fall back to comparing
+        // filenames.
+        if lhsHasFile, rhsHasFile {
             return lhsFile == rhsFile
         }
-        // Neither hash nor filename to go on: same range is the best we can do.
-        return true
+        // Range-only equality applies solely when BOTH sides are completely
+        // unidentified (e.g. two migrated seed samples that carry neither a
+        // hash nor a filename). An identified sample must never match an
+        // unidentified one, or dedupe could delete legitimate samples.
+        return !(lhsHasHash || lhsHasFile) && !(rhsHasHash || rhsHasFile)
     }
 
     /// True when `samples` already contains one describing the same source as

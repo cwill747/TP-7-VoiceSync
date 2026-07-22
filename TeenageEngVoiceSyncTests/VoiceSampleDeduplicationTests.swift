@@ -93,6 +93,29 @@ final class VoiceSampleDeduplicationTests: XCTestCase {
         XCTAssertEqual(VoiceSample.duplicatesToRemove(from: [legacy, hashed]).count, 1)
     }
 
+    func testUnidentifiedSeedDoesNotMatchIdentifiedSample() {
+        // A migrated seed sample carries no hash and no filename, at range 0...0.
+        // It must not collide with a real full-file enrollment sharing that range,
+        // or launch dedupe would delete legitimate samples.
+        let seed = makeSample(filename: nil, hash: nil, start: 0, end: 0)
+        let enrolled = makeSample(filename: "clip.wav", hash: "abc123", start: 0, end: 0)
+
+        XCTAssertFalse(seed.isSameSource(as: enrolled))
+        XCTAssertFalse(isDuplicate(enrolled, in: [seed]))
+        XCTAssertTrue(VoiceSample.duplicatesToRemove(from: [seed, enrolled]).isEmpty)
+    }
+
+    func testTwoUnidentifiedSeedsCollapse() {
+        // Two fully unidentified rows at the same range are indistinguishable,
+        // so the later one is a duplicate.
+        let base = Date()
+        let a = makeSample(filename: nil, hash: nil, addedAt: base)
+        let b = makeSample(filename: nil, hash: nil, addedAt: base.addingTimeInterval(1))
+
+        XCTAssertTrue(a.isSameSource(as: b))
+        XCTAssertEqual(VoiceSample.duplicatesToRemove(from: [a, b]).count, 1)
+    }
+
     // MARK: - duplicatesToRemove
 
     func testDuplicatesToRemoveKeepsEarliestAddedSample() {
