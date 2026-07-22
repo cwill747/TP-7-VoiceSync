@@ -23,6 +23,7 @@ nonisolated final class USBDeviceMonitor: @unchecked Sendable {
     private let onChange: @Sendable () -> Void
 
     private let queue = DispatchQueue(label: "USBDeviceMonitor")
+    private let queueKey = DispatchSpecificKey<Void>()
     private var notifyPort: IONotificationPortRef?
     private var addedIterator: io_iterator_t = 0
     private var removedIterator: io_iterator_t = 0
@@ -31,6 +32,7 @@ nonisolated final class USBDeviceMonitor: @unchecked Sendable {
         self.vendorID = vendorID
         self.productID = productID
         self.onChange = onChange
+        queue.setSpecific(key: queueKey, value: ())
     }
 
     /// Cheap one-shot check of the IOKit registry (no USB bus traffic) for
@@ -70,7 +72,11 @@ nonisolated final class USBDeviceMonitor: @unchecked Sendable {
 
     deinit {
         // stop() is expected before dealloc; this is a best-effort backstop.
-        queue.sync { teardown() }
+        if DispatchQueue.getSpecific(key: queueKey) != nil {
+            teardown()
+        } else {
+            queue.sync { teardown() }
+        }
     }
 
     private func configure() {
