@@ -230,7 +230,7 @@ When you first use the app, you may see the following permission prompts:
 
 ### USB Device Access
 
-To watch for new recordings, the app talks to the TP-7 directly over MTP via USB. macOS may prompt you to allow access to the device.
+To watch for new recordings, the app talks to the TP-7 directly over MTP via USB. On Apple silicon Mac laptops, macOS may ask, “Do you want to connect the USB accessory to this Mac?” Choose **Allow** so the Mac can exchange data with the TP-7.
 
 ### Keychain Storage
 

@@ -44,7 +44,7 @@ struct GeneralSettingsView: View {
                         appState.setDeviceWatchEnabled(newValue)
                     }
 
-                Text("Enabling this will prompt for access to the FieldKit app's data.")
+                Text(DeviceConnectionCopy.settingsHelp)
                     .font(.caption)
                     .foregroundStyle(.secondary)
 

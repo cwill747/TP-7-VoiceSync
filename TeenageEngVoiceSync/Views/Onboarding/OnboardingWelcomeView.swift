@@ -31,6 +31,13 @@ struct OnboardingWelcomeView: View {
             // Features overview
             VStack(alignment: .leading, spacing: 12) {
                 featureRow(
+                    icon: "cable.connector",
+                    title: "TP-7 Connection",
+                    description: DeviceConnectionCopy.onboardingDescription,
+                    required: true
+                )
+
+                featureRow(
                     icon: "waveform",
                     title: "Transcription",
                     description: "Convert voice recordings to text using ElevenLabs or WhisperKit",
