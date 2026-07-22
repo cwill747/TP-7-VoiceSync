@@ -24,29 +24,14 @@ struct RecordingDetailView: View {
         case error(String)
     }
 
-    private struct LocalAudioSource {
-        let url: URL
-        let requiresConfiguredFolderScope: Bool
-    }
-
     /// Local file to play, if any: prefers the app-managed device cache
     /// (`localPath`) but falls back to a security-scoped local copy
     /// (`localCopyPath`).
-    private var localAudioSource: LocalAudioSource? {
-        let fm = FileManager.default
-        if !recording.localPath.isEmpty, fm.fileExists(atPath: recording.localPath) {
-            return LocalAudioSource(
-                url: URL(fileURLWithPath: recording.localPath),
-                requiresConfiguredFolderScope: false
-            )
-        }
-        if let copy = recording.localCopyPath, fm.fileExists(atPath: copy) {
-            return LocalAudioSource(
-                url: URL(fileURLWithPath: copy),
-                requiresConfiguredFolderScope: true
-            )
-        }
-        return nil
+    private var localAudioSource: AudioPlaybackSource? {
+        AudioPlaybackSource.select(
+            localPath: recording.localPath,
+            localCopyPath: recording.localCopyPath
+        )
     }
 
     private var canRetranscribe: Bool {

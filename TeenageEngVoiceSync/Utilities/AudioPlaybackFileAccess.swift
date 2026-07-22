@@ -1,5 +1,33 @@
 import Foundation
 
+nonisolated struct AudioPlaybackSource: Equatable {
+    let url: URL
+    let requiresConfiguredFolderScope: Bool
+
+    /// Prefers an existing app-managed cache file. External local copies are
+    /// returned from their stored path without probing them because the probe
+    /// itself may require opening their security-scoped folder first.
+    static func select(
+        localPath: String,
+        localCopyPath: String?,
+        fileExists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }
+    ) -> AudioPlaybackSource? {
+        if !localPath.isEmpty, fileExists(localPath) {
+            return AudioPlaybackSource(
+                url: URL(fileURLWithPath: localPath),
+                requiresConfiguredFolderScope: false
+            )
+        }
+        if let localCopyPath, !localCopyPath.isEmpty {
+            return AudioPlaybackSource(
+                url: URL(fileURLWithPath: localCopyPath),
+                requiresConfiguredFolderScope: true
+            )
+        }
+        return nil
+    }
+}
+
 /// Keeps a configured local-audio folder's security scope open for as long as
 /// AVFoundation may need to read a recording from it.
 nonisolated final class AudioPlaybackFileAccess {

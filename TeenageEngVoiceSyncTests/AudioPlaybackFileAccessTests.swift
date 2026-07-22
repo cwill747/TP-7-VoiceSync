@@ -3,6 +3,42 @@ import XCTest
 @testable import TP_7_VoiceSync
 
 final class AudioPlaybackFileAccessTests: XCTestCase {
+    func testLocalCopyIsSelectedWithoutProbingBeforeSecurityScopeIsAcquired() throws {
+        let localCopyPath = "/external/audio/local-copy.wav"
+
+        let source = AudioPlaybackSource.select(
+            localPath: "",
+            localCopyPath: localCopyPath,
+            fileExists: { path in
+                XCTFail("External local copy was probed before acquiring its security scope: \(path)")
+                return false
+            }
+        )
+
+        let selected = try XCTUnwrap(source)
+        XCTAssertEqual(selected.url, URL(fileURLWithPath: localCopyPath))
+        XCTAssertTrue(selected.requiresConfiguredFolderScope)
+    }
+
+    func testMissingDeviceCacheFallsBackToUnprobedLocalCopy() throws {
+        let cachePath = "/app/container/cache/recording.wav"
+        let localCopyPath = "/external/audio/recording.wav"
+        var probedPaths: [String] = []
+
+        let source = AudioPlaybackSource.select(
+            localPath: cachePath,
+            localCopyPath: localCopyPath,
+            fileExists: {
+                probedPaths.append($0)
+                return false
+            }
+        )
+
+        XCTAssertEqual(probedPaths, [cachePath])
+        XCTAssertEqual(try XCTUnwrap(source).url, URL(fileURLWithPath: localCopyPath))
+        XCTAssertTrue(try XCTUnwrap(source).requiresConfiguredFolderScope)
+    }
+
     func testLocalCopyPlaybackAcquiresConfiguredFolderScopeBeforeOpeningPlayer() throws {
         let folder = try makeTemporaryFolder()
         defer { try? FileManager.default.removeItem(at: folder) }
