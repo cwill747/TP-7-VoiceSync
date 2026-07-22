@@ -437,6 +437,12 @@ struct TranscriptSection: View {
             .onChange(of: activeMatch) { _, _ in
                 scrollToActiveMatch(using: proxy)
             }
+            .onChange(of: showOriginal) { _, _ in
+                // The two versions have different blocks/match counts, so a stale
+                // global index would show "11 of 2" and highlight nothing.
+                activeMatch = 0
+                scrollToActiveMatch(using: proxy)
+            }
             .onChange(of: recording.persistentModelID) { _, _ in
                 showOriginal = false
                 query = ""
