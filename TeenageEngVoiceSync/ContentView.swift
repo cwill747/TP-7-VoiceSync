@@ -35,7 +35,6 @@ enum SidebarItem: String, CaseIterable, Identifiable {
 enum SettingsSection: String, CaseIterable, Identifiable {
     case general
     case storage
-    case apiKeys
     case transcription
     case enhancement
     case vocabulary
@@ -47,7 +46,6 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         switch self {
         case .general: return "General"
         case .storage: return "Storage"
-        case .apiKeys: return "API Keys"
         case .transcription: return "Transcription"
         case .enhancement: return "Enhancement"
         case .vocabulary: return "Dictionary"
@@ -59,7 +57,6 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         switch self {
         case .general: return "gear"
         case .storage: return "externaldrive"
-        case .apiKeys: return "key"
         case .transcription: return "text.bubble"
         case .enhancement: return "sparkles"
         case .vocabulary: return "text.book.closed"
@@ -186,8 +183,6 @@ struct ContentView: View {
             GeneralSettingsView()
         case .storage:
             StorageSettingsView()
-        case .apiKeys:
-            APIKeysSettingsView()
         case .transcription:
             TranscriptionSettingsView()
         case .enhancement:

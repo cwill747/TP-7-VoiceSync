@@ -7,6 +7,7 @@
 
 import SwiftUI
 import AppKit
+import os
 
 struct StorageSettingsView: View {
     @Environment(AppState.self) private var appState
@@ -27,14 +28,26 @@ struct StorageSettingsView: View {
     @AppStorage("localaudio.folderPath") private var localFolderPath = ""
 
     @State private var isTesting = false
-    @State private var hasCredentials = false
     @State private var testStatus: TestStatus?
     @State private var localInputPath = ""
     @State private var localValidationStatus: ValidationStatus?
     @State private var s3ReloadTask: Task<Void, Never>?
 
+    // AWS credentials
+    @State private var awsAccessKeyId = ""
+    @State private var awsSecretAccessKey = ""
+    @State private var showAWSSecret = false
+    @State private var isLoadingCredentials = true
+    @State private var isSavingCredentials = false
+    @State private var credentialsStatus: CredentialsStatus?
+
     enum TestStatus {
         case success
+        case error(String)
+    }
+
+    enum CredentialsStatus {
+        case saved
         case error(String)
     }
 
@@ -94,14 +107,47 @@ struct StorageSettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
 
-                    if !hasCredentials {
-                        Label("Configure credentials in the API Keys tab", systemImage: "exclamationmark.triangle")
-                            .foregroundStyle(.orange)
-                            .font(.caption)
-                    } else {
-                        Label("Credentials configured", systemImage: "checkmark.circle.fill")
-                            .foregroundStyle(.green)
-                            .font(.caption)
+                    Divider()
+
+                    TextField("Access Key ID", text: $awsAccessKeyId)
+                        .textFieldStyle(.roundedBorder)
+                        .textContentType(.username)
+                        .disabled(isLoadingCredentials)
+
+                    HStack {
+                        if showAWSSecret {
+                            TextField("Secret Access Key", text: $awsSecretAccessKey)
+                                .textFieldStyle(.roundedBorder)
+                        } else {
+                            SecureField("Secret Access Key", text: $awsSecretAccessKey)
+                                .textFieldStyle(.roundedBorder)
+                        }
+
+                        Button {
+                            showAWSSecret.toggle()
+                        } label: {
+                            Image(systemName: showAWSSecret ? "eye.slash" : "eye")
+                        }
+                        .buttonStyle(.borderless)
+                        .accessibilityLabel(Text(showAWSSecret ? "Hide secret access key" : "Show secret access key"))
+                    }
+                    .disabled(isLoadingCredentials)
+
+                    Text("Credentials are stored securely in your Mac's Keychain.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    if let status = credentialsStatus {
+                        switch status {
+                        case .saved:
+                            Label("Saved", systemImage: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                                .font(.caption)
+                        case .error(let message):
+                            Label(message, systemImage: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.red)
+                                .font(.caption)
+                        }
                     }
 
                     if let status = testStatus {
@@ -117,10 +163,15 @@ struct StorageSettingsView: View {
 
                     HStack {
                         Spacer()
+                        Button(isSavingCredentials ? "Saving..." : "Save") {
+                            Task { await saveAWSCredentials() }
+                        }
+                        .disabled(isLoadingCredentials || isSavingCredentials || awsAccessKeyId.isEmpty || awsSecretAccessKey.isEmpty)
+
                         Button("Test Connection") {
                             Task { await testConnection() }
                         }
-                        .disabled(bucket.isEmpty || !hasCredentials || isTesting)
+                        .disabled(bucket.isEmpty || awsAccessKeyId.isEmpty || awsSecretAccessKey.isEmpty || isTesting)
 
                         if isTesting {
                             ProgressView()
@@ -214,7 +265,7 @@ struct StorageSettingsView: View {
         .formStyle(.grouped)
         .padding()
         .task {
-            await checkCredentials()
+            await loadAWSCredentials()
         }
     }
 
@@ -233,14 +284,39 @@ struct StorageSettingsView: View {
         }
     }
 
-    private func checkCredentials() async {
+    private func loadAWSCredentials() async {
+        isLoadingCredentials = true
+        defer { isLoadingCredentials = false }
+
         do {
-            let accessKey = try await KeychainService.shared.retrieve(for: .awsAccessKeyId)
-            let secretKey = try await KeychainService.shared.retrieve(for: .awsSecretAccessKey)
-            hasCredentials = (accessKey != nil && !accessKey!.isEmpty) &&
-                           (secretKey != nil && !secretKey!.isEmpty)
+            awsAccessKeyId = try await KeychainService.shared.retrieve(for: .awsAccessKeyId) ?? ""
+            awsSecretAccessKey = try await KeychainService.shared.retrieve(for: .awsSecretAccessKey) ?? ""
         } catch {
-            hasCredentials = false
+            AppLogger.app.error("Failed to load AWS credentials: \(String(describing: error), privacy: .public)")
+        }
+    }
+
+    private func saveAWSCredentials() async {
+        isSavingCredentials = true
+        defer { isSavingCredentials = false }
+
+        do {
+            try await KeychainService.shared.save(awsAccessKeyId, for: .awsAccessKeyId)
+            try await KeychainService.shared.save(awsSecretAccessKey, for: .awsSecretAccessKey)
+            credentialsStatus = .saved
+            clearCredentialsStatus()
+            appState.reloadServices()
+        } catch {
+            credentialsStatus = .error("Failed to save: \(error.localizedDescription)")
+        }
+    }
+
+    private func clearCredentialsStatus() {
+        Task {
+            try? await Task.sleep(for: .seconds(3))
+            await MainActor.run {
+                credentialsStatus = nil
+            }
         }
     }
 
@@ -249,15 +325,12 @@ struct StorageSettingsView: View {
         defer { isTesting = false }
 
         do {
-            let accessKeyId = try await KeychainService.shared.retrieve(for: .awsAccessKeyId) ?? ""
-            let secretAccessKey = try await KeychainService.shared.retrieve(for: .awsSecretAccessKey) ?? ""
-
             let service = S3Service(
                 bucket: bucket,
                 region: region,
                 prefix: prefix,
-                accessKeyId: accessKeyId,
-                secretAccessKey: secretAccessKey,
+                accessKeyId: awsAccessKeyId,
+                secretAccessKey: awsSecretAccessKey,
                 provider: provider
             )
 

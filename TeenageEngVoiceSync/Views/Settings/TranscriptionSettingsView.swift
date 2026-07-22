@@ -38,6 +38,12 @@ struct TranscriptionSettingsView: View {
 
     // State
     @State private var hasElevenLabsKey = false
+    @State private var elevenLabsAPIKey = ""
+    @State private var showElevenLabsKey = false
+    @State private var isLoadingElevenLabsKey = true
+    @State private var isSavingElevenLabsKey = false
+    @State private var isVerifyingElevenLabsKey = false
+    @State private var elevenLabsKeyStatus: VerificationStatus?
     @State private var whisperKitDownloadState: ModelDownloadState = .notDownloaded
     @State private var whisperKitDownloadProgress = 0.0
     @State private var whisperKitDownloadError: String?
@@ -70,6 +76,11 @@ struct TranscriptionSettingsView: View {
 
     enum ValidationStatus {
         case success
+        case error(String)
+    }
+
+    enum VerificationStatus {
+        case success(String)
         case error(String)
     }
 
@@ -156,12 +167,7 @@ struct TranscriptionSettingsView: View {
 
                 switch status.readiness {
                 case .missingAPIKey:
-                    // The only state that actually blocks transcription — needs a fix.
-                    Button("Open API Keys") {
-                        appState.settingsNavigationTarget = .apiKeys
-                    }
-                    .font(.caption)
-                    .buttonStyle(.link)
+                    EmptyView()
                 case .modelNotDownloaded:
                     // Informational only: the model downloads automatically on first
                     // use, so this is a convenience shortcut, not a required fix.
@@ -227,6 +233,60 @@ struct TranscriptionSettingsView: View {
                     Text("Uses ElevenLabs speech-to-text to transcribe your voice recordings")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+
+                    Divider()
+
+                    HStack {
+                        if showElevenLabsKey {
+                            TextField("API Key", text: $elevenLabsAPIKey)
+                                .textFieldStyle(.roundedBorder)
+                        } else {
+                            SecureField("API Key", text: $elevenLabsAPIKey)
+                                .textFieldStyle(.roundedBorder)
+                        }
+
+                        Button {
+                            showElevenLabsKey.toggle()
+                        } label: {
+                            Image(systemName: showElevenLabsKey ? "eye.slash" : "eye")
+                        }
+                        .buttonStyle(.borderless)
+                        .accessibilityLabel(Text(showElevenLabsKey ? "Hide API key" : "Show API key"))
+                    }
+                    .disabled(isLoadingElevenLabsKey)
+
+                    Link("Open ElevenLabs Dashboard", destination: URL(string: "https://elevenlabs.io/app/settings/api-keys")!)
+                        .font(.caption)
+
+                    HStack {
+                        Button(isSavingElevenLabsKey ? "Saving..." : "Save") {
+                            Task { await saveElevenLabsKey() }
+                        }
+                        .disabled(isLoadingElevenLabsKey || isSavingElevenLabsKey || elevenLabsAPIKey.isEmpty)
+
+                        Button("Verify") {
+                            Task { await verifyElevenLabsKey() }
+                        }
+                        .disabled(elevenLabsAPIKey.isEmpty || isVerifyingElevenLabsKey)
+
+                        if isVerifyingElevenLabsKey {
+                            ProgressView()
+                                .scaleEffect(0.7)
+                        }
+                    }
+
+                    if let status = elevenLabsKeyStatus {
+                        switch status {
+                        case .success(let message):
+                            Label(message, systemImage: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                                .font(.caption)
+                        case .error(let message):
+                            Label(message, systemImage: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.red)
+                                .font(.caption)
+                        }
+                    }
                 }
 
                 if transcriptionProvider == .whisperKit {
@@ -676,7 +736,7 @@ struct TranscriptionSettingsView: View {
         .padding()
         .task {
             ensureTranscriptionDefaults()
-            await checkAPIKeys()
+            await loadElevenLabsKey()
             await loadNotionSettings()
             refreshWhisperKitStatus()
             refreshParakeetStatus()
@@ -687,12 +747,56 @@ struct TranscriptionSettingsView: View {
 
     // MARK: - Helper Methods
 
-    private func checkAPIKeys() async {
+    private func loadElevenLabsKey() async {
+        isLoadingElevenLabsKey = true
+        defer { isLoadingElevenLabsKey = false }
+
         do {
-            let elevenLabsKey = try await KeychainService.shared.retrieve(for: .elevenLabsAPIKey)
-            hasElevenLabsKey = elevenLabsKey != nil && !elevenLabsKey!.isEmpty
+            elevenLabsAPIKey = try await KeychainService.shared.retrieve(for: .elevenLabsAPIKey) ?? ""
+            hasElevenLabsKey = !elevenLabsAPIKey.isEmpty
         } catch {
+            elevenLabsAPIKey = ""
             hasElevenLabsKey = false
+        }
+    }
+
+    private func saveElevenLabsKey() async {
+        isSavingElevenLabsKey = true
+        defer { isSavingElevenLabsKey = false }
+
+        do {
+            try await KeychainService.shared.save(elevenLabsAPIKey, for: .elevenLabsAPIKey)
+            hasElevenLabsKey = !elevenLabsAPIKey.isEmpty
+            elevenLabsKeyStatus = .success("Saved")
+            clearElevenLabsKeyStatus()
+            // Rebuild SyncService's transcriptionProvider/transcriptionStatus now,
+            // rather than leaving them stale (nil/"Paused") until an unrelated
+            // settings change happens to trigger a reload.
+            appState.reloadServices()
+        } catch {
+            elevenLabsKeyStatus = .error("Failed to save: \(error.localizedDescription)")
+        }
+    }
+
+    private func verifyElevenLabsKey() async {
+        isVerifyingElevenLabsKey = true
+        defer { isVerifyingElevenLabsKey = false }
+
+        do {
+            try await ElevenLabsTranscriptionService.validateAPIKey(elevenLabsAPIKey)
+            elevenLabsKeyStatus = .success("API key is valid")
+            clearElevenLabsKeyStatus()
+        } catch {
+            elevenLabsKeyStatus = .error("Invalid API key: \(error.localizedDescription)")
+        }
+    }
+
+    private func clearElevenLabsKeyStatus() {
+        Task {
+            try? await Task.sleep(for: .seconds(3))
+            await MainActor.run {
+                elevenLabsKeyStatus = nil
+            }
         }
     }
 
