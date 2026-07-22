@@ -362,6 +362,18 @@ func tp7mtp_download_recording(handle int, cFolder *C.char, cFilename *C.char, c
 
 	var modTime time.Time
 
+	// mtpx reports ActiveFileSize on every low-level USB transfer tick, which
+	// for a large WAV can be thousands of calls. Each one crosses into Swift
+	// and enqueues a MainActor UI update, so tick-for-tick forwarding would
+	// swamp the popover with far more updates than a progress bar can show.
+	// Coalesce to at most one callback per 100ms or 1% of the file, whichever
+	// comes first, and always let the final (sent == total) tick through so
+	// the bar reliably reaches 100%.
+	const progressMinInterval = 100 * time.Millisecond
+	const progressMinPercentStep = 1
+	var lastReportTime time.Time
+	var lastReportedPercent int64
+
 	err := withSession(handle, func(dev *mtp.Device, storageID uint32) error {
 		destDir := filepath.Dir(destPath)
 		if err := os.MkdirAll(destDir, 0o755); err != nil {
@@ -380,8 +392,20 @@ func tp7mtp_download_recording(handle int, cFolder *C.char, cFilename *C.char, c
 				if pi.FileInfo != nil {
 					modTime = pi.FileInfo.ModTime
 				}
-				if pi.ActiveFileSize != nil {
-					C.tp7mtp_invoke_progress_cb(progressCb, C.longlong(pi.ActiveFileSize.Sent), C.longlong(pi.ActiveFileSize.Total), progressContext)
+				if afs := pi.ActiveFileSize; afs != nil {
+					isFinal := afs.Total > 0 && afs.Sent >= afs.Total
+					percent := int64(0)
+					if afs.Total > 0 {
+						percent = afs.Sent * 100 / afs.Total
+					}
+					now := time.Now()
+					if isFinal || lastReportTime.IsZero() ||
+						now.Sub(lastReportTime) >= progressMinInterval ||
+						percent-lastReportedPercent >= progressMinPercentStep {
+						lastReportTime = now
+						lastReportedPercent = percent
+						C.tp7mtp_invoke_progress_cb(progressCb, C.longlong(afs.Sent), C.longlong(afs.Total), progressContext)
+					}
 				}
 				return err
 			},
