@@ -18,12 +18,24 @@ struct RecordingsListView: View {
     @State private var showDeleteConfirmation = false
     @State private var isDeleting = false
 
+    /// Live width of the list column, driving each row's responsive density.
+    /// Measured on the container (an input independent of row heights) rather
+    /// than per-row: a row that sized its own height from its own measured
+    /// width would feed the List's self-sizing loop and crash with a layout
+    /// recursion. Zero until measured.
+    @State private var listWidth: CGFloat = 0
+
     var body: some View {
         List(recordings, selection: $selectedRecordings) { recording in
-            RecordingRow(recording: recording)
+            RecordingRow(recording: recording, width: listWidth)
                 .tag(recording)
         }
         .listStyle(.sidebar)
+        .onGeometryChange(for: CGFloat.self) { proxy in
+            proxy.size.width
+        } action: { newWidth in
+            listWidth = newWidth
+        }
         .toolbar {
             ToolbarItem(placement: .navigation) {
                 Button(role: .destructive) {
@@ -97,8 +109,9 @@ struct RecordingsListView: View {
 struct RecordingRow: View {
     let recording: Recording
 
-    /// Live width of the row, driving responsive density. Zero until measured.
-    @State private var width: CGFloat = 0
+    /// Available width of the enclosing list column, supplied by the parent.
+    /// Drives responsive density. Zero until the container is measured.
+    var width: CGFloat = 0
 
     /// Below this, drop secondary metadata (file size) to keep the essentials
     /// (title, duration, date, status) readable.
@@ -148,11 +161,6 @@ struct RecordingRow: View {
             }
         }
         .padding(.vertical, 4)
-        .onGeometryChange(for: CGFloat.self) { proxy in
-            proxy.size.width
-        } action: { newWidth in
-            width = newWidth
-        }
     }
 
     /// Icon, tint, and human-readable label for the row's current sync/transcription
