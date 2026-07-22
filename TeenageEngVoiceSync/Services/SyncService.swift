@@ -749,7 +749,7 @@ final class SyncService {
         guard let recordings = try? modelContext.fetch(descriptor) else { return }
 
         for recording in recordings where recording.deviceSerial == serial
-            && recording.transcriptionStatus == .completed
+            && (recording.transcriptionStatus == .completed || recording.transcriptionStatus == .skipped)
             && recording.deletedFromDeviceAt == nil {
             await deleteFromDeviceIfConfigured(recording)
         }
@@ -931,11 +931,37 @@ final class SyncService {
         return recording
     }
 
+    /// Recordings shorter than this are almost always accidental button presses
+    /// rather than intentional memos, so they're stored but never sent for
+    /// transcription/summary.
+    static let minimumDurationForTranscription: TimeInterval = 2.0
+
+    /// True when a recording is too short to plausibly be intentional and
+    /// should be skipped rather than transcribed/summarized.
+    nonisolated static func isTooShortToTranscribe(_ recording: Recording) -> Bool {
+        guard let duration = recording.duration else { return false }
+        return duration < minimumDurationForTranscription
+    }
+
     private func processRecording(_ recording: Recording) async {
         // Skip if already processed
         guard recording.s3Key == nil,
               recording.localCopyPath == nil,
               recording.transcriptionStatus == .none else { return }
+
+        if Self.isTooShortToTranscribe(recording) {
+            recording.transcriptionStatus = .skipped
+            recording.updatedAt = Date()
+            // No transcription step will ever upload this recording's audio,
+            // so (unlike the normal flow, which defers to the post-transcription
+            // step) attempt the S3 backup right here if one is configured.
+            _ = await storeRecording(recording, allowS3Upload: Self.needsS3Upload(recording))
+            try? modelContext.save()
+            AppLogger.sync.info("Skipping transcription for \(recording.filename, privacy: .private): duration \(recording.duration ?? 0, privacy: .public)s is below the minimum")
+            await deleteFromDeviceIfConfigured(recording)
+            await refreshPendingCount()
+            return
+        }
 
         // Check for duplicate by hash
         if let hash = recording.fileHash {
@@ -1624,17 +1650,26 @@ final class SyncService {
     private func deleteFromDeviceIfConfigured(_ recording: Recording) async {
         guard UserDefaults.standard.bool(forKey: "devicewatch.deleteAfterProcessing") else { return }
         guard recording.deletedAt == nil, recording.deletedFromDeviceAt == nil else { return }
-        guard recording.transcriptionStatus == .completed else { return }
-        guard Self.remainingBlockingRemoteSteps(for: recording).isEmpty else { return }
-        // `remainingRemoteSteps` omits `.note` when there's no durable audio
-        // copy to build a note from — that state can never resolve on its own,
-        // so treating it as "satisfied" there is fine for the pending-count
-        // badge. For deletion it isn't: it would mean permanently discarding
-        // the only audio copy for a configured note destination that was
-        // never actually delivered. Require the note to genuinely exist.
-        let notesEnabled = UserDefaults.standard.bool(forKey: "markdown.enabled")
-            || UserDefaults.standard.bool(forKey: "applenotes.enabled")
-        guard !notesEnabled || recording.appleNoteCreatedAt != nil else { return }
+        switch recording.transcriptionStatus {
+        case .completed:
+            guard Self.remainingBlockingRemoteSteps(for: recording).isEmpty else { return }
+            // `remainingRemoteSteps` omits `.note` when there's no durable audio
+            // copy to build a note from — that state can never resolve on its own,
+            // so treating it as "satisfied" there is fine for the pending-count
+            // badge. For deletion it isn't: it would mean permanently discarding
+            // the only audio copy for a configured note destination that was
+            // never actually delivered. Require the note to genuinely exist.
+            let notesEnabled = UserDefaults.standard.bool(forKey: "markdown.enabled")
+                || UserDefaults.standard.bool(forKey: "applenotes.enabled")
+            guard !notesEnabled || recording.appleNoteCreatedAt != nil else { return }
+        case .skipped:
+            // Too short to ever be transcribed, so there's no transcript,
+            // summary, or note to wait on — just require a durable audio copy
+            // before removing it from the device.
+            guard recording.s3Key != nil || recording.localCopyPath != nil else { return }
+        default:
+            return
+        }
         // TP-7 filenames (e.g. "0001.wav") aren't globally unique across
         // devices, so only delete when the currently connected device is the
         // same one this recording came from — otherwise a different TP-7
@@ -1715,7 +1750,15 @@ final class SyncService {
 
             guard isOnline else { continue }
 
-            if recording.transcriptionStatus == .completed, recording.deletedFromDeviceAt == nil {
+            // Skipped recordings never go through transcription, so nothing
+            // else retries their S3 backup — do it here if it didn't happen
+            // at skip time (e.g. the app was offline).
+            if recording.transcriptionStatus == .skipped, Self.needsS3Upload(recording) {
+                await uploadToS3IfPossible(recording)
+            }
+
+            if (recording.transcriptionStatus == .completed || recording.transcriptionStatus == .skipped),
+               recording.deletedFromDeviceAt == nil {
                 await deleteFromDeviceIfConfigured(recording)
             }
         }
