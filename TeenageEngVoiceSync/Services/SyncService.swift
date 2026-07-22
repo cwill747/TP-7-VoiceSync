@@ -1222,7 +1222,12 @@ final class SyncService {
     /// (non-silent) track count back onto the recording so the UI and future
     /// routing stop treating the padded slots as real tracks.
     private func transcribeMultiTrackRecording(_ parakeet: ParakeetService, path: String, recording: Recording) async throws -> TranscriptionResult {
-        let tracks = try MultiTrackAudio.extractTracks(from: URL(fileURLWithPath: path))
+        // extractTracks is a synchronous, CPU-bound sample loop over the whole
+        // file — running it inline on this @MainActor method would pin the main
+        // thread (and freeze the recordings list) for the duration. Hop off.
+        let tracks = try await Task.detached(priority: .userInitiated) {
+            try MultiTrackAudio.extractTracks(from: URL(fileURLWithPath: path))
+        }.value
         defer {
             for track in tracks where track.path != path {
                 try? FileManager.default.removeItem(at: track)
@@ -1249,7 +1254,11 @@ final class SyncService {
     /// tracks (1+ — captured as `OverdubNote`s rather than merged into the transcript,
     /// since they're a second pass over the same recording, not new speech in line).
     private func transcribeMemoOverdub(_ parakeet: ParakeetService, sourcePath: String) async throws -> TranscriptionResult {
-        let trackURLs = try MultiTrackAudio.extractTracks(from: URL(fileURLWithPath: sourcePath))
+        // See transcribeMultiTrackRecording: keep this off the main actor so the
+        // recordings list stays scrollable while overdub tracks are split out.
+        let trackURLs = try await Task.detached(priority: .userInitiated) {
+            try MultiTrackAudio.extractTracks(from: URL(fileURLWithPath: sourcePath))
+        }.value
         defer {
             for url in trackURLs where url.path != sourcePath {
                 try? FileManager.default.removeItem(at: url)
