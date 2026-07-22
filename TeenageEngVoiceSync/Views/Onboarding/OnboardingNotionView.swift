@@ -12,9 +12,8 @@ struct OnboardingNotionView: View {
     @Binding var isConfigured: Bool
 
     @State private var showKey = false
-    @State private var isProvisioning = false
+    @State private var isTesting = false
     @State private var status: ProvisionStatus?
-    @State private var warnings: [String] = []
 
     enum ProvisionStatus {
         case success
@@ -83,16 +82,16 @@ struct OnboardingNotionView: View {
                     .foregroundStyle(.secondary)
             }
 
-            // Provision button and status
+            // Test button and status
             VStack(spacing: 10) {
                 HStack {
-                    Button(isProvisioning ? "Connecting…" : "Provision & Connect") {
-                        Task { await provisionAndSave() }
+                    Button(isTesting ? "Testing…" : "Test Connection") {
+                        Task { await testConnection() }
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(draft.notionAPIKey.isEmpty || draft.notionDatabaseId.isEmpty || isProvisioning)
+                    .disabled(draft.notionAPIKey.isEmpty || draft.notionDatabaseId.isEmpty || isTesting)
 
-                    if isProvisioning {
+                    if isTesting {
                         ProgressView()
                             .scaleEffect(0.7)
                     }
@@ -101,20 +100,10 @@ struct OnboardingNotionView: View {
                 if let status {
                     statusLabel(for: status)
                 }
-
-                if !warnings.isEmpty {
-                    VStack(alignment: .leading, spacing: 2) {
-                        ForEach(warnings, id: \.self) { warning in
-                            Text(warning)
-                                .font(.caption)
-                                .foregroundStyle(.orange)
-                        }
-                    }
-                }
             }
 
             // Info text
-            Text("Any missing properties (Date, Filename, Duration, Language, Audio, Summary) are added to the database automatically — existing columns and data are never modified.")
+            Text("Any missing properties (Date, Filename, Duration, Language, Audio, Summary) are added to the database when you finish setup — existing columns and data are never modified.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -133,7 +122,7 @@ struct OnboardingNotionView: View {
     private func statusLabel(for status: ProvisionStatus) -> some View {
         switch status {
         case .success:
-            Label("Connected! Database is ready.", systemImage: "checkmark.circle.fill")
+            Label("Connected! The database is set up when you finish setup.", systemImage: "checkmark.circle.fill")
                 .foregroundStyle(.green)
                 .font(.caption)
         case .error(let message):
@@ -143,23 +132,21 @@ struct OnboardingNotionView: View {
         }
     }
 
-    private func provisionAndSave() async {
-        isProvisioning = true
+    private func testConnection() async {
+        isTesting = true
         status = nil
-        warnings = []
-        defer { isProvisioning = false }
+        defer { isTesting = false }
 
         do {
-            // Provisioning adds any missing columns to the remote database (a real
-            // side effect, allowed to run early). The key, database ID, resolved
-            // property names, and enabled flag are staged in the draft and persisted
-            // only when onboarding completes.
-            let result = try await NotionService.provisionDatabase(apiKey: draft.notionAPIKey, databaseId: draft.notionDatabaseId)
-            draft.notionProps = result.props
+            // Read-only check that the secret works and the database is shared. The
+            // key, database ID, and enabled flag are staged in the draft; the
+            // database is provisioned (missing columns added) only when onboarding
+            // completes.
+            try await NotionService.validateDatabaseAccess(apiKey: draft.notionAPIKey, databaseId: draft.notionDatabaseId)
             status = .success
-            warnings = result.warnings
             isConfigured = true
             draft.notionEnabled = true
+            draft.notionNeedsProvisioning = true
         } catch {
             status = .error("Failed: \(error.localizedDescription)")
             isConfigured = false

@@ -239,6 +239,28 @@ actor NotionService {
         return ProvisionResult(props: resultProps, warnings: warnings)
     }
 
+    /// Read-only check that the integration secret is valid and the database is
+    /// shared with it. Unlike `provisionDatabase`, this never modifies the
+    /// database — the setup wizard uses it for mid-flow feedback while deferring
+    /// the column-adding provisioning to completion.
+    static func validateDatabaseAccess(apiKey: String, databaseId: String) async throws {
+        guard !apiKey.isEmpty, !databaseId.isEmpty else {
+            throw NotionError.notConfigured
+        }
+        let cleanId = databaseId.replacingOccurrences(of: "-", with: "")
+
+        var request = URLRequest(url: URL(string: "https://api.notion.com/v1/databases/\(cleanId)")!)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("2022-06-28", forHTTPHeaderField: "Notion-Version")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw NotionError.invalidResponse }
+        guard http.statusCode == 200 else {
+            throw NotionError.apiError(statusCode: http.statusCode, message: Self.message(from: data))
+        }
+    }
+
     /// Creates a Notion page for a transcription. Signature parallels
     /// AppleNotesService.createTranscriptionNote for symmetric wiring.
     /// Creates a new transcription page and returns its Notion page ID (store it

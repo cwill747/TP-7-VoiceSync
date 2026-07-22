@@ -29,6 +29,19 @@ private final class MockCredentialStore: OnboardingCredentialStore, @unchecked S
     }
 }
 
+/// Records calls to the injected Notion provisioner so tests can assert whether
+/// (and with what) provisioning ran during commit.
+private actor ProvisionRecorder {
+    struct Call { let apiKey: String; let databaseId: String }
+    private(set) var calls: [Call] = []
+    var result = NotionService.ProvisionResult(props: NotionService.PropertyNames(), warnings: [])
+
+    func record(apiKey: String, databaseId: String) -> NotionService.ProvisionResult {
+        calls.append(Call(apiKey: apiKey, databaseId: databaseId))
+        return result
+    }
+}
+
 @MainActor
 final class OnboardingDraftTests: XCTestCase {
 
@@ -112,9 +125,9 @@ final class OnboardingDraftTests: XCTestCase {
         draft.openRouterEnabled = true
         draft.openRouterAPIKey = "or-key"
         draft.notionEnabled = true
+        draft.notionNeedsProvisioning = true
         draft.notionDatabaseId = "db123"
         draft.notionAPIKey = "ntn_key"
-        draft.notionProps = NotionService.PropertyNames()
 
         // Stage a real folder bookmark so persistFolderSelection runs.
         let folder = FileManager.default.temporaryDirectory
@@ -125,7 +138,15 @@ final class OnboardingDraftTests: XCTestCase {
         draft.localAudioFolderPath = folder.path
         draft.localAudioBookmark = try XCTUnwrap(SecurityScopedBookmark.makeBookmarkData(for: folder))
 
-        try await draft.apply(defaults: defaults, credentials: credentials)
+        let provisioned = ProvisionRecorder()
+        try await draft.apply(defaults: defaults, credentials: credentials,
+                              provisionNotion: { await provisioned.record(apiKey: $0, databaseId: $1) })
+
+        // Notion was provisioned exactly once with the staged key + database.
+        let calls = await provisioned.calls
+        XCTAssertEqual(calls.count, 1)
+        XCTAssertEqual(calls.first?.apiKey, "ntn_key")
+        XCTAssertEqual(calls.first?.databaseId, "db123")
 
         XCTAssertEqual(defaults.string(forKey: "transcription.provider"),
                        TranscriptionProviderKind.parakeetUnified.rawValue)
@@ -203,6 +224,65 @@ final class OnboardingDraftTests: XCTestCase {
                        TranscriptionProviderKind.elevenLabs.rawValue)
         XCTAssertFalse(defaults.bool(forKey: "transcription.enabled"))
         XCTAssertFalse(defaults.bool(forKey: "notion.enabled"))
+    }
+
+    // MARK: Notion provisioning is deferred
+
+    /// A seeded, already-provisioned Notion config that the user doesn't touch is
+    /// NOT re-provisioned at commit — so finishing the wizard offline still works.
+    func testUnchangedNotionIsNotReprovisionedOnCommit() async throws {
+        let (defaults, suiteName) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        defaults.set(true, forKey: "notion.enabled")
+        defaults.set("db123", forKey: "notion.databaseId")
+
+        let draft = OnboardingDraft()
+        let credentials = MockCredentialStore()
+        credentials.stored[.notionAPIKey] = "ntn_key"
+        await draft.seed(defaults: defaults, credentials: credentials)
+        XCTAssertTrue(draft.notionEnabled)
+        XCTAssertFalse(draft.notionNeedsProvisioning)
+
+        let provisioned = ProvisionRecorder()
+        try await draft.apply(defaults: defaults, credentials: credentials,
+                              provisionNotion: { await provisioned.record(apiKey: $0, databaseId: $1) })
+
+        let calls = await provisioned.calls
+        XCTAssertTrue(calls.isEmpty, "Untouched Notion config should not be re-provisioned")
+        XCTAssertTrue(defaults.bool(forKey: "notion.enabled"))
+    }
+
+    /// If provisioning fails at commit, `apply()` throws and no settings are
+    /// persisted — the mutating Notion call is the first thing tried, so a failure
+    /// leaves the local configuration untouched.
+    func testFailedNotionProvisioningLeavesConfigurationUnchanged() async throws {
+        let (defaults, suiteName) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        defaults.set(false, forKey: "notion.enabled")
+
+        let draft = OnboardingDraft()
+        let credentials = MockCredentialStore()
+
+        draft.notionEnabled = true
+        draft.notionNeedsProvisioning = true
+        draft.notionAPIKey = "ntn_key"
+        draft.notionDatabaseId = "db123"
+        draft.transcriptionProvider = .parakeet
+
+        struct ProvisionBoom: Error {}
+        do {
+            try await draft.apply(defaults: defaults, credentials: credentials,
+                                  provisionNotion: { _, _ in throw ProvisionBoom() })
+            XCTFail("apply() should have thrown when provisioning failed")
+        } catch {
+            // Expected.
+        }
+
+        XCTAssertFalse(defaults.bool(forKey: "notion.enabled"))
+        XCTAssertNil(defaults.string(forKey: "transcription.provider"))
+        XCTAssertTrue(credentials.saved.isEmpty, "No credentials should be saved when provisioning fails first")
     }
 
     // MARK: Seeding

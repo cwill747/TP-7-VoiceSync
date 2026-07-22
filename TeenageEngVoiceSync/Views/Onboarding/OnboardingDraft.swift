@@ -20,6 +20,10 @@ protocol OnboardingCredentialStore {
 
 extension KeychainService: OnboardingCredentialStore {}
 
+/// Provisions a Notion database at commit time. Abstracted so tests can commit a
+/// draft with Notion enabled without making a live API call.
+typealias NotionProvisioner = @Sendable (_ apiKey: String, _ databaseId: String) async throws -> NotionService.ProvisionResult
+
 @Observable
 @MainActor
 final class OnboardingDraft {
@@ -61,9 +65,11 @@ final class OnboardingDraft {
     var notionEnabled = false
     var notionDatabaseId = ""
     var notionAPIKey = ""
-    /// Set when the database has been provisioned; committed so `SyncService`
-    /// uses the same property-name mapping later.
-    var notionProps: NotionService.PropertyNames?
+    /// True when the Notion connection was (re)validated in this wizard session,
+    /// so `apply()` should provision the database (adding any missing columns) at
+    /// commit. Stays false for a seeded, already-provisioned config so completing
+    /// the wizard offline doesn't force a redundant — and failable — round trip.
+    var notionNeedsProvisioning = false
 
     /// True while `seed()` is loading current values; step views disable secret
     /// fields until it clears so an early keystroke isn't overwritten.
@@ -117,8 +123,18 @@ final class OnboardingDraft {
     /// first: if any throws, no UserDefaults are written, so the persisted
     /// configuration is left exactly as it was — never partially applied.
     func apply(defaults: UserDefaults = .standard,
-               credentials: OnboardingCredentialStore = KeychainService.shared) async throws {
-        // 1) Fallible work: persist non-empty credentials up front.
+               credentials: OnboardingCredentialStore = KeychainService.shared,
+               provisionNotion: NotionProvisioner = { try await NotionService.provisionDatabase(apiKey: $0, databaseId: $1) }) async throws {
+        // 1) Fallible work. Provision Notion first (it mutates a remote database,
+        //    so it must run before anything local is written and only when the
+        //    user actually (re)connected Notion in this session). Its result is
+        //    committed in phase 2 with everything else.
+        var provisionedNotionProps: NotionService.PropertyNames?
+        if notionEnabled, notionNeedsProvisioning, !notionAPIKey.isEmpty, !notionDatabaseId.isEmpty {
+            provisionedNotionProps = try await provisionNotion(notionAPIKey, notionDatabaseId).props
+        }
+
+        // Persist non-empty credentials.
         if !elevenLabsAPIKey.isEmpty {
             try await credentials.save(elevenLabsAPIKey, for: .elevenLabsAPIKey)
         }
@@ -171,6 +187,6 @@ final class OnboardingDraft {
 
         defaults.set(notionEnabled, forKey: "notion.enabled")
         defaults.set(notionDatabaseId, forKey: "notion.databaseId")
-        notionProps?.store(in: defaults)
+        provisionedNotionProps?.store(in: defaults)
     }
 }
