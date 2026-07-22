@@ -105,12 +105,32 @@ final class Recording {
     var isUploaded: Bool { s3Key != nil }
     var isTranscribed: Bool { transcriptionStatus == .completed }
     var isDeleted: Bool { deletedAt != nil }
+
+    /// The generated/user-facing title, trimmed, if one exists. Nil when there
+    /// is no LLM title or it's only whitespace.
+    var generatedTitle: String? {
+        guard let llmTitle else { return nil }
+        let trimmed = llmTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    /// Whether `displayTitle` is a real generated title rather than the
+    /// date/time fallback. Lets the UI treat titled and untitled rows
+    /// differently (e.g. surfacing the raw filename only when it adds info).
+    var hasGeneratedTitle: Bool { generatedTitle != nil }
+
+    /// Stable, human-readable label for recordings with no generated title.
+    /// Raw TP-7 filenames (e.g. "0001.wav") aren't distinguishable at a glance,
+    /// so fall back to the recorded date/time instead. The original filename
+    /// stays discoverable in the detail view.
+    var fallbackTitle: String {
+        recordedAt.formatted(date: .abbreviated, time: .shortened)
+    }
+
+    /// Primary row/label text: generated title when available, otherwise the
+    /// date/time fallback. Never the raw filename (see `fallbackTitle`).
     var displayTitle: String {
-        guard let llmTitle,
-              !llmTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return filename
-        }
-        return llmTitle
+        generatedTitle ?? fallbackTitle
     }
 
     var formattedFileSize: String {

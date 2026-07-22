@@ -123,6 +123,14 @@ struct RecordingDetailView: View {
                             Text(recording.recordedAt.formatted(.dateTime))
                         }
 
+                        GridRow {
+                            Text("Filename")
+                                .foregroundStyle(.secondary)
+                            Text(recording.filename)
+                                .fontDesign(.monospaced)
+                                .textSelection(.enabled)
+                        }
+
                         if let serial = recording.deviceSerial {
                             GridRow {
                                 Text("Device")
