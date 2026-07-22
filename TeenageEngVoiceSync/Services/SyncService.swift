@@ -749,7 +749,7 @@ final class SyncService {
         guard let recordings = try? modelContext.fetch(descriptor) else { return }
 
         for recording in recordings where recording.deviceSerial == serial
-            && recording.transcriptionStatus == .completed
+            && (recording.transcriptionStatus == .completed || recording.transcriptionStatus == .skipped)
             && recording.deletedFromDeviceAt == nil {
             await deleteFromDeviceIfConfigured(recording)
         }
@@ -953,7 +953,9 @@ final class SyncService {
             recording.transcriptionStatus = .skipped
             recording.updatedAt = Date()
             _ = await storeRecording(recording, allowS3Upload: false)
+            try? modelContext.save()
             AppLogger.sync.info("Skipping transcription for \(recording.filename, privacy: .private): duration \(recording.duration ?? 0, privacy: .public)s is below the minimum")
+            await deleteFromDeviceIfConfigured(recording)
             await refreshPendingCount()
             return
         }
@@ -1645,17 +1647,26 @@ final class SyncService {
     private func deleteFromDeviceIfConfigured(_ recording: Recording) async {
         guard UserDefaults.standard.bool(forKey: "devicewatch.deleteAfterProcessing") else { return }
         guard recording.deletedAt == nil, recording.deletedFromDeviceAt == nil else { return }
-        guard recording.transcriptionStatus == .completed else { return }
-        guard Self.remainingBlockingRemoteSteps(for: recording).isEmpty else { return }
-        // `remainingRemoteSteps` omits `.note` when there's no durable audio
-        // copy to build a note from — that state can never resolve on its own,
-        // so treating it as "satisfied" there is fine for the pending-count
-        // badge. For deletion it isn't: it would mean permanently discarding
-        // the only audio copy for a configured note destination that was
-        // never actually delivered. Require the note to genuinely exist.
-        let notesEnabled = UserDefaults.standard.bool(forKey: "markdown.enabled")
-            || UserDefaults.standard.bool(forKey: "applenotes.enabled")
-        guard !notesEnabled || recording.appleNoteCreatedAt != nil else { return }
+        switch recording.transcriptionStatus {
+        case .completed:
+            guard Self.remainingBlockingRemoteSteps(for: recording).isEmpty else { return }
+            // `remainingRemoteSteps` omits `.note` when there's no durable audio
+            // copy to build a note from — that state can never resolve on its own,
+            // so treating it as "satisfied" there is fine for the pending-count
+            // badge. For deletion it isn't: it would mean permanently discarding
+            // the only audio copy for a configured note destination that was
+            // never actually delivered. Require the note to genuinely exist.
+            let notesEnabled = UserDefaults.standard.bool(forKey: "markdown.enabled")
+                || UserDefaults.standard.bool(forKey: "applenotes.enabled")
+            guard !notesEnabled || recording.appleNoteCreatedAt != nil else { return }
+        case .skipped:
+            // Too short to ever be transcribed, so there's no transcript,
+            // summary, or note to wait on — just require a durable audio copy
+            // before removing it from the device.
+            guard recording.s3Key != nil || recording.localCopyPath != nil else { return }
+        default:
+            return
+        }
         // TP-7 filenames (e.g. "0001.wav") aren't globally unique across
         // devices, so only delete when the currently connected device is the
         // same one this recording came from — otherwise a different TP-7
@@ -1736,7 +1747,8 @@ final class SyncService {
 
             guard isOnline else { continue }
 
-            if recording.transcriptionStatus == .completed, recording.deletedFromDeviceAt == nil {
+            if (recording.transcriptionStatus == .completed || recording.transcriptionStatus == .skipped),
+               recording.deletedFromDeviceAt == nil {
                 await deleteFromDeviceIfConfigured(recording)
             }
         }
