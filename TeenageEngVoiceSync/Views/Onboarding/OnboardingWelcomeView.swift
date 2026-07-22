@@ -33,28 +33,28 @@ struct OnboardingWelcomeView: View {
                 featureRow(
                     icon: "waveform",
                     title: "Transcription",
-                    description: "Convert voice recordings to text using ElevenLabs or WhisperKit",
+                    description: "Transcribe locally with recommended Parakeet TDT or Unified, or use WhisperKit or ElevenLabs",
                     required: true
                 )
 
                 featureRow(
-                    icon: "cloud",
-                    title: "Cloud Storage",
-                    description: "Upload recordings to S3 for playback links in notes",
+                    icon: "externaldrive",
+                    title: "Audio Storage",
+                    description: "Keep recordings in a local folder or upload them to S3 for playback links",
                     required: false
                 )
 
                 featureRow(
                     icon: "brain",
-                    title: "AI Titles",
-                    description: "Generate intelligent titles using OpenRouter",
+                    title: "AI Enhancement",
+                    description: "Generate titles and summaries with OpenRouter or a custom OpenAI-compatible provider",
                     required: false
                 )
 
                 featureRow(
                     icon: "note.text",
-                    title: "Apple Notes",
-                    description: "Automatically create notes with transcriptions",
+                    title: "Transcription Output",
+                    description: "Save transcriptions to Apple Notes, local Markdown, Notion, or multiple outputs",
                     required: false
                 )
             }
