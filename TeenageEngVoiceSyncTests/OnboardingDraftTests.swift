@@ -459,6 +459,38 @@ final class OnboardingDraftTests: XCTestCase {
         XCTAssertFalse(draft.notionWasConfiguredAtSeed)
     }
 
+    /// The exact TP-16 follow-up: stale `notion.enabled = true` with a key but
+    /// no database ID seeds a skippable step (`notionWasConfiguredAtSeed ==
+    /// false`), but the raw `notionEnabled` flag on the draft still starts as
+    /// `true`. `OnboardingView.goToNextStep()` syncs the draft's flag to the
+    /// resolved (non-enabled) decision before advancing — this verifies that
+    /// once that sync happens, `apply()` actually commits `false` rather than
+    /// re-persisting the stale `true`.
+    func testSkippingStaleNotionFlagCommitsDisabled() async throws {
+        let (defaults, suiteName) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        defaults.set(true, forKey: "notion.enabled")
+        // No database ID persisted — matches the reported stale-flag scenario.
+
+        let draft = OnboardingDraft()
+        let credentials = MockCredentialStore()
+        credentials.stored[.notionAPIKey] = "ntn_key"
+        await draft.seed(defaults: defaults, credentials: credentials)
+
+        XCTAssertFalse(draft.notionWasConfiguredAtSeed)
+        XCTAssertTrue(draft.notionEnabled, "Seed mirrors the stale persisted flag as-is")
+
+        // What OnboardingView.goToNextStep() does when the Notion step
+        // resolves to a non-enabled decision (skipped, in this case).
+        draft.notionEnabled = false
+
+        try await draft.apply(defaults: defaults, credentials: credentials)
+
+        XCTAssertFalse(defaults.bool(forKey: "notion.enabled"),
+                        "Skipping a stale-but-unusable Notion config must not re-commit it as enabled")
+    }
+
     /// A fresh install with nothing persisted must report every optional
     /// integration as not-configured-at-seed, so a first-run skip resolves to
     /// `.skipped` rather than being mistaken for kept existing configuration.

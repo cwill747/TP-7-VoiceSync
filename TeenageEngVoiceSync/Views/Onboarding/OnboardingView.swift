@@ -326,17 +326,33 @@ struct OnboardingView: View {
             // Continuing without an explicit decision (no Skip press, no
             // successful test) is treated as skipping, same as pressing Skip.
             if s3Decision == .notConfigured { s3Decision = .skipped }
+            // The decision is the source of truth for what gets committed —
+            // sync the draft's flag to it so a skipped/disabled step can never
+            // leave a stale `true` (e.g. from seeded-but-incomplete settings)
+            // for `apply()` to re-commit.
+            draft.s3Enabled = s3Decision.isEnabled
             currentStep = s3Decision.isEnabled ? .openRouter : .localAudioFolder
 
         case .localAudioFolder:
             currentStep = .openRouter
 
+        case .openRouter:
+            if openRouterDecision == .notConfigured { openRouterDecision = .skipped }
+            draft.openRouterEnabled = openRouterDecision.isEnabled
+            currentStep = .appleNotes
+
         case .appleNotes:
             if appleNotesDecision == .notConfigured { appleNotesDecision = .skipped }
+            draft.appleNotesEnabled = appleNotesDecision.isEnabled
             currentStep = appleNotesDecision.isEnabled ? .notion : .localMarkdownFolder
 
         case .localMarkdownFolder:
             currentStep = .notion
+
+        case .notion:
+            if notionDecision == .notConfigured { notionDecision = .skipped }
+            draft.notionEnabled = notionDecision.isEnabled
+            currentStep = .complete
 
         default:
             // Standard sequential navigation
