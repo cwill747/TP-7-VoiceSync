@@ -10,6 +10,21 @@ package main
 
 /*
 #include <stdlib.h>
+
+// Reports bytes transferred for the file currently being downloaded.
+// Invoked synchronously, possibly many times, from within
+// tp7mtp_download_recording - never after it returns. context is an opaque
+// pointer the caller supplied to tp7mtp_download_recording and is passed
+// back unchanged.
+typedef void (*tp7mtp_progress_cb)(long long bytesSent, long long bytesTotal, void *context);
+
+// cgo cannot invoke a C function pointer directly from Go, so this trampoline
+// does it on Go's behalf.
+static inline void tp7mtp_invoke_progress_cb(tp7mtp_progress_cb cb, long long bytesSent, long long bytesTotal, void *context) {
+    if (cb != NULL) {
+        cb(bytesSent, bytesTotal, context);
+    }
+}
 */
 import "C"
 
@@ -332,7 +347,7 @@ func tp7mtp_list_recordings(handle int) *C.char {
 }
 
 //export tp7mtp_download_recording
-func tp7mtp_download_recording(handle int, cFolder *C.char, cFilename *C.char, cDestPath *C.char) *C.char {
+func tp7mtp_download_recording(handle int, cFolder *C.char, cFilename *C.char, cDestPath *C.char, progressCb C.tp7mtp_progress_cb, progressContext unsafe.Pointer) *C.char {
 	folder := C.GoString(cFolder)
 	filename := C.GoString(cFilename)
 	destPath := C.GoString(cDestPath)
@@ -346,6 +361,18 @@ func tp7mtp_download_recording(handle int, cFolder *C.char, cFilename *C.char, c
 	sourcePath := dirPath + "/" + filename
 
 	var modTime time.Time
+
+	// mtpx reports ActiveFileSize on every low-level USB transfer tick, which
+	// for a large WAV can be thousands of calls. Each one crosses into Swift
+	// and enqueues a MainActor UI update, so tick-for-tick forwarding would
+	// swamp the popover with far more updates than a progress bar can show.
+	// Coalesce to at most one callback per 100ms or 1% of the file, whichever
+	// comes first, and always let the final (sent == total) tick through so
+	// the bar reliably reaches 100%.
+	const progressMinInterval = 100 * time.Millisecond
+	const progressMinPercentStep = 1
+	var lastReportTime time.Time
+	var lastReportedPercent int64
 
 	err := withSession(handle, func(dev *mtp.Device, storageID uint32) error {
 		destDir := filepath.Dir(destPath)
@@ -364,6 +391,21 @@ func tp7mtp_download_recording(handle int, cFolder *C.char, cFilename *C.char, c
 			func(pi *mtpx.ProgressInfo, err error) error {
 				if pi.FileInfo != nil {
 					modTime = pi.FileInfo.ModTime
+				}
+				if afs := pi.ActiveFileSize; afs != nil {
+					isFinal := afs.Total > 0 && afs.Sent >= afs.Total
+					percent := int64(0)
+					if afs.Total > 0 {
+						percent = afs.Sent * 100 / afs.Total
+					}
+					now := time.Now()
+					if isFinal || lastReportTime.IsZero() ||
+						now.Sub(lastReportTime) >= progressMinInterval ||
+						percent-lastReportedPercent >= progressMinPercentStep {
+						lastReportTime = now
+						lastReportedPercent = percent
+						C.tp7mtp_invoke_progress_cb(progressCb, C.longlong(afs.Sent), C.longlong(afs.Total), progressContext)
+					}
 				}
 				return err
 			},

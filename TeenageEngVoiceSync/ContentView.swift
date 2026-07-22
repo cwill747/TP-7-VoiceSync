@@ -203,30 +203,43 @@ struct ContentView: View {
 
 struct StatusToolbarItem: View {
     let appState: AppState
+    @State private var showDownloadDetail = false
 
     var body: some View {
-        HStack(spacing: 6) {
-            if let statusIcon {
-                Image(systemName: statusIcon)
-                    .imageScale(.medium)
-                    .foregroundStyle(statusIconColor)
-                    .contentTransition(.symbolEffect(.replace))
-                    .symbolEffect(.variableColor, isActive: appState.isDownloadingFromDevice)
-                    .symbolEffect(.pulse, isActive: appState.processingActivity != nil)
-            } else {
-                Circle()
-                    .fill(statusColor)
-                    .frame(width: 9, height: 9)
-                    .shadow(color: statusColor.opacity(0.6), radius: 2)
-            }
+        Button {
+            showDownloadDetail.toggle()
+        } label: {
+            HStack(spacing: 6) {
+                if let statusIcon {
+                    Image(systemName: statusIcon)
+                        .imageScale(.medium)
+                        .foregroundStyle(statusIconColor)
+                        .contentTransition(.symbolEffect(.replace))
+                        .symbolEffect(.variableColor, isActive: appState.isDownloadingFromDevice)
+                        .symbolEffect(.pulse, isActive: appState.processingActivity != nil)
+                } else {
+                    Circle()
+                        .fill(statusColor)
+                        .frame(width: 9, height: 9)
+                        .shadow(color: statusColor.opacity(0.6), radius: 2)
+                }
 
-            Text(appState.statusText)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
+                Text(appState.statusText)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+        }
+        .buttonStyle(.plain)
+        .disabled(!appState.isDownloadingFromDevice)
+        .popover(isPresented: $showDownloadDetail) {
+            DeviceDownloadProgressView(files: appState.deviceDownloadingFiles)
         }
         .animation(.easeInOut(duration: 0.2), value: appState.statusText)
+        .onChange(of: appState.isDownloadingFromDevice) { _, isDownloading in
+            if !isDownloading { showDownloadDetail = false }
+        }
     }
 
     private var statusColor: Color {

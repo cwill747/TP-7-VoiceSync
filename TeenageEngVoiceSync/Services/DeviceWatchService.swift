@@ -26,6 +26,22 @@ struct DownloadedRecording {
     let deviceFilename: String
 }
 
+/// Live status of one file in the current download batch, for the "what's
+/// going on under the hood" progress UI.
+struct DeviceDownloadProgress: Identifiable {
+    enum State: Equatable {
+        case queued
+        case downloading(bytesSent: Int64, bytesTotal: Int64)
+        case done
+        case failed
+    }
+
+    var id: String { "\(folder)/\(name)" }
+    let name: String
+    let folder: String
+    var state: State = .queued
+}
+
 @Observable
 final class DeviceWatchService {
     private(set) var isConnected = false
@@ -33,6 +49,9 @@ final class DeviceWatchService {
     private(set) var recordingsPath: String?
     private(set) var isDownloading = false
     private(set) var downloadingCount = 0
+    /// One entry per file in the batch currently downloading, in download
+    /// order. Empty when `isDownloading` is false.
+    private(set) var downloadingFiles: [DeviceDownloadProgress] = []
 
     private var watchTask: Task<Void, Never>?
     private var session: TP7MTPSession?
@@ -189,12 +208,14 @@ final class DeviceWatchService {
         var downloaded: [DownloadedRecording] = []
         isDownloading = true
         downloadingCount = newFiles.count
+        setDownloadingFiles(newFiles.map { DeviceDownloadProgress(name: $0.name, folder: $0.folder) })
         defer {
             isDownloading = false
             downloadingCount = 0
+            setDownloadingFiles([])
         }
 
-        for file in newFiles {
+        for (index, file) in newFiles.enumerated() {
             let key = Self.trackingKey(for: file)
             guard let source = RecordingSource(rawValue: file.folder) else {
                 AppLogger.device.error("Skipping recording with unknown folder \(file.folder, privacy: .public)")
@@ -205,21 +226,28 @@ final class DeviceWatchService {
             if FileManager.default.fileExists(atPath: destination.path) {
                 knownFilenames.insert(key)
                 downloaded.append(DownloadedRecording(url: destination, source: source, deviceFilename: file.name))
+                setFileState(at: index, .done)
                 continue
             }
 
-            let downloadResult = await Task.detached(priority: .utility) {
-                session.download(filename: file.name, folder: file.folder, to: destination)
+            setFileState(at: index, .downloading(bytesSent: 0, bytesTotal: file.size))
+
+            let downloadResult = await Task.detached(priority: .utility) { [weak self] in
+                session.download(filename: file.name, folder: file.folder, to: destination) { sent, total in
+                    self?.setFileState(at: index, .downloading(bytesSent: sent, bytesTotal: total))
+                }
             }.value
 
             switch downloadResult {
             case .success:
                 knownFilenames.insert(key)
                 downloaded.append(DownloadedRecording(url: destination, source: source, deviceFilename: file.name))
+                setFileState(at: index, .done)
             case .failure(let error):
                 // Do not mark as known: a transient MTP failure here should be
                 // retried on the next poll cycle rather than skipped forever.
                 AppLogger.device.error("Failed to download \(file.name, privacy: .private): \(error.localizedDescription, privacy: .public)")
+                setFileState(at: index, .failed)
             }
         }
 
@@ -228,6 +256,30 @@ final class DeviceWatchService {
         }
 
         return true
+    }
+
+    /// Every `downloadingFiles` write - from `scanRecordings` itself and from
+    /// the progress callback on the detached download task's thread - goes
+    /// through one of these two methods, which hop to the main actor (where
+    /// the toolbar/popover read the array) via a fire-and-forget `Task`.
+    /// Confining every write to the same actor through the same enqueue
+    /// mechanism, in call order, is what keeps a batch's initial/progress/
+    /// done writes from racing or reordering relative to each other - e.g. a
+    /// stale in-flight progress update can never land after (and overwrite)
+    /// that file's own completion write, since the completion write for a
+    /// given file is always enqueued after all of that file's progress
+    /// writes.
+    private func setDownloadingFiles(_ files: [DeviceDownloadProgress]) {
+        Task { @MainActor [weak self] in
+            self?.downloadingFiles = files
+        }
+    }
+
+    private func setFileState(at index: Int, _ state: DeviceDownloadProgress.State) {
+        Task { @MainActor [weak self] in
+            guard let self, self.downloadingFiles.indices.contains(index) else { return }
+            self.downloadingFiles[index].state = state
+        }
     }
 
     private static func trackingKey(for file: TP7MTPFileEntry) -> String {
