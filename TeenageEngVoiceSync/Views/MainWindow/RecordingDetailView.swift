@@ -427,12 +427,15 @@ struct TranscriptSection: View {
 
                 transcriptBody
             }
-            .onChange(of: query) { _, _ in activeMatch = 0 }
+            .onChange(of: query) { _, _ in
+                // Reset to the first match and scroll to it. This must scroll
+                // explicitly: when activeMatch is already 0 the assignment below
+                // is a no-op, so the activeMatch handler wouldn't fire on its own.
+                activeMatch = 0
+                scrollToActiveMatch(using: proxy)
+            }
             .onChange(of: activeMatch) { _, _ in
-                guard let target = searchContext.activeAnchorID else { return }
-                withAnimation(.easeInOut(duration: 0.15)) {
-                    proxy.scrollTo(target, anchor: .center)
-                }
+                scrollToActiveMatch(using: proxy)
             }
             .onChange(of: recording.persistentModelID) { _, _ in
                 showOriginal = false
@@ -544,6 +547,13 @@ struct TranscriptSection: View {
                 language: recording.transcriptionLanguage,
                 search: searchContext
             )
+        }
+    }
+
+    private func scrollToActiveMatch(using proxy: ScrollViewProxy) {
+        guard let target = searchContext.activeAnchorID else { return }
+        withAnimation(.easeInOut(duration: 0.15)) {
+            proxy.scrollTo(target, anchor: .center)
         }
     }
 
@@ -687,10 +697,13 @@ struct DiarizedTranscriptView: View {
                     query: search.query,
                     activeMatch: search.activeMatch(for: index),
                     onReassign: { personId, personName in
-                        reassign(segment: &localSegments[index], personId: personId, personName: personName)
+                        // Pass a copy: the helpers mutate `localSegments` internally,
+                        // so handing them an inout into the live array would overlap
+                        // that write and trip Swift's exclusivity checks.
+                        reassign(segment: localSegments[index], personId: personId, personName: personName)
                     },
                     onNewPerson: { name in
-                        createAndAssign(segment: &localSegments[index], name: name)
+                        createAndAssign(segment: localSegments[index], name: name)
                     }
                 )
                 .id(search.anchorID(for: index))
@@ -712,7 +725,7 @@ struct DiarizedTranscriptView: View {
         }
     }
 
-    private func reassign(segment: inout StoredSpeakerSegment, personId: String, personName: String) {
+    private func reassign(segment: StoredSpeakerSegment, personId: String, personName: String) {
         let speakerHash = segment.effectiveSpeakerHash
         assignLocalSegments(matching: speakerHash, personId: personId, personName: personName)
 
@@ -746,7 +759,7 @@ struct DiarizedTranscriptView: View {
         persistAssignment(matching: speakerHash, personId: personId, personName: personName)
     }
 
-    private func createAndAssign(segment: inout StoredSpeakerSegment, name: String) {
+    private func createAndAssign(segment: StoredSpeakerSegment, name: String) {
         let person = Person(name: name)
         modelContext.insert(person)
         let speakerHash = segment.effectiveSpeakerHash
