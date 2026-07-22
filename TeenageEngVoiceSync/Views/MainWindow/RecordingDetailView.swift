@@ -24,17 +24,14 @@ struct RecordingDetailView: View {
         case error(String)
     }
 
-    /// Local file to play, if any: prefers the device cache (`localPath`) but
-    /// falls back to a recovered local copy (`localCopyPath`).
-    private var localAudioURL: URL? {
-        let fm = FileManager.default
-        if !recording.localPath.isEmpty, fm.fileExists(atPath: recording.localPath) {
-            return URL(fileURLWithPath: recording.localPath)
-        }
-        if let copy = recording.localCopyPath, fm.fileExists(atPath: copy) {
-            return URL(fileURLWithPath: copy)
-        }
-        return nil
+    /// Local file to play, if any: prefers the app-managed device cache
+    /// (`localPath`) but falls back to a security-scoped local copy
+    /// (`localCopyPath`).
+    private var localAudioSource: AudioPlaybackSource? {
+        AudioPlaybackSource.select(
+            localPath: recording.localPath,
+            localCopyPath: recording.localCopyPath
+        )
     }
 
     private var canRetranscribe: Bool {
@@ -94,8 +91,11 @@ struct RecordingDetailView: View {
                 // Audio player — only when the audio exists locally. Recovered
                 // rows keep the file in localCopyPath (localPath may be empty), and
                 // S3/Notion-only rows have no local file to play at all.
-                if let audioURL = localAudioURL {
-                    AudioPlayerView(url: audioURL)
+                if let audioSource = localAudioSource {
+                    AudioPlayerView(
+                        url: audioSource.url,
+                        requiresConfiguredFolderScope: audioSource.requiresConfiguredFolderScope
+                    )
 
                     Divider()
                 }
@@ -978,11 +978,14 @@ struct NewPersonPrompt: View {
 
 struct AudioPlayerView: View {
     let url: URL
+    let requiresConfiguredFolderScope: Bool
     @State private var player: AVAudioPlayer?
+    @State private var fileAccess = AudioPlaybackFileAccess()
     @State private var isPlaying = false
     @State private var currentTime: TimeInterval = 0
     @State private var duration: TimeInterval = 0
     @State private var timer: Timer?
+    @State private var playbackError: String?
 
     var body: some View {
         VStack(spacing: 12) {
@@ -1011,6 +1014,7 @@ struct AudioPlayerView: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(Text(isPlaying ? "Pause" : "Play"))
+                .disabled(player == nil)
 
                 Spacer()
 
@@ -1018,6 +1022,13 @@ struct AudioPlayerView: View {
                     .font(.caption)
                     .fontDesign(.monospaced)
                     .foregroundStyle(.secondary)
+            }
+
+            if let playbackError {
+                Label(playbackError, systemImage: "exclamationmark.triangle.fill")
+                    .font(.callout)
+                    .foregroundStyle(.red)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .padding()
@@ -1028,25 +1039,57 @@ struct AudioPlayerView: View {
         .onChange(of: url) {
             setupPlayer()
         }
+        .onChange(of: requiresConfiguredFolderScope) {
+            setupPlayer()
+        }
         .onDisappear {
             stopPlayback()
+            player = nil
+            fileAccess.release()
         }
     }
 
     private func setupPlayer() {
         stopPlayback()
         player = nil
+        fileAccess.release()
         currentTime = 0
         duration = 0
+        playbackError = nil
 
-        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        do {
+            try fileAccess.acquire(
+                for: url,
+                requiresConfiguredFolderScope: requiresConfiguredFolderScope
+            )
+        } catch {
+            showPlaybackError(error)
+            return
+        }
+
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            playbackError = "This audio file is no longer available."
+            fileAccess.release()
+            return
+        }
 
         do {
             player = try AVAudioPlayer(contentsOf: url)
             player?.prepareToPlay()
             duration = player?.duration ?? 0
         } catch {
-            AppLogger.app.error("Failed to setup audio player: \(String(describing: error), privacy: .public)")
+            showPlaybackError(error)
+            fileAccess.release()
+        }
+    }
+
+    private func showPlaybackError(_ error: Error) {
+        AppLogger.app.error("Failed to setup audio player: \(String(describing: error), privacy: .public)")
+        let nsError = error as NSError
+        if nsError.domain == NSOSStatusErrorDomain && nsError.code == -54 {
+            playbackError = AudioPlaybackFileAccess.AccessError.folderAccessDenied.localizedDescription
+        } else {
+            playbackError = error.localizedDescription
         }
     }
 

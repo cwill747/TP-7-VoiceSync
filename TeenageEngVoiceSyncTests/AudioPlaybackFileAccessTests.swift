@@ -1,0 +1,133 @@
+import AVFoundation
+import XCTest
+@testable import TP_7_VoiceSync
+
+final class AudioPlaybackFileAccessTests: XCTestCase {
+    func testLocalCopyIsSelectedWithoutProbingBeforeSecurityScopeIsAcquired() throws {
+        let localCopyPath = "/external/audio/local-copy.wav"
+
+        let source = AudioPlaybackSource.select(
+            localPath: "",
+            localCopyPath: localCopyPath,
+            fileExists: { path in
+                XCTFail("External local copy was probed before acquiring its security scope: \(path)")
+                return false
+            }
+        )
+
+        let selected = try XCTUnwrap(source)
+        XCTAssertEqual(selected.url, URL(fileURLWithPath: localCopyPath))
+        XCTAssertTrue(selected.requiresConfiguredFolderScope)
+    }
+
+    func testMissingDeviceCacheFallsBackToUnprobedLocalCopy() throws {
+        let cachePath = "/app/container/cache/recording.wav"
+        let localCopyPath = "/external/audio/recording.wav"
+        var probedPaths: [String] = []
+
+        let source = AudioPlaybackSource.select(
+            localPath: cachePath,
+            localCopyPath: localCopyPath,
+            fileExists: {
+                probedPaths.append($0)
+                return false
+            }
+        )
+
+        XCTAssertEqual(probedPaths, [cachePath])
+        XCTAssertEqual(try XCTUnwrap(source).url, URL(fileURLWithPath: localCopyPath))
+        XCTAssertTrue(try XCTUnwrap(source).requiresConfiguredFolderScope)
+    }
+
+    func testLocalCopyPlaybackAcquiresConfiguredFolderScopeBeforeOpeningPlayer() throws {
+        let folder = try makeTemporaryFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let audioURL = folder.appendingPathComponent("local-copy.wav")
+        try makeSilentWAV(at: audioURL)
+
+        var startedURLs: [URL] = []
+        var stoppedURLs: [URL] = []
+        let access = AudioPlaybackFileAccess(
+            configuredFolder: { folder },
+            resolveBookmark: { folder },
+            startAccessing: {
+                startedURLs.append($0)
+                return true
+            },
+            stopAccessing: { stoppedURLs.append($0) }
+        )
+
+        try access.acquire(for: audioURL, requiresConfiguredFolderScope: true)
+        let player = try AVAudioPlayer(contentsOf: audioURL)
+
+        XCTAssertGreaterThan(player.duration, 0)
+        XCTAssertEqual(startedURLs, [folder])
+        XCTAssertTrue(stoppedURLs.isEmpty)
+
+        access.release()
+        XCTAssertEqual(stoppedURLs, [folder])
+    }
+
+    func testSwitchingFilesReleasesPreviousScopeAndDoesNotScopeContainedDeviceCache() throws {
+        let folder = URL(fileURLWithPath: "/app", isDirectory: true)
+        let localCopy = folder.appendingPathComponent("external-audio/recording.wav")
+        let cachedFile = folder.appendingPathComponent("container/cache/recording.wav")
+        var startCount = 0
+        var stopCount = 0
+        let access = AudioPlaybackFileAccess(
+            configuredFolder: { folder },
+            resolveBookmark: { folder },
+            startAccessing: { _ in
+                startCount += 1
+                return true
+            },
+            stopAccessing: { _ in stopCount += 1 }
+        )
+
+        try access.acquire(for: localCopy, requiresConfiguredFolderScope: true)
+        try access.acquire(for: cachedFile, requiresConfiguredFolderScope: false)
+
+        XCTAssertEqual(startCount, 1)
+        XCTAssertEqual(stopCount, 1)
+    }
+
+    func testPermissionFailureIsReportedForConfiguredLocalCopy() {
+        let folder = URL(fileURLWithPath: "/external/audio", isDirectory: true)
+        let access = AudioPlaybackFileAccess(
+            configuredFolder: { folder },
+            resolveBookmark: { folder },
+            startAccessing: { _ in false }
+        )
+
+        XCTAssertThrowsError(
+            try access.acquire(
+                for: folder.appendingPathComponent("recording.wav"),
+                requiresConfiguredFolderScope: true
+            )
+        ) { error in
+            XCTAssertEqual(
+                error.localizedDescription,
+                "VoiceSync no longer has permission to read the local audio folder. Choose the folder again in Settings."
+            )
+        }
+    }
+
+    private func makeTemporaryFolder() throws -> URL {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tp7-audio-playback-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        return folder
+    }
+
+    private func makeSilentWAV(at url: URL) throws {
+        let format = try XCTUnwrap(
+            AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 1)
+        )
+        let file = try AVAudioFile(forWriting: url, settings: format.settings)
+        let buffer = try XCTUnwrap(
+            AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4_410)
+        )
+        buffer.frameLength = 4_410
+        try file.write(from: buffer)
+    }
+}
