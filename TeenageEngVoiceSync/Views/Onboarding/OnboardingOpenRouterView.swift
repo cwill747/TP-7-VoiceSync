@@ -18,6 +18,10 @@ struct OnboardingOpenRouterView: View {
     /// toggle so a kept-existing decision can't be waved back to enabled
     /// without another successful verify — see `existingConfigurationToggle`.
     @State private var hasFailedTest = false
+    /// True once a verify has succeeded in this session. Keeps the fresh Enable
+    /// toggle visible (so the user can flip it back on) even after they've
+    /// turned it off, without reintroducing `existingConfigurationToggle`.
+    @State private var hasVerifiedKey = false
 
     private let openRouterService = OpenRouterService()
 
@@ -80,7 +84,7 @@ struct OnboardingOpenRouterView: View {
             // Existing configuration control (re-run only). Hidden once the key
             // is actively reconfigured this session — the Enable toggle below
             // takes over at that point instead of showing two overlapping controls.
-            if draft.openRouterWasConfiguredAtSeed && decision != .configuredNow && !hasFailedTest {
+            if draft.openRouterWasConfiguredAtSeed && !hasVerifiedKey && !hasFailedTest {
                 existingConfigurationToggle
             }
 
@@ -104,9 +108,20 @@ struct OnboardingOpenRouterView: View {
                 }
             }
 
-            // Enable toggle
-            if decision == .configuredNow {
-                Toggle("Enable AI-powered titles", isOn: $draft.openRouterEnabled)
+            // Enable toggle — keeps `decision` (not just the draft flag) in
+            // sync, since OnboardingView.goToNextStep() re-derives
+            // draft.openRouterEnabled from decision.isEnabled on Continue and
+            // would otherwise silently re-enable a key the user just turned off.
+            // Stays visible after being turned off (gated on `hasVerifiedKey`,
+            // not `decision`) so the user can flip it back on.
+            if hasVerifiedKey {
+                Toggle("Enable AI-powered titles", isOn: Binding(
+                    get: { draft.openRouterEnabled },
+                    set: { newValue in
+                        draft.openRouterEnabled = newValue
+                        decision = newValue ? .configuredNow : .disabled
+                    }
+                ))
             }
 
             // Info text
@@ -157,6 +172,7 @@ struct OnboardingOpenRouterView: View {
             if models.isEmpty {
                 verificationStatus = .error("No models returned - key may be invalid")
                 hasFailedTest = true
+                hasVerifiedKey = false
                 decision = .disabled
                 draft.openRouterEnabled = false
                 return
@@ -165,6 +181,7 @@ struct OnboardingOpenRouterView: View {
             // Stage the verified key + enabled flag in the draft; persisted on completion.
             verificationStatus = .success("Valid! \(models.count) models available")
             hasFailedTest = false
+            hasVerifiedKey = true
             decision = .configuredNow
             draft.openRouterEnabled = true
 
@@ -178,6 +195,7 @@ struct OnboardingOpenRouterView: View {
         } catch {
             verificationStatus = .error("Verification failed: \(error.localizedDescription)")
             hasFailedTest = true
+            hasVerifiedKey = false
             // A failed (re)verify must not leave a kept-existing decision that
             // still reads as enabled — the key just tested may be an edited,
             // unvalidated value, and a kept `.isEnabled` decision would let

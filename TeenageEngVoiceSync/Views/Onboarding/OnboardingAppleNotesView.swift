@@ -114,6 +114,15 @@ struct OnboardingAppleNotesView: View {
             set: { newValue in
                 decision = newValue ? .keptExisting : .disabled
                 draft.appleNotesEnabled = newValue
+                // Mirror the settings behavior: Apple Notes and the local
+                // markdown fallback are mutually exclusive destinations. Without
+                // this, re-enabling Apple Notes here after validating the
+                // markdown fallback would leave both flags true — the note
+                // router prefers markdown in that case, so notes would still be
+                // written as markdown despite the summary reporting Apple Notes.
+                if newValue {
+                    draft.markdownEnabled = false
+                }
             }
         )) {
             Text(decision.isEnabled ? "Apple Notes is already configured — keep it enabled" : "Apple Notes integration is disabled")
