@@ -356,4 +356,80 @@ final class OnboardingDraftTests: XCTestCase {
         XCTAssertEqual(draft.elevenLabsAPIKey, "seeded-key")
         XCTAssertFalse(draft.isSeeding)
     }
+
+    // MARK: Seed-time configuration snapshot (TP-16)
+
+    /// `seed()` must record which optional integrations were already fully
+    /// configured, independent of the enabled flags it also loads — this is
+    /// what lets a re-run distinguish "kept existing" from "configured now".
+    /// An integration counts as configured-at-seed only when both its enabled
+    /// flag AND its credential/data are present; a stray enabled flag with no
+    /// credential (e.g. a prior failed setup) must not count as configured.
+    func testSeedRecordsWhichIntegrationsWereAlreadyConfigured() async throws {
+        let (defaults, suiteName) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        defaults.set(true, forKey: "s3.enabled")
+        defaults.set(true, forKey: "openrouter.enabled")
+        defaults.set(true, forKey: "applenotes.enabled")
+        defaults.set(true, forKey: "notion.enabled")
+        defaults.set("db123", forKey: "notion.databaseId")
+        defaults.set("/tmp/audio", forKey: "localaudio.folderPath")
+        defaults.set(true, forKey: "localaudio.enabled")
+
+        let draft = OnboardingDraft()
+        let credentials = MockCredentialStore()
+        credentials.stored[.openRouterAPIKey] = "or-key"
+        credentials.stored[.notionAPIKey] = "ntn_key"
+
+        await draft.seed(defaults: defaults, credentials: credentials)
+
+        XCTAssertTrue(draft.s3WasConfiguredAtSeed)
+        XCTAssertTrue(draft.openRouterWasConfiguredAtSeed)
+        XCTAssertTrue(draft.appleNotesWasConfiguredAtSeed)
+        XCTAssertTrue(draft.notionWasConfiguredAtSeed)
+        XCTAssertTrue(draft.localAudioWasConfiguredAtSeed)
+        // Never configured.
+        XCTAssertFalse(draft.markdownWasConfiguredAtSeed)
+    }
+
+    /// An enabled flag alone (no credential) must not count as "already
+    /// configured" — this is the exact TP-16 reproduction for Notion, whose
+    /// enabled flag can be true while it lacks a usable API key.
+    func testEnabledFlagWithoutCredentialIsNotConfiguredAtSeed() async throws {
+        let (defaults, suiteName) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        defaults.set(true, forKey: "notion.enabled")
+        defaults.set("db123", forKey: "notion.databaseId")
+        defaults.set(true, forKey: "openrouter.enabled")
+
+        let draft = OnboardingDraft()
+        let credentials = MockCredentialStore()
+        // No stored API keys for either integration.
+
+        await draft.seed(defaults: defaults, credentials: credentials)
+
+        XCTAssertFalse(draft.notionWasConfiguredAtSeed)
+        XCTAssertFalse(draft.openRouterWasConfiguredAtSeed)
+    }
+
+    /// A fresh install with nothing persisted must report every optional
+    /// integration as not-configured-at-seed, so a first-run skip resolves to
+    /// `.skipped` rather than being mistaken for kept existing configuration.
+    func testFreshInstallHasNoIntegrationsConfiguredAtSeed() async throws {
+        let (defaults, suiteName) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let draft = OnboardingDraft()
+        let credentials = MockCredentialStore()
+        await draft.seed(defaults: defaults, credentials: credentials)
+
+        XCTAssertFalse(draft.s3WasConfiguredAtSeed)
+        XCTAssertFalse(draft.openRouterWasConfiguredAtSeed)
+        XCTAssertFalse(draft.appleNotesWasConfiguredAtSeed)
+        XCTAssertFalse(draft.notionWasConfiguredAtSeed)
+        XCTAssertFalse(draft.localAudioWasConfiguredAtSeed)
+        XCTAssertFalse(draft.markdownWasConfiguredAtSeed)
+    }
 }

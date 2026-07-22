@@ -76,6 +76,20 @@ final class OnboardingDraft {
     /// fields until it clears so an early keystroke isn't overwritten.
     var isSeeding = true
 
+    // MARK: - Seed-time configuration snapshot
+    //
+    // Whether each optional/fallback integration was already fully configured
+    // when the wizard opened. Captured once, right after `seed()` loads
+    // persisted state, so step views can distinguish "already configured —
+    // kept" from "configured now" and render (and record) the user's actual
+    // decision instead of just inheriting the persisted enabled flag.
+    var s3WasConfiguredAtSeed = false
+    var openRouterWasConfiguredAtSeed = false
+    var appleNotesWasConfiguredAtSeed = false
+    var notionWasConfiguredAtSeed = false
+    var localAudioWasConfiguredAtSeed = false
+    var markdownWasConfiguredAtSeed = false
+
     // MARK: - Seeding
 
     /// Populate the draft from currently persisted settings so the wizard shows
@@ -114,6 +128,13 @@ final class OnboardingDraft {
         awsSecretAccessKey = (try? await credentials.retrieve(for: .awsSecretAccessKey)) ?? ""
         openRouterAPIKey = (try? await credentials.retrieve(for: OpenRouterService.activeKeychainKey(defaults: defaults))) ?? ""
         notionAPIKey = (try? await credentials.retrieve(for: .notionAPIKey)) ?? ""
+
+        s3WasConfiguredAtSeed = s3Enabled
+        openRouterWasConfiguredAtSeed = openRouterEnabled && !openRouterAPIKey.isEmpty
+        appleNotesWasConfiguredAtSeed = appleNotesEnabled
+        notionWasConfiguredAtSeed = notionEnabled && !notionAPIKey.isEmpty
+        localAudioWasConfiguredAtSeed = localAudioEnabled && !localAudioFolderPath.isEmpty
+        markdownWasConfiguredAtSeed = markdownEnabled && !markdownFolderPath.isEmpty
 
         isSeeding = false
     }

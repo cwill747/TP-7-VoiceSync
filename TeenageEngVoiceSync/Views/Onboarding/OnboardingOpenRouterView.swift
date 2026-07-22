@@ -9,7 +9,7 @@ import SwiftUI
 
 struct OnboardingOpenRouterView: View {
     @Bindable var draft: OnboardingDraft
-    @Binding var isConfigured: Bool
+    @Binding var decision: IntegrationDecision
 
     @State private var showKey = false
     @State private var isVerifying = false
@@ -73,6 +73,13 @@ struct OnboardingOpenRouterView: View {
                     .foregroundStyle(.secondary)
             }
 
+            // Existing configuration control (re-run only). Hidden once the key
+            // is actively reconfigured this session — the Enable toggle below
+            // takes over at that point instead of showing two overlapping controls.
+            if draft.openRouterWasConfiguredAtSeed && decision != .configuredNow {
+                existingConfigurationToggle
+            }
+
             // Verify button and status
             VStack(spacing: 10) {
                 HStack {
@@ -94,7 +101,7 @@ struct OnboardingOpenRouterView: View {
             }
 
             // Enable toggle
-            if isConfigured {
+            if decision == .configuredNow {
                 Toggle("Enable AI-powered titles", isOn: $draft.openRouterEnabled)
             }
 
@@ -106,12 +113,21 @@ struct OnboardingOpenRouterView: View {
         }
         .padding(.horizontal, 48)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .task {
-            // Reflect an existing key seeded into the draft.
-            if !draft.openRouterAPIKey.isEmpty {
-                isConfigured = true
+    }
+
+    @ViewBuilder
+    private var existingConfigurationToggle: some View {
+        Toggle(isOn: Binding(
+            get: { decision.isEnabled },
+            set: { newValue in
+                decision = newValue ? .keptExisting : .disabled
+                draft.openRouterEnabled = newValue
             }
+        )) {
+            Text(decision.isEnabled ? "AI-powered titles are already configured — keep enabled" : "AI-powered titles are disabled")
+                .font(.caption)
         }
+        .toggleStyle(.switch)
     }
 
     @ViewBuilder
@@ -141,7 +157,7 @@ struct OnboardingOpenRouterView: View {
 
             // Stage the verified key + enabled flag in the draft; persisted on completion.
             verificationStatus = .success("Valid! \(models.count) models available")
-            isConfigured = true
+            decision = .configuredNow
             draft.openRouterEnabled = true
 
             // Clear success message after delay
@@ -153,12 +169,11 @@ struct OnboardingOpenRouterView: View {
             }
         } catch {
             verificationStatus = .error("Verification failed: \(error.localizedDescription)")
-            isConfigured = false
         }
     }
 }
 
 #Preview {
-    OnboardingOpenRouterView(draft: OnboardingDraft(), isConfigured: .constant(false))
+    OnboardingOpenRouterView(draft: OnboardingDraft(), decision: .constant(.notConfigured))
         .frame(width: 600, height: 440)
 }

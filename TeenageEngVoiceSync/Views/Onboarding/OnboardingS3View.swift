@@ -9,7 +9,7 @@ import SwiftUI
 
 struct OnboardingS3View: View {
     @Bindable var draft: OnboardingDraft
-    @Binding var isConfigured: Bool
+    @Binding var decision: IntegrationDecision
 
     @State private var showSecret = false
     @State private var isTesting = false
@@ -136,6 +136,11 @@ struct OnboardingS3View: View {
                     }
                 }
 
+                // Existing configuration control (re-run only)
+                if draft.s3WasConfiguredAtSeed {
+                    existingConfigurationToggle
+                }
+
                 // Test button
                 VStack(spacing: 8) {
                     HStack {
@@ -165,12 +170,21 @@ struct OnboardingS3View: View {
             .padding(.vertical, 16)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .task {
-            // Reflect existing, already-configured credentials seeded into the draft.
-            if !draft.awsAccessKeyId.isEmpty && !draft.awsSecretAccessKey.isEmpty && !draft.s3Bucket.isEmpty {
-                isConfigured = true
+    }
+
+    @ViewBuilder
+    private var existingConfigurationToggle: some View {
+        Toggle(isOn: Binding(
+            get: { decision.isEnabled },
+            set: { newValue in
+                decision = newValue ? .keptExisting : .disabled
+                draft.s3Enabled = newValue
             }
+        )) {
+            Text(decision.isEnabled ? "S3 storage is already configured — keep it enabled" : "S3 storage is disabled")
+                .font(.caption)
         }
+        .toggleStyle(.switch)
     }
 
     @ViewBuilder
@@ -208,7 +222,7 @@ struct OnboardingS3View: View {
             draft.s3Enabled = true
 
             testStatus = .success
-            isConfigured = true
+            decision = .configuredNow
 
             // Clear success message after delay
             Task {
@@ -219,12 +233,11 @@ struct OnboardingS3View: View {
             }
         } catch {
             testStatus = .error("Connection failed: \(error.localizedDescription)")
-            isConfigured = false
         }
     }
 }
 
 #Preview {
-    OnboardingS3View(draft: OnboardingDraft(), isConfigured: .constant(false))
+    OnboardingS3View(draft: OnboardingDraft(), decision: .constant(.notConfigured))
         .frame(width: 600, height: 440)
 }

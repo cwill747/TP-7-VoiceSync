@@ -51,16 +51,17 @@ struct OnboardingView: View {
 
     @State private var currentStep: OnboardingStep = .welcome
 
-    // Configuration state passed between steps
+    // Configuration state passed between steps. Transcription is required (no
+    // skip/disable semantics), so it stays a plain Bool. Everything optional or
+    // fallback tracks an explicit IntegrationDecision so re-running the wizard
+    // can distinguish "kept existing" from "configured now" and "skipped" (TP-16).
     @State private var transcriptionConfigured = false
-    @State private var s3Configured = false
-    @State private var s3Skipped = false
-    @State private var localAudioFolderConfigured = false
-    @State private var openRouterConfigured = false
-    @State private var appleNotesConfigured = false
-    @State private var appleNotesSkipped = false
-    @State private var localMarkdownFolderConfigured = false
-    @State private var notionConfigured = false
+    @State private var s3Decision: IntegrationDecision = .notConfigured
+    @State private var localAudioFolderDecision: IntegrationDecision = .notConfigured
+    @State private var openRouterDecision: IntegrationDecision = .notConfigured
+    @State private var appleNotesDecision: IntegrationDecision = .notConfigured
+    @State private var localMarkdownFolderDecision: IntegrationDecision = .notConfigured
+    @State private var notionDecision: IntegrationDecision = .notConfigured
 
     // Final-commit state
     @State private var isCompleting = false
@@ -89,6 +90,14 @@ struct OnboardingView: View {
         .frame(width: 600, height: 550)
         .task {
             await draft.seed()
+            // Seed each optional/fallback step's decision from its persisted state,
+            // so "already configured" renders as kept, not as freshly configured.
+            s3Decision = .initial(wasConfiguredAtSeed: draft.s3WasConfiguredAtSeed)
+            localAudioFolderDecision = .initial(wasConfiguredAtSeed: draft.localAudioWasConfiguredAtSeed)
+            openRouterDecision = .initial(wasConfiguredAtSeed: draft.openRouterWasConfiguredAtSeed)
+            appleNotesDecision = .initial(wasConfiguredAtSeed: draft.appleNotesWasConfiguredAtSeed)
+            localMarkdownFolderDecision = .initial(wasConfiguredAtSeed: draft.markdownWasConfiguredAtSeed)
+            notionDecision = .initial(wasConfiguredAtSeed: draft.notionWasConfiguredAtSeed)
         }
         .alert("Couldn't Save Setup", isPresented: Binding(
             get: { completionError != nil },
@@ -105,16 +114,18 @@ struct OnboardingView: View {
     private var activeSteps: [OnboardingStep] {
         var steps: [OnboardingStep] = [.welcome, .transcription, .s3Setup]
 
-        // Add local audio folder step if S3 was skipped
-        if s3Skipped && !s3Configured {
+        // Add local audio folder step once S3 has been explicitly resolved to
+        // not-enabled (skipped/disabled) — not while still undecided on first visit.
+        if s3Decision != .notConfigured && !s3Decision.isEnabled {
             steps.append(.localAudioFolder)
         }
 
         steps.append(.openRouter)
         steps.append(.appleNotes)
 
-        // Add local markdown folder step if Apple Notes was skipped
-        if appleNotesSkipped && !appleNotesConfigured {
+        // Add local markdown folder step once Apple Notes has been explicitly
+        // resolved to not-enabled (skipped/disabled).
+        if appleNotesDecision != .notConfigured && !appleNotesDecision.isEnabled {
             steps.append(.localMarkdownFolder)
         }
 
@@ -183,27 +194,27 @@ struct OnboardingView: View {
         case .transcription:
             OnboardingTranscriptionView(draft: draft, isConfigured: $transcriptionConfigured)
         case .s3Setup:
-            OnboardingS3View(draft: draft, isConfigured: $s3Configured)
+            OnboardingS3View(draft: draft, decision: $s3Decision)
         case .localAudioFolder:
-            OnboardingLocalAudioFolderView(draft: draft, isConfigured: $localAudioFolderConfigured)
+            OnboardingLocalAudioFolderView(draft: draft, decision: $localAudioFolderDecision)
         case .openRouter:
-            OnboardingOpenRouterView(draft: draft, isConfigured: $openRouterConfigured)
+            OnboardingOpenRouterView(draft: draft, decision: $openRouterDecision)
         case .appleNotes:
-            OnboardingAppleNotesView(draft: draft, isConfigured: $appleNotesConfigured)
+            OnboardingAppleNotesView(draft: draft, decision: $appleNotesDecision)
         case .localMarkdownFolder:
-            OnboardingLocalMarkdownFolderView(draft: draft, isConfigured: $localMarkdownFolderConfigured)
+            OnboardingLocalMarkdownFolderView(draft: draft, decision: $localMarkdownFolderDecision)
         case .notion:
-            OnboardingNotionView(draft: draft, isConfigured: $notionConfigured)
+            OnboardingNotionView(draft: draft, decision: $notionDecision)
         case .complete:
             OnboardingCompleteView(
                 draft: draft,
                 transcriptionConfigured: transcriptionConfigured,
-                s3Configured: s3Configured,
-                localAudioFolderConfigured: localAudioFolderConfigured,
-                openRouterConfigured: openRouterConfigured,
-                appleNotesConfigured: appleNotesConfigured,
-                localMarkdownFolderConfigured: localMarkdownFolderConfigured,
-                notionConfigured: notionConfigured
+                s3Decision: s3Decision,
+                localAudioFolderDecision: localAudioFolderDecision,
+                openRouterDecision: openRouterDecision,
+                appleNotesDecision: appleNotesDecision,
+                localMarkdownFolderDecision: localMarkdownFolderDecision,
+                notionDecision: notionDecision
             )
         }
     }
@@ -225,9 +236,12 @@ struct OnboardingView: View {
 
             Spacer()
 
-            // Skip button for optional steps (S3, OpenRouter, Apple Notes)
-            if currentStep.isOptional {
-                Button("Skip") {
+            // Skip button — only for optional steps that have never been
+            // configured. Steps that already have existing configuration expose
+            // an in-step Enable/Disable toggle instead, so this button never
+            // silently reinterprets "skip" as "disable my existing setup".
+            if currentStep.isOptional && !currentStepWasConfiguredAtSeed {
+                Button("Skip for Now") {
                     withAnimation(.easeInOut(duration: 0.2)) {
                         handleSkip()
                     }
@@ -263,14 +277,27 @@ struct OnboardingView: View {
 
     // MARK: - Navigation Logic
 
+    /// Whether the integration for `currentStep` was already configured when the
+    /// wizard opened. Drives whether the bottom "Skip for Now" button appears —
+    /// an already-configured step uses its own Enable/Disable toggle instead.
+    private var currentStepWasConfiguredAtSeed: Bool {
+        switch currentStep {
+        case .s3Setup: return draft.s3WasConfiguredAtSeed
+        case .openRouter: return draft.openRouterWasConfiguredAtSeed
+        case .appleNotes: return draft.appleNotesWasConfiguredAtSeed
+        case .notion: return draft.notionWasConfiguredAtSeed
+        default: return false
+        }
+    }
+
     private func canContinueFromCurrentStep() -> Bool {
         switch currentStep {
         case .transcription:
             return transcriptionConfigured
         case .localAudioFolder:
-            return localAudioFolderConfigured
+            return localAudioFolderDecision.isEnabled
         case .localMarkdownFolder:
-            return localMarkdownFolderConfigured
+            return localMarkdownFolderDecision.isEnabled
         default:
             return true
         }
@@ -279,49 +306,34 @@ struct OnboardingView: View {
     private func handleSkip() {
         switch currentStep {
         case .s3Setup:
-            s3Skipped = true
-            goToNextStep()
+            s3Decision = .skipped
         case .appleNotes:
-            appleNotesSkipped = true
-            goToNextStep()
+            appleNotesDecision = .skipped
+        case .openRouter:
+            openRouterDecision = .skipped
+        case .notion:
+            notionDecision = .skipped
         default:
-            goToNextStep()
+            break
         }
+        goToNextStep()
     }
 
     private func goToNextStep() {
         // Handle special transitions
         switch currentStep {
         case .s3Setup:
-            if s3Configured {
-                // S3 configured, skip local audio folder step
-                s3Skipped = false
-                currentStep = .openRouter
-            } else if s3Skipped {
-                // S3 skipped, go to local audio folder
-                currentStep = .localAudioFolder
-            } else {
-                // Just continuing without configuring - treat as skip
-                s3Skipped = true
-                currentStep = .localAudioFolder
-            }
+            // Continuing without an explicit decision (no Skip press, no
+            // successful test) is treated as skipping, same as pressing Skip.
+            if s3Decision == .notConfigured { s3Decision = .skipped }
+            currentStep = s3Decision.isEnabled ? .openRouter : .localAudioFolder
 
         case .localAudioFolder:
             currentStep = .openRouter
 
         case .appleNotes:
-            if appleNotesConfigured {
-                // Apple Notes configured, skip local markdown folder step
-                appleNotesSkipped = false
-                currentStep = .notion
-            } else if appleNotesSkipped {
-                // Apple Notes skipped, go to local markdown folder
-                currentStep = .localMarkdownFolder
-            } else {
-                // Just continuing without configuring - treat as skip
-                appleNotesSkipped = true
-                currentStep = .localMarkdownFolder
-            }
+            if appleNotesDecision == .notConfigured { appleNotesDecision = .skipped }
+            currentStep = appleNotesDecision.isEnabled ? .notion : .localMarkdownFolder
 
         case .localMarkdownFolder:
             currentStep = .notion
@@ -340,21 +352,13 @@ struct OnboardingView: View {
             currentStep = .s3Setup
 
         case .openRouter:
-            if s3Skipped && !s3Configured {
-                currentStep = .localAudioFolder
-            } else {
-                currentStep = .s3Setup
-            }
+            currentStep = s3Decision.isEnabled ? .s3Setup : .localAudioFolder
 
         case .localMarkdownFolder:
             currentStep = .appleNotes
 
         case .notion:
-            if appleNotesSkipped && !appleNotesConfigured {
-                currentStep = .localMarkdownFolder
-            } else {
-                currentStep = .appleNotes
-            }
+            currentStep = appleNotesDecision.isEnabled ? .appleNotes : .localMarkdownFolder
 
         case .complete:
             currentStep = .notion

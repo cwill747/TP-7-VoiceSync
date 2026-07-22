@@ -10,7 +10,7 @@ import AppKit
 
 struct OnboardingLocalMarkdownFolderView: View {
     @Bindable var draft: OnboardingDraft
-    @Binding var isConfigured: Bool
+    @Binding var decision: IntegrationDecision
 
     @State private var inputPath = ""
     @State private var selectedFolderURL: URL?
@@ -93,9 +93,10 @@ struct OnboardingLocalMarkdownFolderView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
             // Reflect a folder already staged in the draft (seeded or chosen earlier).
+            // `decision` itself is initialized by the parent from
+            // `markdownWasConfiguredAtSeed` once seeding completes.
             if !draft.markdownFolderPath.isEmpty {
                 inputPath = draft.markdownFolderPath
-                isConfigured = true
             }
         }
     }
@@ -177,7 +178,7 @@ struct OnboardingLocalMarkdownFolderView: View {
         draft.markdownEnabled = true
         draft.appleNotesEnabled = false
         validationStatus = .success
-        isConfigured = true
+        decision = .configuredNow
         isValidating = false
     }
 
@@ -201,6 +202,6 @@ struct OnboardingLocalMarkdownFolderView: View {
 }
 
 #Preview {
-    OnboardingLocalMarkdownFolderView(draft: OnboardingDraft(), isConfigured: .constant(false))
+    OnboardingLocalMarkdownFolderView(draft: OnboardingDraft(), decision: .constant(.notConfigured))
         .frame(width: 600, height: 440)
 }

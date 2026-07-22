@@ -9,7 +9,7 @@ import SwiftUI
 
 struct OnboardingAppleNotesView: View {
     @Bindable var draft: OnboardingDraft
-    @Binding var isConfigured: Bool
+    @Binding var decision: IntegrationDecision
 
     @State private var isTesting = false
     @State private var testStatus: TestStatus?
@@ -49,6 +49,11 @@ struct OnboardingAppleNotesView: View {
                 Text("Notes will be created in this folder in your Apple Notes app. The folder will be created automatically if it doesn't exist.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+
+            // Existing configuration control (re-run only)
+            if draft.appleNotesWasConfiguredAtSeed {
+                existingConfigurationToggle
             }
 
             // Test button - testing successfully enables the integration
@@ -96,6 +101,21 @@ struct OnboardingAppleNotesView: View {
     }
 
     @ViewBuilder
+    private var existingConfigurationToggle: some View {
+        Toggle(isOn: Binding(
+            get: { decision.isEnabled },
+            set: { newValue in
+                decision = newValue ? .keptExisting : .disabled
+                draft.appleNotesEnabled = newValue
+            }
+        )) {
+            Text(decision.isEnabled ? "Apple Notes is already configured — keep it enabled" : "Apple Notes integration is disabled")
+                .font(.caption)
+        }
+        .toggleStyle(.switch)
+    }
+
+    @ViewBuilder
     private func statusLabel(for status: TestStatus) -> some View {
         switch status {
         case .success:
@@ -124,7 +144,7 @@ struct OnboardingAppleNotesView: View {
                 await MainActor.run {
                     testStatus = .success
                     isTesting = false
-                    isConfigured = true
+                    decision = .configuredNow
                     // Stage Apple Notes as enabled; markdown is disabled when Apple
                     // Notes is chosen. Persisted only when onboarding completes.
                     draft.appleNotesEnabled = true
@@ -141,6 +161,6 @@ struct OnboardingAppleNotesView: View {
 }
 
 #Preview {
-    OnboardingAppleNotesView(draft: OnboardingDraft(), isConfigured: .constant(false))
+    OnboardingAppleNotesView(draft: OnboardingDraft(), decision: .constant(.notConfigured))
         .frame(width: 600, height: 440)
 }

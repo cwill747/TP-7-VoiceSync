@@ -10,12 +10,12 @@ import SwiftUI
 struct OnboardingCompleteView: View {
     let draft: OnboardingDraft
     let transcriptionConfigured: Bool
-    let s3Configured: Bool
-    let localAudioFolderConfigured: Bool
-    let openRouterConfigured: Bool
-    let appleNotesConfigured: Bool
-    let localMarkdownFolderConfigured: Bool
-    let notionConfigured: Bool
+    let s3Decision: IntegrationDecision
+    let localAudioFolderDecision: IntegrationDecision
+    let openRouterDecision: IntegrationDecision
+    let appleNotesDecision: IntegrationDecision
+    let localMarkdownFolderDecision: IntegrationDecision
+    let notionDecision: IntegrationDecision
 
     // Reflect the pending draft selection (not the still-unchanged persisted value).
     private var transcriptionProvider: TranscriptionProviderKind {
@@ -55,45 +55,21 @@ struct OnboardingCompleteView: View {
                     )
 
                     // Show either S3 or Local Audio Folder
-                    if s3Configured {
-                        configRow(
-                            title: "S3 Storage",
-                            configured: true,
-                            required: false
-                        )
+                    if s3Decision.isEnabled {
+                        configRow(title: "S3 Storage", decision: s3Decision)
                     } else {
-                        configRow(
-                            title: "Local Audio Storage",
-                            configured: localAudioFolderConfigured,
-                            required: false
-                        )
+                        configRow(title: "Local Audio Storage", decision: localAudioFolderDecision)
                     }
 
-                    configRow(
-                        title: "OpenRouter AI Titles",
-                        configured: openRouterConfigured,
-                        required: false
-                    )
+                    configRow(title: "OpenRouter AI Titles", decision: openRouterDecision)
 
-                    configRow(
-                        title: "Notion Integration",
-                        configured: notionConfigured,
-                        required: false
-                    )
+                    configRow(title: "Notion Integration", decision: notionDecision)
 
                     // Show either Apple Notes or Local Markdown
-                    if appleNotesConfigured {
-                        configRow(
-                            title: "Apple Notes Integration",
-                            configured: true,
-                            required: false
-                        )
+                    if appleNotesDecision.isEnabled {
+                        configRow(title: "Apple Notes Integration", decision: appleNotesDecision)
                     } else {
-                        configRow(
-                            title: "Local Markdown Notes",
-                            configured: localMarkdownFolderConfigured,
-                            required: false
-                        )
+                        configRow(title: "Local Markdown Notes", decision: localMarkdownFolderDecision)
                     }
                 }
             }
@@ -139,18 +115,41 @@ struct OnboardingCompleteView: View {
         }
         .accessibilityElement(children: .combine)
     }
+
+    /// Row for an optional/fallback integration — distinguishes "already
+    /// configured / kept" from "configured now", "disabled", and "skipped" so
+    /// the summary always matches what `apply()` is about to commit.
+    @ViewBuilder
+    private func configRow(title: String, decision: IntegrationDecision) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: decision.isEnabled ? "checkmark.circle.fill" : "circle")
+                .foregroundStyle(decision.isEnabled ? .green : .secondary)
+                .font(.body)
+                .accessibilityHidden(true)
+
+            Text(title)
+                .font(.subheadline)
+
+            Spacer()
+
+            Text(decision.summaryLabel)
+                .font(.caption)
+                .foregroundStyle(decision.isEnabled ? .green : .secondary)
+        }
+        .accessibilityElement(children: .combine)
+    }
 }
 
 #Preview {
     OnboardingCompleteView(
         draft: OnboardingDraft(),
         transcriptionConfigured: true,
-        s3Configured: true,
-        localAudioFolderConfigured: false,
-        openRouterConfigured: false,
-        appleNotesConfigured: false,
-        localMarkdownFolderConfigured: true,
-        notionConfigured: false
+        s3Decision: .keptExisting,
+        localAudioFolderDecision: .notConfigured,
+        openRouterDecision: .skipped,
+        appleNotesDecision: .disabled,
+        localMarkdownFolderDecision: .configuredNow,
+        notionDecision: .configuredNow
     )
     .frame(width: 600, height: 440)
 }

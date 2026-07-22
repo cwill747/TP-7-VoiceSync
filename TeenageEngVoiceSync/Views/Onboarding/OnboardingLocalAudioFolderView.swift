@@ -10,7 +10,7 @@ import AppKit
 
 struct OnboardingLocalAudioFolderView: View {
     @Bindable var draft: OnboardingDraft
-    @Binding var isConfigured: Bool
+    @Binding var decision: IntegrationDecision
 
     @State private var inputPath = ""
     @State private var isValidating = false
@@ -89,9 +89,10 @@ struct OnboardingLocalAudioFolderView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
             // Reflect a folder already staged in the draft (seeded or chosen earlier).
+            // `decision` itself is initialized by the parent from
+            // `localAudioWasConfiguredAtSeed` once seeding completes.
             if !draft.localAudioFolderPath.isEmpty {
                 inputPath = draft.localAudioFolderPath
-                isConfigured = true
             }
         }
     }
@@ -161,7 +162,7 @@ struct OnboardingLocalAudioFolderView: View {
         draft.localAudioEnabled = true
         draft.s3Enabled = false
         validationStatus = .success
-        isConfigured = true
+        decision = .configuredNow
         isValidating = false
     }
 
@@ -184,6 +185,6 @@ struct OnboardingLocalAudioFolderView: View {
 }
 
 #Preview {
-    OnboardingLocalAudioFolderView(draft: OnboardingDraft(), isConfigured: .constant(false))
+    OnboardingLocalAudioFolderView(draft: OnboardingDraft(), decision: .constant(.notConfigured))
         .frame(width: 600, height: 440)
 }
