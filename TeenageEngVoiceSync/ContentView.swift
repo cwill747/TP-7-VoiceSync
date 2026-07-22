@@ -165,6 +165,13 @@ struct ContentView: View {
                 appState.navigationTarget = nil
             }
         }
+        .onChange(of: appState.settingsNavigationTarget) { _, target in
+            if let target {
+                selectedSection = .settings
+                selectedSettingsSection = target
+                appState.settingsNavigationTarget = nil
+            }
+        }
         .alert("Notice", isPresented: Bindable(appState).showError, presenting: appState.lastError) { _ in
             Button("OK") { appState.clearError() }
         } message: { message in

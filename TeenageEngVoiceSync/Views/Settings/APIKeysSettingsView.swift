@@ -9,6 +9,8 @@ import SwiftUI
 import os
 
 struct APIKeysSettingsView: View {
+    @Environment(AppState.self) private var appState
+
     // AWS credentials
     @State private var awsAccessKeyId = ""
     @State private var awsSecretAccessKey = ""
@@ -190,6 +192,7 @@ struct APIKeysSettingsView: View {
             try await KeychainService.shared.save(awsSecretAccessKey, for: .awsSecretAccessKey)
             awsStatus = .success("Saved")
             clearStatus(for: .aws)
+            appState.reloadServices()
         } catch {
             awsStatus = .error("Failed to save: \(error.localizedDescription)")
         }
@@ -234,6 +237,10 @@ struct APIKeysSettingsView: View {
             try await KeychainService.shared.save(elevenLabsAPIKey, for: .elevenLabsAPIKey)
             elevenLabsStatus = .success("Saved")
             clearStatus(for: .elevenLabs)
+            // Rebuild SyncService's transcriptionProvider/transcriptionStatus now,
+            // rather than leaving them stale (nil/"Paused") until an unrelated
+            // settings change happens to trigger a reload.
+            appState.reloadServices()
         } catch {
             elevenLabsStatus = .error("Failed to save: \(error.localizedDescription)")
         }
@@ -275,4 +282,5 @@ struct APIKeysSettingsView: View {
 
 #Preview {
     APIKeysSettingsView()
+        .environment(AppState())
 }

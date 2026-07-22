@@ -27,6 +27,10 @@ final class AppState {
     // Navigation state for menu bar to request sidebar navigation
     var navigationTarget: SidebarItem? = nil
 
+    // Navigation state for jumping straight to a Settings section (e.g. from
+    // a "fix this" prompt on a blocked transcription provider).
+    var settingsNavigationTarget: SettingsSection? = nil
+
     // Forward device state from sync service
     var isDeviceConnected: Bool {
         syncService?.deviceWatch.isConnected ?? false
@@ -84,6 +88,12 @@ final class AppState {
         UserDefaults.standard.bool(forKey: "transcription.enabled")
     }
 
+    /// The saved provider/enabled preference combined with its effective
+    /// runtime availability. `nil` until the sync service has loaded once.
+    var transcriptionStatus: TranscriptionProviderStatus? {
+        syncService?.transcriptionStatus
+    }
+
     var isAppleNotesEnabled: Bool {
         UserDefaults.standard.bool(forKey: "applenotes.enabled")
     }
@@ -104,6 +114,8 @@ final class AppState {
             return processingActivity.statusText
         } else if isOffline {
             return pendingRemoteCount > 0 ? "Offline — \(pendingRemoteCount) waiting" : "Offline"
+        } else if let transcriptionStatus, transcriptionStatus.isBlocked {
+            return transcriptionStatus.statusText
         } else if isSyncing {
             return "Syncing..."
         } else if pendingRemoteCount > 0 {
