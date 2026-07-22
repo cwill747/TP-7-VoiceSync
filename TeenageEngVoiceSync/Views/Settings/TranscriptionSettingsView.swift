@@ -144,7 +144,9 @@ struct TranscriptionSettingsView: View {
     @ViewBuilder
     private var transcriptionStatusBanner: some View {
         let status = currentTranscriptionProviderStatus
-        if status.preferenceEnabled {
+        // Always show a missing API key, even before the user has turned
+        // transcription on — otherwise the disabled toggle explains nothing.
+        if status.preferenceEnabled || status.readiness == .missingAPIKey {
             HStack {
                 Label(status.statusText, systemImage: status.systemImage)
                     .foregroundStyle(status.readiness == .missingAPIKey ? .orange : (status.readiness == .ready ? .green : .secondary))

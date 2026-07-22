@@ -46,23 +46,32 @@ struct TranscriptionProviderStatus: Equatable {
         preferenceEnabled && readiness == .missingAPIKey
     }
 
+    /// A missing API key is worth surfacing even before the user has turned
+    /// transcription on — otherwise a disabled toggle is the only clue, with
+    /// no explanation and no route to fix it (see PR #65 review).
     var statusText: String {
+        if readiness == .missingAPIKey {
+            return preferenceEnabled
+                ? "Paused — API key required"
+                : "Configure \(providerKind.shortName) API key to enable transcription"
+        }
         guard preferenceEnabled else { return "Transcription off" }
         switch readiness {
         case .ready: return "\(providerKind.shortName) active"
-        case .missingAPIKey: return "Paused — API key required"
         case .modelNotDownloaded: return "\(providerKind.shortName) active — model downloads on first use"
         case .downloadingModel: return "\(providerKind.shortName) active — downloading model"
+        case .missingAPIKey: return "" // handled above
         }
     }
 
     var systemImage: String {
+        if readiness == .missingAPIKey { return "exclamationmark.triangle.fill" }
         guard preferenceEnabled else { return "circle.slash" }
         switch readiness {
         case .ready: return "checkmark.circle.fill"
-        case .missingAPIKey: return "exclamationmark.triangle.fill"
         case .modelNotDownloaded: return "icloud.and.arrow.down"
         case .downloadingModel: return "arrow.down.circle"
+        case .missingAPIKey: return "" // handled above
         }
     }
 

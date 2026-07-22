@@ -103,9 +103,11 @@ final class TranscriptionProviderStatusTests: XCTestCase {
         XCTAssertEqual(status.statusText, "Transcription off")
     }
 
-    func testDisabledPreferenceWithMissingKeyIsStillJustDisabled() {
-        // Enabled=false should never surface as "blocked" even if the
-        // underlying config is also incomplete — disabled takes priority.
+    func testDisabledPreferenceWithMissingKeyIsNotBlockedButStillWarns() {
+        // Enabled=false should never surface as "blocked" (isBlocked stays
+        // false, matching how AppState gates the main-window status text),
+        // but the Settings view still needs to explain why the toggle below
+        // is disabled — so statusText surfaces the missing key regardless.
         let status = TranscriptionProviderStatus.evaluate(
             providerKind: .elevenLabs,
             preferenceEnabled: false,
@@ -114,7 +116,7 @@ final class TranscriptionProviderStatusTests: XCTestCase {
         )
 
         XCTAssertFalse(status.isBlocked)
-        XCTAssertEqual(status.statusText, "Transcription off")
+        XCTAssertEqual(status.statusText, "Configure ElevenLabs API key to enable transcription")
     }
 
     func testOnlyMissingAPIKeyIsEverBlocking() {
