@@ -9,7 +9,12 @@
 import Foundation
 import AVFoundation
 
-enum MultiTrackAudio {
+/// `nonisolated` because this project defaults new declarations to `@MainActor`
+/// isolation — this is a stateless value-type utility with no actor-isolated
+/// state, and `extractTracks` is a CPU-bound sample loop that must be able to
+/// run on a background thread (see its doc comment) rather than hopping back
+/// to the main actor.
+nonisolated enum MultiTrackAudio {
     enum MultiTrackAudioError: LocalizedError {
         case unableToCreateBuffer
         case unableToReadChannelData
