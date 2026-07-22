@@ -258,12 +258,15 @@ final class DeviceWatchService {
         return true
     }
 
-    /// Invoked from the download's progress callback, potentially off the
-    /// main thread and many times per second, to update the in-flight file's
-    /// live byte progress.
+    /// Invoked from the download's progress callback on the detached
+    /// download task's thread, potentially many times per second. Hops to
+    /// the main actor before touching `downloadingFiles`, since the toolbar/
+    /// popover UI reads that `@Observable` array on the main thread.
     private func updateProgress(at index: Int, bytesSent: Int64, bytesTotal: Int64) {
-        guard downloadingFiles.indices.contains(index) else { return }
-        downloadingFiles[index].state = .downloading(bytesSent: bytesSent, bytesTotal: bytesTotal)
+        Task { @MainActor [weak self] in
+            guard let self, self.downloadingFiles.indices.contains(index) else { return }
+            self.downloadingFiles[index].state = .downloading(bytesSent: bytesSent, bytesTotal: bytesTotal)
+        }
     }
 
     private static func trackingKey(for file: TP7MTPFileEntry) -> String {
