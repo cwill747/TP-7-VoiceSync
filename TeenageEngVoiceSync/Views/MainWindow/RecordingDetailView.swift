@@ -1010,12 +1010,20 @@ struct AudioPlayerView: View {
         .onAppear {
             setupPlayer()
         }
+        .onChange(of: url) {
+            setupPlayer()
+        }
         .onDisappear {
             stopPlayback()
         }
     }
 
     private func setupPlayer() {
+        stopPlayback()
+        player = nil
+        currentTime = 0
+        duration = 0
+
         guard FileManager.default.fileExists(atPath: url.path) else { return }
 
         do {
