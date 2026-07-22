@@ -42,17 +42,18 @@ nonisolated final class AudioPlaybackFileAccess {
     }
 
     /// Releases any previous scope, then acquires the configured folder scope
-    /// when `fileURL` is a local copy stored beneath that folder. Files in the
-    /// app container or device cache do not require a scope.
-    func acquire(for fileURL: URL) throws {
+    /// for a file known to come from `Recording.localCopyPath`. App-managed
+    /// device-cache files never require this scope, even if a broadly selected
+    /// external folder happens to contain the cache directory.
+    func acquire(for fileURL: URL, requiresConfiguredFolderScope: Bool) throws {
         release()
 
-        guard let configuredFolder = configuredFolder(),
-              Self.contains(fileURL, in: configuredFolder) else {
-            return
-        }
+        guard requiresConfiguredFolderScope else { return }
 
-        guard let folderURL = resolveBookmark(), startAccessing(folderURL) else {
+        guard let configuredFolder = configuredFolder(),
+              Self.contains(fileURL, in: configuredFolder),
+              let folderURL = resolveBookmark(),
+              startAccessing(folderURL) else {
             throw AccessError.folderAccessDenied
         }
         scopedFolderURL = folderURL

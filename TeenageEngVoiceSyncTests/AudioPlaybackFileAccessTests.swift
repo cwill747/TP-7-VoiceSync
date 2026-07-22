@@ -21,7 +21,7 @@ final class AudioPlaybackFileAccessTests: XCTestCase {
             stopAccessing: { stoppedURLs.append($0) }
         )
 
-        try access.acquire(for: audioURL)
+        try access.acquire(for: audioURL, requiresConfiguredFolderScope: true)
         let player = try AVAudioPlayer(contentsOf: audioURL)
 
         XCTAssertGreaterThan(player.duration, 0)
@@ -32,10 +32,10 @@ final class AudioPlaybackFileAccessTests: XCTestCase {
         XCTAssertEqual(stoppedURLs, [folder])
     }
 
-    func testSwitchingFilesReleasesPreviousScopeAndDoesNotScopeDeviceCache() throws {
-        let folder = URL(fileURLWithPath: "/external/audio", isDirectory: true)
-        let localCopy = folder.appendingPathComponent("recording.wav")
-        let cachedFile = URL(fileURLWithPath: "/app/container/cache/recording.wav")
+    func testSwitchingFilesReleasesPreviousScopeAndDoesNotScopeContainedDeviceCache() throws {
+        let folder = URL(fileURLWithPath: "/app", isDirectory: true)
+        let localCopy = folder.appendingPathComponent("external-audio/recording.wav")
+        let cachedFile = folder.appendingPathComponent("container/cache/recording.wav")
         var startCount = 0
         var stopCount = 0
         let access = AudioPlaybackFileAccess(
@@ -48,8 +48,8 @@ final class AudioPlaybackFileAccessTests: XCTestCase {
             stopAccessing: { _ in stopCount += 1 }
         )
 
-        try access.acquire(for: localCopy)
-        try access.acquire(for: cachedFile)
+        try access.acquire(for: localCopy, requiresConfiguredFolderScope: true)
+        try access.acquire(for: cachedFile, requiresConfiguredFolderScope: false)
 
         XCTAssertEqual(startCount, 1)
         XCTAssertEqual(stopCount, 1)
@@ -63,7 +63,12 @@ final class AudioPlaybackFileAccessTests: XCTestCase {
             startAccessing: { _ in false }
         )
 
-        XCTAssertThrowsError(try access.acquire(for: folder.appendingPathComponent("recording.wav"))) { error in
+        XCTAssertThrowsError(
+            try access.acquire(
+                for: folder.appendingPathComponent("recording.wav"),
+                requiresConfiguredFolderScope: true
+            )
+        ) { error in
             XCTAssertEqual(
                 error.localizedDescription,
                 "VoiceSync no longer has permission to read the local audio folder. Choose the folder again in Settings."

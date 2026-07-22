@@ -24,15 +24,27 @@ struct RecordingDetailView: View {
         case error(String)
     }
 
-    /// Local file to play, if any: prefers the device cache (`localPath`) but
-    /// falls back to a recovered local copy (`localCopyPath`).
-    private var localAudioURL: URL? {
+    private struct LocalAudioSource {
+        let url: URL
+        let requiresConfiguredFolderScope: Bool
+    }
+
+    /// Local file to play, if any: prefers the app-managed device cache
+    /// (`localPath`) but falls back to a security-scoped local copy
+    /// (`localCopyPath`).
+    private var localAudioSource: LocalAudioSource? {
         let fm = FileManager.default
         if !recording.localPath.isEmpty, fm.fileExists(atPath: recording.localPath) {
-            return URL(fileURLWithPath: recording.localPath)
+            return LocalAudioSource(
+                url: URL(fileURLWithPath: recording.localPath),
+                requiresConfiguredFolderScope: false
+            )
         }
         if let copy = recording.localCopyPath, fm.fileExists(atPath: copy) {
-            return URL(fileURLWithPath: copy)
+            return LocalAudioSource(
+                url: URL(fileURLWithPath: copy),
+                requiresConfiguredFolderScope: true
+            )
         }
         return nil
     }
@@ -94,8 +106,11 @@ struct RecordingDetailView: View {
                 // Audio player — only when the audio exists locally. Recovered
                 // rows keep the file in localCopyPath (localPath may be empty), and
                 // S3/Notion-only rows have no local file to play at all.
-                if let audioURL = localAudioURL {
-                    AudioPlayerView(url: audioURL)
+                if let audioSource = localAudioSource {
+                    AudioPlayerView(
+                        url: audioSource.url,
+                        requiresConfiguredFolderScope: audioSource.requiresConfiguredFolderScope
+                    )
 
                     Divider()
                 }
@@ -978,6 +993,7 @@ struct NewPersonPrompt: View {
 
 struct AudioPlayerView: View {
     let url: URL
+    let requiresConfiguredFolderScope: Bool
     @State private var player: AVAudioPlayer?
     @State private var fileAccess = AudioPlaybackFileAccess()
     @State private var isPlaying = false
@@ -1038,6 +1054,9 @@ struct AudioPlayerView: View {
         .onChange(of: url) {
             setupPlayer()
         }
+        .onChange(of: requiresConfiguredFolderScope) {
+            setupPlayer()
+        }
         .onDisappear {
             stopPlayback()
             player = nil
@@ -1054,7 +1073,10 @@ struct AudioPlayerView: View {
         playbackError = nil
 
         do {
-            try fileAccess.acquire(for: url)
+            try fileAccess.acquire(
+                for: url,
+                requiresConfiguredFolderScope: requiresConfiguredFolderScope
+            )
         } catch {
             showPlaybackError(error)
             return
