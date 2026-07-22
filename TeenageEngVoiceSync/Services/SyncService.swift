@@ -931,11 +931,32 @@ final class SyncService {
         return recording
     }
 
+    /// Recordings shorter than this are almost always accidental button presses
+    /// rather than intentional memos, so they're stored but never sent for
+    /// transcription/summary.
+    static let minimumDurationForTranscription: TimeInterval = 2.0
+
+    /// True when a recording is too short to plausibly be intentional and
+    /// should be skipped rather than transcribed/summarized.
+    nonisolated static func isTooShortToTranscribe(_ recording: Recording) -> Bool {
+        guard let duration = recording.duration else { return false }
+        return duration < minimumDurationForTranscription
+    }
+
     private func processRecording(_ recording: Recording) async {
         // Skip if already processed
         guard recording.s3Key == nil,
               recording.localCopyPath == nil,
               recording.transcriptionStatus == .none else { return }
+
+        if Self.isTooShortToTranscribe(recording) {
+            recording.transcriptionStatus = .skipped
+            recording.updatedAt = Date()
+            _ = await storeRecording(recording, allowS3Upload: false)
+            AppLogger.sync.info("Skipping transcription for \(recording.filename, privacy: .private): duration \(recording.duration ?? 0, privacy: .public)s is below the minimum")
+            await refreshPendingCount()
+            return
+        }
 
         // Check for duplicate by hash
         if let hash = recording.fileHash {

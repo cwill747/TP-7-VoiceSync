@@ -179,6 +179,9 @@ struct RecordingRow: View {
         if recording.transcriptionStatus == .pending {
             return RowStatus(systemImage: "clock", tint: .orange, label: "Waiting to transcribe", isAnimated: true)
         }
+        if recording.transcriptionStatus == .skipped {
+            return RowStatus(systemImage: "text.bubble", tint: .secondary, label: "Too short to transcribe")
+        }
         if let step = SyncService.remainingRemoteSteps(for: recording).first {
             return RowStatus(systemImage: step.systemImage, tint: .orange, label: step.shortStatus)
         }

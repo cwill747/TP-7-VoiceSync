@@ -153,6 +153,9 @@ enum TranscriptionStatus: String, Codable {
     case processing
     case completed
     case failed
+    /// Deliberately not transcribed — e.g. the recording was too short to be
+    /// intentional (see `SyncService.minimumDurationForTranscription`).
+    case skipped
 }
 
 /// Which on-device TP-7 folder a recording was ingested from. The TP-7 can be

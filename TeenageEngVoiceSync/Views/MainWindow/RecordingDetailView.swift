@@ -40,14 +40,14 @@ struct RecordingDetailView: View {
     private var canRetranscribe: Bool {
         guard SyncService.hasAudioSource(recording) else { return false }
         switch recording.transcriptionStatus {
-        case .none, .completed, .failed: return true
+        case .none, .completed, .failed, .skipped: return true
         case .pending, .processing: return false
         }
     }
 
     private var retranscribeLabel: String {
         switch recording.transcriptionStatus {
-        case .none: return "Transcribe"
+        case .none, .skipped: return "Transcribe"
         case .failed: return "Retry Transcription"
         default: return "Retranscribe"
         }
@@ -219,6 +219,11 @@ struct RecordingDetailView: View {
         switch recording.transcriptionStatus {
         case .none:
             Text("Not transcribed")
+                .foregroundStyle(.secondary)
+                .italic()
+
+        case .skipped:
+            Text("Too short to transcribe")
                 .foregroundStyle(.secondary)
                 .italic()
 
