@@ -436,6 +436,29 @@ final class OnboardingDraftTests: XCTestCase {
         XCTAssertFalse(draft.s3WasConfiguredAtSeed)
     }
 
+    /// `notion.enabled` with a key but no database ID (e.g. the Settings
+    /// toggle was flipped before Save & Connect, or the DB field was cleared)
+    /// must not count as "already configured" — the runtime Notion delivery
+    /// path requires a non-empty database ID before it can create pages, so
+    /// treating the bare flag+key as configured would seed `.keptExisting`,
+    /// hide the skip path, and let `apply()` re-commit an unusable
+    /// `notion.enabled = true` with no database to write to.
+    func testNotionEnabledWithoutDatabaseIdIsNotConfiguredAtSeed() async throws {
+        let (defaults, suiteName) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        defaults.set(true, forKey: "notion.enabled")
+        // No database ID persisted.
+
+        let draft = OnboardingDraft()
+        let credentials = MockCredentialStore()
+        credentials.stored[.notionAPIKey] = "ntn_key"
+
+        await draft.seed(defaults: defaults, credentials: credentials)
+
+        XCTAssertFalse(draft.notionWasConfiguredAtSeed)
+    }
+
     /// A fresh install with nothing persisted must report every optional
     /// integration as not-configured-at-seed, so a first-run skip resolves to
     /// `.skipped` rather than being mistaken for kept existing configuration.

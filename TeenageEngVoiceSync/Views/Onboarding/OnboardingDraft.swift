@@ -132,7 +132,7 @@ final class OnboardingDraft {
         s3WasConfiguredAtSeed = s3Enabled && !s3Bucket.isEmpty && !awsAccessKeyId.isEmpty && !awsSecretAccessKey.isEmpty
         openRouterWasConfiguredAtSeed = openRouterEnabled && !openRouterAPIKey.isEmpty
         appleNotesWasConfiguredAtSeed = appleNotesEnabled
-        notionWasConfiguredAtSeed = notionEnabled && !notionAPIKey.isEmpty
+        notionWasConfiguredAtSeed = notionEnabled && !notionAPIKey.isEmpty && !notionDatabaseId.isEmpty
         localAudioWasConfiguredAtSeed = localAudioEnabled && !localAudioFolderPath.isEmpty
         markdownWasConfiguredAtSeed = markdownEnabled && !markdownFolderPath.isEmpty
 
