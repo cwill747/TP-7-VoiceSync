@@ -102,21 +102,87 @@ struct TranscriptionSettingsView: View {
         )
     }
 
-    private var canTranscribe: Bool {
+    /// The saved provider/enabled preference combined with its effective
+    /// runtime availability. Uses the same evaluation `SyncService` runs, so
+    /// this view and the main-window status never disagree.
+    private var currentTranscriptionProviderStatus: TranscriptionProviderStatus {
+        let localModelReady: Bool
+        let localModelDownloading: Bool
         switch transcriptionProvider {
         case .elevenLabs:
-            return hasElevenLabsKey
+            localModelReady = true
+            localModelDownloading = false
         case .whisperKit:
-            return true
+            localModelReady = whisperKitDownloadState == .ready
+            localModelDownloading = whisperKitDownloadState == .downloading
         case .parakeet:
-            return true
+            localModelReady = parakeetDownloadState == .ready
+            localModelDownloading = parakeetDownloadState == .downloading
         case .parakeetUnified:
-            return true
+            localModelReady = parakeetUnifiedDownloadState == .ready
+            localModelDownloading = parakeetUnifiedDownloadState == .downloading
         }
+        return TranscriptionProviderStatus.evaluate(
+            providerKind: transcriptionProvider,
+            preferenceEnabled: transcriptionEnabled,
+            hasElevenLabsKey: hasElevenLabsKey,
+            localModelReady: localModelReady,
+            localModelDownloading: localModelDownloading
+        )
+    }
+
+    private var canTranscribe: Bool {
+        currentTranscriptionProviderStatus.readiness == .ready
     }
 
     private var transcriptionActive: Bool {
-        transcriptionEnabled && canTranscribe
+        currentTranscriptionProviderStatus.isEffectivelyActive
+    }
+
+    /// Explicit effective-status banner, so a disabled toggle is never the
+    /// only signal that transcription isn't actually running.
+    @ViewBuilder
+    private var transcriptionStatusBanner: some View {
+        let status = currentTranscriptionProviderStatus
+        if status.preferenceEnabled {
+            HStack {
+                Label(status.statusText, systemImage: status.systemImage)
+                    .foregroundStyle(status.readiness == .ready ? .green : .orange)
+                    .font(.caption)
+
+                Spacer()
+
+                switch status.readiness {
+                case .missingAPIKey:
+                    Button("Open API Keys") {
+                        appState.settingsNavigationTarget = .apiKeys
+                    }
+                    .font(.caption)
+                    .buttonStyle(.link)
+                case .modelNotDownloaded:
+                    Button("Download Model") {
+                        downloadModel(for: transcriptionProvider)
+                    }
+                    .font(.caption)
+                    .buttonStyle(.link)
+                case .ready, .downloadingModel:
+                    EmptyView()
+                }
+            }
+        }
+    }
+
+    private func downloadModel(for provider: TranscriptionProviderKind) {
+        switch provider {
+        case .elevenLabs:
+            break
+        case .whisperKit:
+            downloadWhisperKitModel()
+        case .parakeet:
+            downloadParakeetModel()
+        case .parakeetUnified:
+            downloadParakeetUnifiedModel()
+        }
     }
 
     var body: some View {
@@ -140,17 +206,9 @@ struct TranscriptionSettingsView: View {
                         appState.reloadServices()
                     }
 
-                if transcriptionProvider == .elevenLabs {
-                    if !hasElevenLabsKey {
-                        Label("Configure ElevenLabs API key in API Keys tab", systemImage: "exclamationmark.triangle")
-                            .foregroundStyle(.orange)
-                            .font(.caption)
-                    } else {
-                        Label("ElevenLabs API key configured", systemImage: "checkmark.circle.fill")
-                            .foregroundStyle(.green)
-                            .font(.caption)
-                    }
+                transcriptionStatusBanner
 
+                if transcriptionProvider == .elevenLabs {
                     Picker("Model", selection: $elevenLabsModel) {
                         ForEach(ElevenLabsTranscriptionService.availableModels, id: \.id) { model in
                             Text(model.name).tag(model.id)

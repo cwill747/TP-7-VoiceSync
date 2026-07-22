@@ -70,6 +70,11 @@ final class SyncService {
     private var s3Service: S3Service?
     private var transcriptionProvider: (any TranscriptionProvider)?
     private var transcriptionProviderKind: TranscriptionProviderKind?
+
+    /// The saved provider/enabled preference combined with its effective
+    /// runtime availability (API key present, model downloaded). Settings
+    /// reads the same evaluation so the two never disagree.
+    private(set) var transcriptionStatus = TranscriptionProviderStatus(providerKind: .elevenLabs, preferenceEnabled: false, readiness: .missingAPIKey)
     private let openRouterService = OpenRouterService()
     private let localAudioService = LocalAudioService()
 
@@ -673,12 +678,14 @@ final class SyncService {
             let providerRaw = UserDefaults.standard.string(forKey: "transcription.provider") ?? TranscriptionProviderKind.elevenLabs.rawValue
             let provider = TranscriptionProviderKind(rawValue: providerRaw) ?? .elevenLabs
             transcriptionProviderKind = provider
+            var hasElevenLabsKey = false
 
             if transcriptionEnabled {
                 switch provider {
                 case .elevenLabs:
                     let apiKey = try await KeychainService.shared.retrieve(for: .elevenLabsAPIKey) ?? ""
                     let modelID = UserDefaults.standard.string(forKey: "elevenlabs.model") ?? "scribe_v1"
+                    hasElevenLabsKey = !apiKey.isEmpty
                     if !apiKey.isEmpty {
                         transcriptionProvider = ElevenLabsTranscriptionService(apiKey: apiKey, modelID: modelID)
                     }
@@ -698,6 +705,12 @@ final class SyncService {
                     transcriptionProvider = ParakeetUnifiedService()
                 }
             }
+
+            transcriptionStatus = TranscriptionProviderStatus.evaluate(
+                providerKind: provider,
+                preferenceEnabled: transcriptionEnabled,
+                hasElevenLabsKey: hasElevenLabsKey
+            )
         } catch {
             lastError = "Failed to load credentials: \(error.localizedDescription)"
         }
