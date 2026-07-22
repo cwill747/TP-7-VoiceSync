@@ -952,7 +952,10 @@ final class SyncService {
         if Self.isTooShortToTranscribe(recording) {
             recording.transcriptionStatus = .skipped
             recording.updatedAt = Date()
-            _ = await storeRecording(recording, allowS3Upload: false)
+            // No transcription step will ever upload this recording's audio,
+            // so (unlike the normal flow, which defers to the post-transcription
+            // step) attempt the S3 backup right here if one is configured.
+            _ = await storeRecording(recording, allowS3Upload: Self.needsS3Upload(recording))
             try? modelContext.save()
             AppLogger.sync.info("Skipping transcription for \(recording.filename, privacy: .private): duration \(recording.duration ?? 0, privacy: .public)s is below the minimum")
             await deleteFromDeviceIfConfigured(recording)
@@ -1746,6 +1749,13 @@ final class SyncService {
             }
 
             guard isOnline else { continue }
+
+            // Skipped recordings never go through transcription, so nothing
+            // else retries their S3 backup — do it here if it didn't happen
+            // at skip time (e.g. the app was offline).
+            if recording.transcriptionStatus == .skipped, Self.needsS3Upload(recording) {
+                await uploadToS3IfPossible(recording)
+            }
 
             if (recording.transcriptionStatus == .completed || recording.transcriptionStatus == .skipped),
                recording.deletedFromDeviceAt == nil {
