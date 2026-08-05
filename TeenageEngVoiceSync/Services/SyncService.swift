@@ -1622,20 +1622,26 @@ final class SyncService {
         guard recording.llmProcessedAt == nil else { return }
         guard UserDefaults.standard.bool(forKey: "openrouter.enabled") else { return }
 
-        guard let result = await generateLLMTitle(for: text) else {
-            // LLM failed (missing key, network error, etc.); mark processed anyway
-            // so delivery isn't permanently blocked — a date-based title is used instead.
+        switch await generateLLMTitle(for: text) {
+        case .generated(let result):
+            recording.llmTitle = result.title
+            recording.llmSummary = result.summary
             recording.llmProcessedAt = Date()
             recording.updatedAt = Date()
             try? modelContext.save()
-            return
+            AppLogger.notes.debug("Stored LLM title: \(result.title, privacy: .private)")
+        case .skip:
+            // The step can never succeed as configured; mark processed so
+            // delivery isn't blocked — a date-based title is used instead.
+            recording.llmProcessedAt = Date()
+            recording.updatedAt = Date()
+            try? modelContext.save()
+        case .failed:
+            // Leave pending — reconciliation retries the summary later. A long
+            // recording chunks into many requests, so a single transient error
+            // must not cost the summary permanently.
+            break
         }
-        recording.llmTitle = result.title
-        recording.llmSummary = result.summary
-        recording.llmProcessedAt = Date()
-        recording.updatedAt = Date()
-        try? modelContext.save()
-        AppLogger.notes.debug("Stored LLM title: \(result.title, privacy: .private)")
     }
 
     /// Runs LLM title/summary immediately after ASR. Transcript cleanup runs as
@@ -1795,19 +1801,29 @@ final class SyncService {
         pendingRemoteCount = all.filter { Self.hasPendingRemoteWork($0) }.count
     }
 
+    /// Outcome of a title/summary attempt. `skip` means the step can never
+    /// succeed with the current config (no key / no model) so delivery should
+    /// proceed with a date-based title; `failed` is transient and left pending
+    /// for reconciliation to retry.
+    private enum SummaryOutcome {
+        case generated(LLMResult)
+        case skip
+        case failed
+    }
+
     /// Generates a title and summary via the configured OpenAI-compatible API.
-    private func generateLLMTitle(for transcription: String) async -> LLMResult? {
+    private func generateLLMTitle(for transcription: String) async -> SummaryOutcome {
         let apiKey = (try? await KeychainService.shared.retrieve(for: OpenRouterService.activeKeychainKey())) ?? ""
         // A local endpoint needs no key; a remote one does.
         guard !apiKey.isEmpty || OpenRouterService.isLocalEndpoint() else {
             AppLogger.network.debug("AI provider API key not configured")
-            return nil
+            return .skip
         }
 
         let model = UserDefaults.standard.string(forKey: "openrouter.model") ?? ""
         guard !model.isEmpty else {
             AppLogger.network.debug("AI model not selected")
-            return nil
+            return .skip
         }
 
         AppLogger.network.info("Generating title/summary (model=\(model, privacy: .public))")
@@ -1823,11 +1839,14 @@ final class SyncService {
                 customPrompt: customPrompt
             )
             AppLogger.network.debug("Generated title: \(result.title, privacy: .private)")
-            return result
+            return .generated(result)
+        } catch OpenRouterError.invalidAPIKey {
+            // A rejected key can't be fixed by retrying.
+            AppLogger.network.error("AI provider rejected the API key; skipping title/summary")
+            return .skip
         } catch {
             AppLogger.network.error("Failed to generate title/summary: \(error.localizedDescription, privacy: .public)")
-            // Fall back to nil - the note will use the date-based title
-            return nil
+            return .failed
         }
     }
 
@@ -1880,6 +1899,10 @@ final class SyncService {
                 options: options
             )
             return formatted.isEmpty ? .failed : .cleaned(formatted)
+        } catch OpenRouterError.invalidAPIKey {
+            // A rejected key can't be fixed by retrying.
+            AppLogger.network.error("AI provider rejected the API key; skipping cleanup")
+            return .skip
         } catch {
             AppLogger.network.error("Failed to format transcription: \(error.localizedDescription, privacy: .public)")
             return .failed
