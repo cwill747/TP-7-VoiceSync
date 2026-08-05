@@ -100,6 +100,19 @@ struct RecordingDetailView: View {
                     Divider()
                 }
 
+                if let summary = generatedSummary {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Summary")
+                            .font(.headline)
+
+                        Text(summary)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
+                    Divider()
+                }
+
                 // Transcription
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Transcription")
@@ -202,6 +215,14 @@ struct RecordingDetailView: View {
                 }
             }
         }
+    }
+
+    private var generatedSummary: String? {
+        guard let summary = recording.llmSummary?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !summary.isEmpty else {
+            return nil
+        }
+        return summary
     }
 
     private var pendingStatus: (text: String, systemImage: String)? {
