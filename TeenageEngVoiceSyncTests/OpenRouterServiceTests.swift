@@ -286,6 +286,7 @@ final class OpenRouterServiceTests: XCTestCase {
         XCTAssertTrue(OpenRouterService.isRetryable(OpenRouterError.apiError(statusCode: 429)))
         XCTAssertTrue(OpenRouterService.isRetryable(OpenRouterError.apiError(statusCode: 503)))
         XCTAssertTrue(OpenRouterService.isRetryable(OpenRouterError.transport("timed out")))
+        XCTAssertTrue(OpenRouterService.isRetryable(OpenRouterError.responseTruncated))
         XCTAssertTrue(OpenRouterService.isRetryable(URLError(.timedOut)))
 
         XCTAssertFalse(OpenRouterService.isRetryable(OpenRouterError.invalidAPIKey))

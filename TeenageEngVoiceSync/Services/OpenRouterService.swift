@@ -626,7 +626,7 @@ actor OpenRouterService {
         switch openRouterError {
         case .apiError(let statusCode):
             return statusCode == 408 || statusCode == 429 || statusCode >= 500
-        case .noContent, .invalidResponse, .transport:
+        case .noContent, .invalidResponse, .responseTruncated, .transport:
             return true
         case .invalidAPIKey, .emptyTranscription, .parseError:
             return false
@@ -689,6 +689,7 @@ actor OpenRouterService {
         // so say so rather than storing half a summary as if it were complete.
         if choice.finishReason == "length" {
             AppLogger.network.error("Response truncated by the token limit (model=\(model, privacy: .public))")
+            throw OpenRouterError.responseTruncated
         }
 
         guard !choice.message.content.isEmpty else {
@@ -1184,6 +1185,7 @@ nonisolated enum OpenRouterError: LocalizedError {
     case noContent
     case emptyTranscription
     case parseError(String)
+    case responseTruncated
     case transport(String)
 
     var errorDescription: String? {
@@ -1200,6 +1202,8 @@ nonisolated enum OpenRouterError: LocalizedError {
             return "Transcription is empty"
         case .parseError(let message):
             return "Failed to parse response: \(message)"
+        case .responseTruncated:
+            return "Response was truncated by the token limit"
         case .transport(let message):
             return "Network error: \(message)"
         }
